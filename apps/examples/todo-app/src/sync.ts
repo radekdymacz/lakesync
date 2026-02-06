@@ -1,9 +1,17 @@
-import type { LocalDB } from "@lakesync/client";
+import type { LocalDB, SyncQueue } from "@lakesync/client";
 import { applyRemoteDeltas, IDBQueue, SyncTracker } from "@lakesync/client";
 import { HLC, LWWResolver } from "@lakesync/core";
 import type { SyncGateway } from "@lakesync/gateway";
 
-const CLIENT_ID = `client-${crypto.randomUUID()}`;
+/** Optional configuration for dependency injection (useful for testing). */
+export interface SyncCoordinatorConfig {
+	/** Sync queue implementation. Defaults to IDBQueue. */
+	queue?: SyncQueue;
+	/** HLC instance. Defaults to a new HLC(). */
+	hlc?: HLC;
+	/** Client identifier. Defaults to a random UUID. */
+	clientId?: string;
+}
 
 /** Auto-sync interval in milliseconds (every 10 seconds). */
 const AUTO_SYNC_INTERVAL_MS = 10_000;
@@ -16,22 +24,24 @@ const AUTO_SYNC_INTERVAL_MS = 10_000;
  */
 export class SyncCoordinator {
 	readonly tracker: SyncTracker;
-	private readonly queue: IDBQueue;
+	private readonly queue: SyncQueue;
 	private readonly hlc: HLC;
 	private readonly gateway: SyncGateway;
 	private readonly db: LocalDB;
 	private readonly resolver = new LWWResolver();
+	private readonly _clientId: string;
 	private lastSyncedHlc = HLC.encode(0, 0);
 	private _lastSyncTime: Date | null = null;
 	private syncIntervalId: ReturnType<typeof setInterval> | null = null;
 	private visibilityHandler: (() => void) | null = null;
 
-	constructor(db: LocalDB, gateway: SyncGateway) {
+	constructor(db: LocalDB, gateway: SyncGateway, config?: SyncCoordinatorConfig) {
 		this.db = db;
 		this.gateway = gateway;
-		this.hlc = new HLC();
-		this.queue = new IDBQueue();
-		this.tracker = new SyncTracker(db, this.queue, this.hlc, CLIENT_ID);
+		this.hlc = config?.hlc ?? new HLC();
+		this.queue = config?.queue ?? new IDBQueue();
+		this._clientId = config?.clientId ?? `client-${crypto.randomUUID()}`;
+		this.tracker = new SyncTracker(db, this.queue, this.hlc, this._clientId);
 	}
 
 	/** Push pending deltas to the gateway. */
@@ -44,13 +54,14 @@ export class SyncCoordinator {
 		await this.queue.markSending(ids);
 
 		const pushResult = this.gateway.handlePush({
-			clientId: CLIENT_ID,
+			clientId: this._clientId,
 			deltas: entries.map((e) => e.delta),
 			lastSeenHlc: this.hlc.now(),
 		});
 
 		if (pushResult.ok) {
 			await this.queue.ack(ids);
+			this.lastSyncedHlc = pushResult.value.serverHlc;
 			this._lastSyncTime = new Date();
 		} else {
 			await this.queue.nack(ids);
@@ -60,7 +71,7 @@ export class SyncCoordinator {
 	/** Pull remote deltas from the gateway and apply them. */
 	async pullFromGateway(): Promise<number> {
 		const pullResult = this.gateway.handlePull({
-			clientId: CLIENT_ID,
+			clientId: this._clientId,
 			sinceHlc: this.lastSyncedHlc,
 			maxDeltas: 1000,
 		});
@@ -99,7 +110,7 @@ export class SyncCoordinator {
 
 	/** Get the client identifier. */
 	get clientId(): string {
-		return CLIENT_ID;
+		return this._clientId;
 	}
 
 	/** Get the last successful sync time, or null if never synced. */
