@@ -1,1 +1,10 @@
-export {};
+export { Compactor } from "./compactor";
+export { readEqualityDeletes, writeEqualityDeletes } from "./equality-delete";
+export { MaintenanceRunner } from "./maintenance";
+export type { MaintenanceConfig, MaintenanceReport } from "./maintenance";
+export { DEFAULT_MAINTENANCE_CONFIG } from "./maintenance";
+export { CompactionScheduler } from "./scheduler";
+export type { MaintenanceTask, MaintenanceTaskProvider, SchedulerConfig } from "./scheduler";
+export { DEFAULT_SCHEDULER_CONFIG } from "./scheduler";
+export type { CompactionConfig, CompactionResult } from "./types";
+export { DEFAULT_COMPACTION_CONFIG } from "./types";

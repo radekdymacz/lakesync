@@ -1,4 +1,6 @@
-import type { HLCTimestamp, RowDelta } from "@lakesync/core";
+import type { NessieCatalogueClient } from "@lakesync/catalogue";
+import type { HLCTimestamp, RowDelta, TableSchema } from "@lakesync/core";
+import type { SchemaManager } from "./schema-manager";
 
 /** Configuration for the sync gateway */
 export interface GatewayConfig {
@@ -8,6 +10,14 @@ export interface GatewayConfig {
 	maxBufferBytes: number;
 	/** Maximum buffer age in milliseconds before triggering flush */
 	maxBufferAgeMs: number;
+	/** Flush output format. Defaults to "parquet". */
+	flushFormat?: "json" | "parquet";
+	/** Table schema — required for Parquet flush. */
+	tableSchema?: TableSchema;
+	/** Optional Nessie catalogue client for Iceberg snapshot registration. */
+	catalogue?: NessieCatalogueClient;
+	/** Optional schema manager for delta validation. */
+	schemaManager?: SchemaManager;
 }
 
 /** Gateway runtime state */

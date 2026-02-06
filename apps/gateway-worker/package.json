@@ -1,0 +1,25 @@
+{
+	"name": "@lakesync/gateway-worker",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev",
+		"build": "tsc --noEmit",
+		"deploy": "wrangler deploy",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@lakesync/core": "workspace:*",
+		"@lakesync/gateway": "workspace:*",
+		"@lakesync/proto": "workspace:*",
+		"@lakesync/adapter": "workspace:*",
+		"@lakesync/parquet": "workspace:*",
+		"@lakesync/catalogue": "workspace:*"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20250109.0",
+		"typescript": "^5.7.0",
+		"wrangler": "^3.99.0"
+	}
+}

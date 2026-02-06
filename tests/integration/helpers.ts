@@ -22,6 +22,7 @@ export function createTestGateway(
 			gatewayId: "test-gateway",
 			maxBufferBytes: 100 * 1024 * 1024, // 100 MiB
 			maxBufferAgeMs: 60_000, // 1 minute
+			flushFormat: "json" as const,
 			...overrides,
 		},
 		adapter,

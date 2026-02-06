@@ -11,6 +11,8 @@ export default defineConfig({
 			"@lakesync/gateway": path.join(packages, "gateway/src/index.ts"),
 			"@lakesync/adapter": path.join(packages, "adapter/src/index.ts"),
 			"@lakesync/proto": path.join(packages, "proto/src/index.ts"),
+			"@lakesync/parquet": path.join(packages, "parquet/src/index.ts"),
+			"@lakesync/catalogue": path.join(packages, "catalogue/src/index.ts"),
 		},
 	},
 	test: {
@@ -26,6 +28,8 @@ export default defineConfig({
 						"@lakesync/gateway": path.join(packages, "gateway/src/index.ts"),
 						"@lakesync/adapter": path.join(packages, "adapter/src/index.ts"),
 						"@lakesync/proto": path.join(packages, "proto/src/index.ts"),
+						"@lakesync/parquet": path.join(packages, "parquet/src/index.ts"),
+						"@lakesync/catalogue": path.join(packages, "catalogue/src/index.ts"),
 					},
 				},
 				test: {

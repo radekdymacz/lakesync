@@ -1,0 +1,18 @@
+name = "lakesync-gateway"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[[durable_objects.bindings]]
+name = "SYNC_GATEWAY"
+class_name = "SyncGatewayDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SyncGatewayDO"]
+
+[[r2_buckets]]
+binding = "LAKE_BUCKET"
+bucket_name = "lakesync-data"
+
+[vars]
+NESSIE_URI = "http://localhost:19120/iceberg"

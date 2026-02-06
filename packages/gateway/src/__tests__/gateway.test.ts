@@ -94,6 +94,7 @@ const defaultConfig: GatewayConfig = {
 	gatewayId: "gw-test-1",
 	maxBufferBytes: 1_048_576, // 1 MiB
 	maxBufferAgeMs: 30_000, // 30 seconds
+	flushFormat: "json" as const,
 };
 
 describe("SyncGateway", () => {

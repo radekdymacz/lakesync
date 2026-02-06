@@ -12,7 +12,12 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
+		"@lakesync/parquet": "workspace:*",
 		"typescript": "^5.7.0",
 		"vitest": "^3.0.0"
+	},
+	"dependencies": {
+		"@duckdb/duckdb-wasm": "^1.33.1-dev18.0",
+		"@lakesync/core": "workspace:*"
 	}
 }

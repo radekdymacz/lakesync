@@ -12,7 +12,7 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`, Rust crates in `crate
 - Vitest for testing, co-located in `__tests__/`
 
 ## Task Execution
-Read PLAN.md for task breakdown.
+Read plans/PLAN.md for task breakdown.
 For PARALLEL GROUPs: launch all tasks as parallel Task subagents.
 For SEQUENTIAL tasks: execute one at a time.
 

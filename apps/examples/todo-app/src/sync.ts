@@ -1,44 +1,35 @@
-import { MemoryQueue } from "@lakesync/client";
-import { HLC, extractDelta } from "@lakesync/core";
+import { MemoryQueue, SyncTracker, applyRemoteDeltas } from "@lakesync/client";
+import type { LocalDB } from "@lakesync/client";
+import { HLC, LWWResolver } from "@lakesync/core";
 import type { SyncGateway } from "@lakesync/gateway";
-import type { Todo } from "./db";
 
 const CLIENT_ID = `client-${crypto.randomUUID()}`;
 
-/** Coordinates the sync queue, gateway, and adapter */
-export class SyncManager {
-	private hlc = new HLC();
-	private queue = new MemoryQueue();
-	private gateway: SyncGateway;
+/**
+ * Coordinates local mutations (via SyncTracker) with gateway push/pull.
+ *
+ * Replaces the old SyncManager by delegating delta extraction to SyncTracker
+ * and conflict resolution to applyRemoteDeltas.
+ */
+export class SyncCoordinator {
+	readonly tracker: SyncTracker;
+	private readonly queue: MemoryQueue;
+	private readonly hlc: HLC;
+	private readonly gateway: SyncGateway;
+	private readonly db: LocalDB;
+	private readonly resolver = new LWWResolver();
+	private lastSyncedHlc = HLC.encode(0, 0);
 
-	constructor(gateway: SyncGateway) {
+	constructor(db: LocalDB, gateway: SyncGateway) {
+		this.db = db;
 		this.gateway = gateway;
+		this.hlc = new HLC();
+		this.queue = new MemoryQueue();
+		this.tracker = new SyncTracker(db, this.queue, this.hlc, CLIENT_ID);
 	}
 
-	/** Track a todo change and queue the delta */
-	async trackChange(
-		before: Todo | null | undefined,
-		after: Todo | null | undefined,
-		id: string,
-	): Promise<void> {
-		const beforeRecord = before ? this.todoToRecord(before) : null;
-		const afterRecord = after ? this.todoToRecord(after) : null;
-
-		const delta = await extractDelta(beforeRecord, afterRecord, {
-			table: "todos",
-			rowId: id,
-			clientId: CLIENT_ID,
-			hlc: this.hlc.now(),
-		});
-
-		if (delta) {
-			await this.queue.push(delta);
-			await this.syncToGateway();
-		}
-	}
-
-	/** Push queued deltas to the gateway */
-	private async syncToGateway(): Promise<void> {
+	/** Push pending deltas to the gateway. */
+	async pushToGateway(): Promise<void> {
 		const peekResult = await this.queue.peek(100);
 		if (!peekResult.ok || peekResult.value.length === 0) return;
 
@@ -59,30 +50,47 @@ export class SyncManager {
 		}
 	}
 
-	/** Flush gateway buffer to storage */
-	async flush(): Promise<{ ok: boolean; message: string }> {
-		const result = await this.gateway.flush();
-		if (result.ok) {
-			return { ok: true, message: "Flushed successfully" };
+	/** Pull remote deltas from the gateway and apply them. */
+	async pullFromGateway(): Promise<number> {
+		const pullResult = this.gateway.handlePull({
+			clientId: CLIENT_ID,
+			sinceHlc: this.lastSyncedHlc,
+			maxDeltas: 1000,
+		});
+
+		if (!pullResult.ok || pullResult.value.deltas.length === 0) return 0;
+
+		const { deltas, serverHlc } = pullResult.value;
+		const applyResult = await applyRemoteDeltas(this.db, deltas, this.resolver, this.queue);
+
+		if (applyResult.ok) {
+			this.lastSyncedHlc = serverHlc;
+			return applyResult.value;
 		}
-		return { ok: false, message: result.error.message };
+		return 0;
 	}
 
-	/** Get sync statistics */
+	/** Flush gateway buffer to storage. */
+	async flush(): Promise<{ ok: boolean; message: string }> {
+		const result = await this.gateway.flush();
+		return result.ok
+			? { ok: true, message: "Flushed successfully" }
+			: { ok: false, message: result.error.message };
+	}
+
+	/** Get the queue depth. */
+	async queueDepth(): Promise<number> {
+		const result = await this.queue.depth();
+		return result.ok ? result.value : 0;
+	}
+
+	/** Get buffer statistics for monitoring. */
 	get stats() {
 		return this.gateway.bufferStats;
 	}
 
+	/** Get the client identifier. */
 	get clientId(): string {
 		return CLIENT_ID;
-	}
-
-	private todoToRecord(todo: Todo): Record<string, unknown> {
-		return {
-			title: todo.title,
-			completed: todo.completed,
-			created_at: todo.created_at,
-			updated_at: todo.updated_at,
-		};
 	}
 }

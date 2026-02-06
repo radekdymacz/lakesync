@@ -1,5 +1,11 @@
 import type { LakeAdapter } from "@lakesync/adapter";
 import {
+	type DataFile,
+	buildPartitionSpec,
+	lakeSyncTableName,
+	tableSchemaToIceberg,
+} from "@lakesync/catalogue";
+import {
 	type ClockDriftError,
 	Err,
 	FlushError,
@@ -8,9 +14,11 @@ import {
 	Ok,
 	type Result,
 	type RowDelta,
+	type SchemaError,
 	resolveLWW,
 	rowKey,
 } from "@lakesync/core";
+import { writeDeltasToParquet } from "@lakesync/parquet";
 import { DeltaBuffer } from "./buffer";
 import { bigintReplacer } from "./json";
 import type { FlushEnvelope, GatewayConfig } from "./types";
@@ -75,7 +83,10 @@ export class SyncGateway {
 	 */
 	handlePush(
 		msg: SyncPush,
-	): Result<{ serverHlc: HLCTimestamp; accepted: number }, ClockDriftError> {
+	): Result<
+		{ serverHlc: HLCTimestamp; accepted: number },
+		ClockDriftError | SchemaError
+	> {
 		let accepted = 0;
 
 		for (const delta of msg.deltas) {
@@ -83,6 +94,14 @@ export class SyncGateway {
 			if (this.buffer.hasDelta(delta.deltaId)) {
 				accepted++;
 				continue;
+			}
+
+			// Validate delta against the schema if a schema manager is configured
+			if (this.config.schemaManager) {
+				const schemaResult = this.config.schemaManager.validateDelta(delta);
+				if (!schemaResult.ok) {
+					return Err(schemaResult.error);
+				}
 			}
 
 			// Validate HLC drift against server's physical clock
@@ -129,8 +148,10 @@ export class SyncGateway {
 	/**
 	 * Flush the buffer to the lake adapter.
 	 *
-	 * Writes a {@link FlushEnvelope} JSON file to the adapter. If the write
-	 * fails, the buffer entries are restored so they can be retried.
+	 * Writes deltas as either a Parquet file (default) or a JSON
+	 * {@link FlushEnvelope} to the adapter, depending on
+	 * `config.flushFormat`. If the write fails, the buffer entries
+	 * are restored so they can be retried.
 	 *
 	 * @returns A `Result` indicating success or a `FlushError`.
 	 */
@@ -160,27 +181,55 @@ export class SyncGateway {
 			if (HLC.compare(hlc, max) > 0) max = hlc;
 		}
 
-		const envelope: FlushEnvelope = {
-			version: 1,
-			gatewayId: this.config.gatewayId,
-			createdAt: new Date().toISOString(),
-			hlcRange: { min, max },
-			deltaCount: entries.length,
-			byteSize,
-			deltas: entries,
-		};
-
-		// Object key: deltas/{YYYY-MM-DD}/{gatewayId}/{minHlc}-{maxHlc}.json
 		const date = new Date().toISOString().split("T")[0];
-		const objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.json`;
+		let objectKey: string;
+		let data: Uint8Array;
+		let contentType: string;
 
-		const jsonStr = JSON.stringify(envelope, bigintReplacer);
-		const data = new TextEncoder().encode(jsonStr);
+		if (this.config.flushFormat === "json") {
+			// Explicit JSON flush path
+			const envelope: FlushEnvelope = {
+				version: 1,
+				gatewayId: this.config.gatewayId,
+				createdAt: new Date().toISOString(),
+				hlcRange: { min, max },
+				deltaCount: entries.length,
+				byteSize,
+				deltas: entries,
+			};
 
-		const result = await this.adapter.putObject(objectKey, data, "application/json");
+			objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.json`;
+			const jsonStr = JSON.stringify(envelope, bigintReplacer);
+			data = new TextEncoder().encode(jsonStr);
+			contentType = "application/json";
+		} else {
+			// Default: Parquet flush path
+			if (!this.config.tableSchema) {
+				for (const entry of entries) {
+					this.buffer.append(entry);
+				}
+				this.flushing = false;
+				return Err(new FlushError("tableSchema required for Parquet flush"));
+			}
+
+			const parquetResult = await writeDeltasToParquet(entries, this.config.tableSchema);
+			if (!parquetResult.ok) {
+				for (const entry of entries) {
+					this.buffer.append(entry);
+				}
+				this.flushing = false;
+				return Err(parquetResult.error);
+			}
+
+			objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.parquet`;
+			data = parquetResult.value;
+			contentType = "application/vnd.apache.parquet";
+		}
+
+		const result = await this.adapter.putObject(objectKey, data, contentType);
 
 		if (!result.ok) {
-			// Flush failed -- restore buffer entries so they can be retried
+			// Flush failed — restore buffer entries so they can be retried
 			for (const entry of entries) {
 				this.buffer.append(entry);
 			}
@@ -188,8 +237,64 @@ export class SyncGateway {
 			return Err(new FlushError(`Failed to write flush envelope: ${result.error.message}`));
 		}
 
+		// After successful adapter write, commit to catalogue (best-effort)
+		if (this.config.catalogue && this.config.tableSchema) {
+			await this.commitToCatalogue(objectKey, data.byteLength, entries.length);
+		}
+
 		this.flushing = false;
 		return Ok(undefined);
+	}
+
+	/**
+	 * Best-effort catalogue commit. Registers the flushed Parquet file
+	 * as an Iceberg snapshot via Nessie. Errors are logged but do not
+	 * fail the flush — the Parquet file is the source of truth.
+	 */
+	private async commitToCatalogue(
+		objectKey: string,
+		fileSizeInBytes: number,
+		recordCount: number,
+	): Promise<void> {
+		const catalogue = this.config.catalogue!;
+		const schema = this.config.tableSchema!;
+
+		const { namespace, name } = lakeSyncTableName(schema.table);
+		const icebergSchema = tableSchemaToIceberg(schema);
+		const partitionSpec = buildPartitionSpec(icebergSchema);
+
+		// Ensure namespace exists (idempotent)
+		await catalogue.createNamespace(namespace);
+
+		// Ensure table exists (idempotent — catch 409)
+		const createResult = await catalogue.createTable(namespace, name, icebergSchema, partitionSpec);
+		if (!createResult.ok && createResult.error.statusCode !== 409) {
+			console.warn(`Catalogue: failed to create table: ${createResult.error.message}`);
+			return;
+		}
+
+		// Build DataFile reference
+		const dataFile: DataFile = {
+			content: "data",
+			"file-path": objectKey,
+			"file-format": "PARQUET",
+			"record-count": recordCount,
+			"file-size-in-bytes": fileSizeInBytes,
+		};
+
+		// Append file to table snapshot
+		const appendResult = await catalogue.appendFiles(namespace, name, [dataFile]);
+		if (!appendResult.ok) {
+			// On 409 conflict, retry once with fresh metadata
+			if (appendResult.error.statusCode === 409) {
+				const retryResult = await catalogue.appendFiles(namespace, name, [dataFile]);
+				if (!retryResult.ok) {
+					console.warn(`Catalogue: retry append failed: ${retryResult.error.message}`);
+				}
+			} else {
+				console.warn(`Catalogue: append failed: ${appendResult.error.message}`);
+			}
+		}
 	}
 
 	/** Check if the buffer should be flushed based on config thresholds. */

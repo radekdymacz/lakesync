@@ -1,36 +1,34 @@
-/** Todo item */
+import { LocalDB, registerSchema } from "@lakesync/client";
+import { unwrapOrThrow } from "@lakesync/core";
+import type { TableSchema } from "@lakesync/core";
+
+/** Todo item as stored in SQLite */
 export interface Todo {
-	id: string;
+	_rowId: string;
 	title: string;
-	completed: boolean;
+	completed: number; // SQLite stores booleans as 0/1
 	created_at: string;
 	updated_at: string;
 }
 
-/** In-memory todo database */
-export class TodoDB {
-	private store = new Map<string, Todo>();
+/** Schema definition for the todos table */
+export const todoSchema: TableSchema = {
+	table: "todos",
+	columns: [
+		{ name: "title", type: "string" },
+		{ name: "completed", type: "boolean" },
+		{ name: "created_at", type: "string" },
+		{ name: "updated_at", type: "string" },
+	],
+};
 
-	getAll(): Todo[] {
-		return [...this.store.values()].sort(
-			(a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-		);
-	}
-
-	get(id: string): Todo | undefined {
-		return this.store.get(id);
-	}
-
-	/** Returns the previous state (for delta extraction) */
-	set(todo: Todo): Todo | undefined {
-		const prev = this.store.get(todo.id);
-		this.store.set(todo.id, todo);
-		return prev ?? undefined;
-	}
-
-	delete(id: string): Todo | undefined {
-		const prev = this.store.get(id);
-		this.store.delete(id);
-		return prev ?? undefined;
-	}
+/** Initialise the local database and register the todo schema. */
+export async function initDatabase(): Promise<LocalDB> {
+	const result = await LocalDB.open({
+		name: "lakesync-todos",
+		backend: "memory",
+	});
+	const db = unwrapOrThrow(result);
+	unwrapOrThrow(await registerSchema(db, todoSchema));
+	return db;
 }

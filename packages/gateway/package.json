@@ -13,7 +13,9 @@
 	},
 	"dependencies": {
 		"@lakesync/core": "workspace:*",
-		"@lakesync/adapter": "workspace:*"
+		"@lakesync/adapter": "workspace:*",
+		"@lakesync/catalogue": "workspace:*",
+		"@lakesync/parquet": "workspace:*"
 	},
 	"devDependencies": {
 		"typescript": "^5.7.0",

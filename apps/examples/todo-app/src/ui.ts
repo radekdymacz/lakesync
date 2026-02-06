@@ -1,16 +1,32 @@
-import type { Todo, TodoDB } from "./db";
-import type { SyncManager } from "./sync";
+import type { SyncCoordinator } from "./sync";
+
+/** Todo row shape returned from SQLite queries */
+interface Todo {
+	_rowId: string;
+	title: string;
+	completed: number;
+	created_at: string;
+	updated_at: string;
+}
 
 /** Wire up DOM event handlers and rendering */
-export function setupUI(db: TodoDB, sync: SyncManager): void {
+export function setupUI(coordinator: SyncCoordinator): void {
 	const input = document.getElementById("todo-input") as HTMLInputElement;
 	const addBtn = document.getElementById("add-btn") as HTMLButtonElement;
 	const list = document.getElementById("todo-list") as HTMLUListElement;
 	const status = document.getElementById("status") as HTMLDivElement;
 	const flushBtn = document.getElementById("flush-btn") as HTMLButtonElement;
 
-	function render(): void {
-		const todos = db.getAll();
+	async function render(): Promise<void> {
+		const result = await coordinator.tracker.query<Todo>(
+			"SELECT * FROM todos ORDER BY created_at DESC",
+		);
+		if (!result.ok) {
+			status.textContent = `Error loading todos: ${result.error.message}`;
+			return;
+		}
+
+		const todos = result.value;
 		list.innerHTML = "";
 
 		for (const todo of todos) {
@@ -19,18 +35,20 @@ export function setupUI(db: TodoDB, sync: SyncManager): void {
 
 			const checkbox = document.createElement("input");
 			checkbox.type = "checkbox";
-			checkbox.checked = todo.completed;
+			checkbox.checked = !!todo.completed;
 			checkbox.addEventListener("change", async () => {
-				const before = db.get(todo.id);
-				const updated: Todo = {
-					...todo,
-					completed: checkbox.checked,
-					updated_at: new Date().toISOString(),
-				};
-				db.set(updated);
-				await sync.trackChange(before ?? null, updated, todo.id);
-				render();
-				updateStatus();
+				const newCompleted = checkbox.checked ? 1 : 0;
+				const now = new Date().toISOString();
+				const updateResult = await coordinator.tracker.update("todos", todo._rowId, {
+					completed: newCompleted,
+					updated_at: now,
+				});
+				if (!updateResult.ok) {
+					status.textContent = `Error updating todo: ${updateResult.error.message}`;
+				}
+				await coordinator.pushToGateway();
+				await render();
+				await updateStatus();
 			});
 
 			const span = document.createElement("span");
@@ -40,10 +58,13 @@ export function setupUI(db: TodoDB, sync: SyncManager): void {
 			const deleteBtn = document.createElement("button");
 			deleteBtn.textContent = "\u00d7";
 			deleteBtn.addEventListener("click", async () => {
-				const before = db.delete(todo.id);
-				await sync.trackChange(before ?? null, null, todo.id);
-				render();
-				updateStatus();
+				const deleteResult = await coordinator.tracker.delete("todos", todo._rowId);
+				if (!deleteResult.ok) {
+					status.textContent = `Error deleting todo: ${deleteResult.error.message}`;
+				}
+				await coordinator.pushToGateway();
+				await render();
+				await updateStatus();
 			});
 
 			li.appendChild(checkbox);
@@ -53,28 +74,35 @@ export function setupUI(db: TodoDB, sync: SyncManager): void {
 		}
 	}
 
-	function updateStatus(): void {
-		const stats = sync.stats;
-		status.textContent = `Buffer: ${stats.logSize} deltas | ${stats.indexSize} rows | Client: ${sync.clientId.slice(0, 8)}...`;
+	async function updateStatus(): Promise<void> {
+		const stats = coordinator.stats;
+		const depth = await coordinator.queueDepth();
+		const syncState = depth === 0 ? "synced" : `${depth} pending`;
+		status.textContent = `Buffer: ${stats.logSize} deltas | ${stats.indexSize} rows | Queue: ${syncState} | Client: ${coordinator.clientId.slice(0, 8)}...`;
 	}
 
 	addBtn.addEventListener("click", async () => {
 		const title = input.value.trim();
 		if (!title) return;
 
-		const todo: Todo = {
-			id: crypto.randomUUID(),
+		const id = crypto.randomUUID();
+		const now = new Date().toISOString();
+		const insertResult = await coordinator.tracker.insert("todos", id, {
 			title,
-			completed: false,
-			created_at: new Date().toISOString(),
-			updated_at: new Date().toISOString(),
-		};
+			completed: 0,
+			created_at: now,
+			updated_at: now,
+		});
 
-		db.set(todo);
-		await sync.trackChange(null, todo, todo.id);
+		if (!insertResult.ok) {
+			status.textContent = `Error adding todo: ${insertResult.error.message}`;
+			return;
+		}
+
+		await coordinator.pushToGateway();
 		input.value = "";
-		render();
-		updateStatus();
+		await render();
+		await updateStatus();
 	});
 
 	input.addEventListener("keydown", (e) => {
@@ -83,13 +111,15 @@ export function setupUI(db: TodoDB, sync: SyncManager): void {
 
 	flushBtn.addEventListener("click", async () => {
 		status.textContent = "Flushing...";
-		const result = await sync.flush();
+		const result = await coordinator.flush();
 		status.textContent = result.ok
 			? `Flushed! ${result.message}`
 			: `Flush failed: ${result.message}`;
-		setTimeout(updateStatus, 2000);
+		setTimeout(() => {
+			void updateStatus();
+		}, 2000);
 	});
 
-	render();
-	updateStatus();
+	void render();
+	void updateStatus();
 }
