@@ -41,7 +41,7 @@ jobs:
       MINIO_ENDPOINT: http://localhost:9000
       MINIO_ROOT_USER: lakesync
       MINIO_ROOT_PASSWORD: lakesync123
-      NESSIE_URI: http://localhost:19120/api/v1
+      NESSIE_URI: http://localhost:19120/iceberg
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -58,7 +58,16 @@ jobs:
           docker run -d --name nessie \
             -p 19120:19120 \
             -e NESSIE_VERSION_STORE_TYPE=IN_MEMORY \
+            -e NESSIE_CATALOG_DEFAULT_WAREHOUSE=s3://lakesync-test \
             ghcr.io/projectnessie/nessie:latest
+      - name: Wait for Nessie
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:19120/iceberg/v1/config; then
+              break
+            fi
+            sleep 1
+          done
       - name: Wait for MinIO and create bucket
         run: |
           for i in $(seq 1 30); do
