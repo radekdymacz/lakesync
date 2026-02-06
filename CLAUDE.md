@@ -1,7 +1,7 @@
 # LakeSync
 
 ## Monorepo
-TurboRepo + Bun. Packages in `packages/`, apps in `apps/`, Rust crates in `crates/`.
+TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 
 ## Code Style
 - TypeScript strict mode, no `any`

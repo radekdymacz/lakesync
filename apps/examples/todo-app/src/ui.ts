@@ -17,6 +17,21 @@ export function setupUI(coordinator: SyncCoordinator): void {
 	const status = document.getElementById("status") as HTMLDivElement;
 	const flushBtn = document.getElementById("flush-btn") as HTMLButtonElement;
 
+	// ── Online/offline indicator ────────────────────────────────────
+	const onlineIndicator = document.createElement("div");
+	onlineIndicator.id = "online-indicator";
+	status.parentElement?.insertBefore(onlineIndicator, status);
+
+	function updateOnlineStatus(): void {
+		const isOnline = navigator.onLine;
+		onlineIndicator.textContent = isOnline ? "Online" : "Offline";
+		onlineIndicator.className = isOnline ? "online" : "offline";
+	}
+
+	window.addEventListener("online", updateOnlineStatus);
+	window.addEventListener("offline", updateOnlineStatus);
+	updateOnlineStatus();
+
 	async function render(): Promise<void> {
 		const result = await coordinator.tracker.query<Todo>(
 			"SELECT * FROM todos ORDER BY created_at DESC",
@@ -77,8 +92,15 @@ export function setupUI(coordinator: SyncCoordinator): void {
 	async function updateStatus(): Promise<void> {
 		const stats = coordinator.stats;
 		const depth = await coordinator.queueDepth();
-		const syncState = depth === 0 ? "synced" : `${depth} pending`;
-		status.textContent = `Buffer: ${stats.logSize} deltas | ${stats.indexSize} rows | Queue: ${syncState} | Client: ${coordinator.clientId.slice(0, 8)}...`;
+		const lastSync = coordinator.lastSyncTime;
+		const lastSyncStr = lastSync ? lastSync.toLocaleTimeString() : "never";
+		const pendingBadge = depth > 0 ? ` (${depth} pending)` : "";
+
+		status.textContent =
+			`Buffer: ${stats.logSize} deltas | ${stats.indexSize} rows | ` +
+			`Queue: ${depth === 0 ? "synced" : `${depth} pending`}${pendingBadge} | ` +
+			`Last sync: ${lastSyncStr} | ` +
+			`Client: ${coordinator.clientId.slice(0, 8)}...`;
 	}
 
 	addBtn.addEventListener("click", async () => {

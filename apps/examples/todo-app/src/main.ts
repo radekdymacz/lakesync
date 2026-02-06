@@ -15,8 +15,9 @@ async function main(): Promise<void> {
 		flushFormat: "json",
 	});
 
-	// Create sync coordinator
+	// Create sync coordinator and start background synchronisation
 	const coordinator = new SyncCoordinator(db, gateway);
+	coordinator.startAutoSync();
 
 	// Set up the UI
 	setupUI(coordinator);

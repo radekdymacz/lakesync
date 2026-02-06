@@ -12,10 +12,6 @@
         "vitest": "^4.0.18",
       },
     },
-    "apps/docs": {
-      "name": "@lakesync/docs",
-      "version": "0.0.1",
-    },
     "apps/examples/todo-app": {
       "name": "@lakesync/todo-app",
       "version": "0.0.1",
@@ -44,6 +40,7 @@
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20250109.0",
         "typescript": "^5.7.0",
+        "vitest": "^4.0.18",
         "wrangler": "^3.99.0",
       },
     },
@@ -425,8 +422,6 @@
     "@lakesync/compactor": ["@lakesync/compactor@workspace:packages/compactor"],
 
     "@lakesync/core": ["@lakesync/core@workspace:packages/core"],
-
-    "@lakesync/docs": ["@lakesync/docs@workspace:apps/docs"],
 
     "@lakesync/gateway": ["@lakesync/gateway@workspace:packages/gateway"],
 

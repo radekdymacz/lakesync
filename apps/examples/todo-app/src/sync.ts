@@ -1,9 +1,12 @@
 import type { LocalDB } from "@lakesync/client";
-import { applyRemoteDeltas, MemoryQueue, SyncTracker } from "@lakesync/client";
+import { applyRemoteDeltas, IDBQueue, SyncTracker } from "@lakesync/client";
 import { HLC, LWWResolver } from "@lakesync/core";
 import type { SyncGateway } from "@lakesync/gateway";
 
 const CLIENT_ID = `client-${crypto.randomUUID()}`;
+
+/** Auto-sync interval in milliseconds (every 10 seconds). */
+const AUTO_SYNC_INTERVAL_MS = 10_000;
 
 /**
  * Coordinates local mutations (via SyncTracker) with gateway push/pull.
@@ -13,18 +16,21 @@ const CLIENT_ID = `client-${crypto.randomUUID()}`;
  */
 export class SyncCoordinator {
 	readonly tracker: SyncTracker;
-	private readonly queue: MemoryQueue;
+	private readonly queue: IDBQueue;
 	private readonly hlc: HLC;
 	private readonly gateway: SyncGateway;
 	private readonly db: LocalDB;
 	private readonly resolver = new LWWResolver();
 	private lastSyncedHlc = HLC.encode(0, 0);
+	private _lastSyncTime: Date | null = null;
+	private syncIntervalId: ReturnType<typeof setInterval> | null = null;
+	private visibilityHandler: (() => void) | null = null;
 
 	constructor(db: LocalDB, gateway: SyncGateway) {
 		this.db = db;
 		this.gateway = gateway;
 		this.hlc = new HLC();
-		this.queue = new MemoryQueue();
+		this.queue = new IDBQueue();
 		this.tracker = new SyncTracker(db, this.queue, this.hlc, CLIENT_ID);
 	}
 
@@ -45,6 +51,7 @@ export class SyncCoordinator {
 
 		if (pushResult.ok) {
 			await this.queue.ack(ids);
+			this._lastSyncTime = new Date();
 		} else {
 			await this.queue.nack(ids);
 		}
@@ -65,6 +72,7 @@ export class SyncCoordinator {
 
 		if (applyResult.ok) {
 			this.lastSyncedHlc = serverHlc;
+			this._lastSyncTime = new Date();
 			return applyResult.value;
 		}
 		return 0;
@@ -92,5 +100,43 @@ export class SyncCoordinator {
 	/** Get the client identifier. */
 	get clientId(): string {
 		return CLIENT_ID;
+	}
+
+	/** Get the last successful sync time, or null if never synced. */
+	get lastSyncTime(): Date | null {
+		return this._lastSyncTime;
+	}
+
+	/**
+	 * Start auto-sync: periodic interval + visibility change handler.
+	 * Synchronises (push + pull) on tab focus and every 10 seconds.
+	 */
+	startAutoSync(): void {
+		// Periodic sync
+		this.syncIntervalId = setInterval(() => {
+			void this.pushToGateway();
+			void this.pullFromGateway();
+		}, AUTO_SYNC_INTERVAL_MS);
+
+		// Sync on tab visibility change (e.g. tab regains focus)
+		this.visibilityHandler = () => {
+			if (document.visibilityState === "visible") {
+				void this.pushToGateway();
+				void this.pullFromGateway();
+			}
+		};
+		document.addEventListener("visibilitychange", this.visibilityHandler);
+	}
+
+	/** Stop auto-sync and clean up listeners. */
+	stopAutoSync(): void {
+		if (this.syncIntervalId !== null) {
+			clearInterval(this.syncIntervalId);
+			this.syncIntervalId = null;
+		}
+		if (this.visibilityHandler) {
+			document.removeEventListener("visibilitychange", this.visibilityHandler);
+			this.visibilityHandler = null;
+		}
 	}
 }

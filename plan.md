@@ -41,7 +41,7 @@ the subagent the full task text from PLAN.md as its prompt.
 # LakeSync
 
 ## Monorepo
-TurboRepo + Bun. Packages in `packages/`, apps in `apps/`, Rust crates in `crates/`.
+TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 
 ## Code Style
 - TypeScript strict mode, no `any`
@@ -81,7 +81,7 @@ For SEQUENTIAL tasks: execute one at a time.
 Initialise the LakeSync monorepo:
 
 1. Init git repo. `.gitignore`: node_modules, dist, .turbo, *.wasm, .DS_Store
-2. Root `package.json` with workspaces: `packages/*`, `apps/*`, `crates/*`
+2. Root `package.json` with workspaces: `packages/*`, `apps/*`
 3. `turbo.json` pipeline: `build` (depends on `^build`), `test` (depends on `build`), `lint`, `typecheck`
 4. Root `tsconfig.base.json` — strict, no any, ES2022, moduleResolution bundler
 5. `biome.json` for linting/formatting
@@ -91,15 +91,14 @@ Initialise the LakeSync monorepo:
 lakesync/
 ├── apps/docs/
 ├── apps/examples/todo-app/
-├── packages/core/          
-├── packages/client/        
-├── packages/gateway/       
-├── packages/adapter/       
-├── packages/compactor/     
-├── packages/analyst/       
-├── packages/proto/         
-├── crates/parquet-wasm/    
-├── docker/                 
+├── packages/core/
+├── packages/client/
+├── packages/gateway/
+├── packages/adapter/
+├── packages/compactor/
+├── packages/analyst/
+├── packages/proto/
+├── docker/
 └── adrs/                   
 ```
 

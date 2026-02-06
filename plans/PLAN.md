@@ -9,13 +9,13 @@ LakeSync is a distributed sync engine that writes column-level deltas to an Apac
 | Phase | File | Summary |
 |-------|------|---------|
 | 1 (done) | [phase-1-retrospective.md](./phase-1-retrospective.md) | HLC, Delta, Result, Conflict, Queue, Gateway, Proto, Adapter |
-| 2A | [phase-2a-parquet-writer.md](./phase-2a-parquet-writer.md) | Parquet write/read + gateway flush upgrade |
-| 2B | [phase-2b-iceberg-catalogue.md](./phase-2b-iceberg-catalogue.md) | Nessie REST client + snapshot commit |
-| 2C | [phase-2c-sqlite-client.md](./phase-2c-sqlite-client.md) | SQLite WASM + change tracking + todo upgrade |
-| 2D | [phase-2d-cloudflare-workers.md](./phase-2d-cloudflare-workers.md) | CF Workers + Durable Objects + R2 + JWT |
-| 3A | [phase-3a-compaction.md](./phase-3a-compaction.md) | MOR compaction + equality deletes + maintenance |
-| 3B | [phase-3b-schema-evolution.md](./phase-3b-schema-evolution.md) | Server schema versioning + client ALTER TABLE |
-| 4A | [phase-4a-analyst.md](./phase-4a-analyst.md) | DuckDB-Wasm + Union Read + time travel |
+| 2A (done) | [phase-2a-parquet-writer.md](./phase-2a-parquet-writer.md) | Parquet write/read + gateway flush upgrade |
+| 2B (done) | [phase-2b-iceberg-catalogue.md](./phase-2b-iceberg-catalogue.md) | Nessie REST client + snapshot commit |
+| 2C (done) | [phase-2c-sqlite-client.md](./phase-2c-sqlite-client.md) | SQLite WASM + change tracking + todo upgrade |
+| 2D (done) | [phase-2d-cloudflare-workers.md](./phase-2d-cloudflare-workers.md) | CF Workers + Durable Objects + R2 + JWT |
+| 3A (done) | [phase-3a-compaction.md](./phase-3a-compaction.md) | MOR compaction + equality deletes + maintenance |
+| 3B (done) | [phase-3b-schema-evolution.md](./phase-3b-schema-evolution.md) | Server schema versioning + client ALTER TABLE |
+| 4A (done) | [phase-4a-analyst.md](./phase-4a-analyst.md) | DuckDB-Wasm + Union Read + time travel |
 
 ## Dependency Graph
 

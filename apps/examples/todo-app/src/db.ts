@@ -26,7 +26,7 @@ export const todoSchema: TableSchema = {
 export async function initDatabase(): Promise<LocalDB> {
 	const result = await LocalDB.open({
 		name: "lakesync-todos",
-		backend: "memory",
+		backend: "idb",
 	});
 	const db = unwrapOrThrow(result);
 	unwrapOrThrow(await registerSchema(db, todoSchema));
