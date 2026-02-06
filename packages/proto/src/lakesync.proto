@@ -1,0 +1,42 @@
+syntax = "proto3";
+package lakesync.v1;
+
+enum DeltaOp {
+  DELTA_OP_UNSPECIFIED = 0;
+  DELTA_OP_INSERT = 1;
+  DELTA_OP_UPDATE = 2;
+  DELTA_OP_DELETE = 3;
+}
+
+message ColumnDelta {
+  string column = 1;
+  bytes value = 2;
+}
+
+message RowDelta {
+  DeltaOp op = 1;
+  string table = 2;
+  string row_id = 3;
+  repeated ColumnDelta columns = 4;
+  fixed64 hlc = 5;
+  string client_id = 6;
+  string delta_id = 7;
+}
+
+message SyncPush {
+  string client_id = 1;
+  repeated RowDelta deltas = 2;
+  fixed64 last_seen_hlc = 3;
+}
+
+message SyncPull {
+  string client_id = 1;
+  fixed64 since_hlc = 2;
+  uint32 max_deltas = 3;
+}
+
+message SyncResponse {
+  repeated RowDelta deltas = 1;
+  fixed64 server_hlc = 2;
+  bool has_more = 3;
+}
