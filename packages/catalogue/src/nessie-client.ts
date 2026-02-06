@@ -208,6 +208,7 @@ export class NessieCatalogueClient {
 			name,
 			schema,
 			"partition-spec": partitionSpec,
+			"stage-create": false,
 			location,
 			properties: {},
 		};
@@ -288,9 +289,10 @@ export class NessieCatalogueClient {
 	/**
 	 * Append data files to a table, creating a new snapshot.
 	 *
-	 * Uses the Iceberg REST v1 commit-table endpoint to append data files.
+	 * Uses the standard Iceberg REST v1 commit-table endpoint with
+	 * `add-snapshot` and `set-snapshot-ref` metadata updates.
 	 * First loads the current table metadata to determine the current state,
-	 * then commits the new files as an append operation.
+	 * then commits a new snapshot referencing the provided data files.
 	 *
 	 * @param namespace - Namespace parts, e.g. `["lakesync"]`
 	 * @param table - Table name
@@ -301,7 +303,7 @@ export class NessieCatalogueClient {
 		table: string,
 		files: DataFile[],
 	): Promise<Result<void, CatalogueError>> {
-		// First, load the current table metadata to get schema info
+		// Load the current table metadata to get schema and snapshot state
 		const metadataResult = await this.loadTable(namespace, table);
 		if (!metadataResult.ok) {
 			return metadataResult;
@@ -314,6 +316,32 @@ export class NessieCatalogueClient {
 		const base = await this.apiBase();
 		const url = `${base}/namespaces/${ns}/tables/${encodeURIComponent(table)}`;
 
+		// Generate a unique snapshot ID
+		const snapshotId = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+		const timestampMs = Date.now();
+
+		// Compute summary from data files
+		const totalRecords = files.reduce((sum, f) => sum + f["record-count"], 0);
+		const totalSize = files.reduce((sum, f) => sum + f["file-size-in-bytes"], 0);
+
+		const snapshot: Record<string, unknown> = {
+			"snapshot-id": snapshotId,
+			"timestamp-ms": timestampMs,
+			summary: {
+				operation: "append",
+				"added-data-files": String(files.length),
+				"added-records": String(totalRecords),
+				"added-files-size": String(totalSize),
+			},
+			"schema-id": currentSchemaId,
+		};
+
+		// Include parent snapshot reference if one exists
+		const currentSnapshotId = metadata.metadata["current-snapshot-id"];
+		if (currentSnapshotId !== undefined) {
+			snapshot["parent-snapshot-id"] = currentSnapshotId;
+		}
+
 		const commitBody = {
 			requirements: [
 				{
@@ -323,8 +351,14 @@ export class NessieCatalogueClient {
 			],
 			updates: [
 				{
-					action: "append",
-					"data-files": files,
+					action: "add-snapshot",
+					snapshot,
+				},
+				{
+					action: "set-snapshot-ref",
+					"ref-name": "main",
+					type: "branch",
+					"snapshot-id": snapshotId,
 				},
 			],
 		};

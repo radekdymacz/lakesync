@@ -299,8 +299,24 @@ describe("NessieCatalogueClient (unit)", () => {
 		expect(commitBody.requirements).toEqual([
 			{ type: "assert-current-schema-id", "current-schema-id": 0 },
 		]);
-		expect(commitBody.updates[0].action).toBe("append");
-		expect(commitBody.updates[0]["data-files"]).toEqual(files);
+
+		// Verify add-snapshot update
+		expect(commitBody.updates[0].action).toBe("add-snapshot");
+		expect(commitBody.updates[0].snapshot["schema-id"]).toBe(0);
+		expect(commitBody.updates[0].snapshot.summary.operation).toBe("append");
+		expect(commitBody.updates[0].snapshot.summary["added-data-files"]).toBe("1");
+		expect(commitBody.updates[0].snapshot.summary["added-records"]).toBe("100");
+		expect(commitBody.updates[0].snapshot.summary["added-files-size"]).toBe("4096");
+		// Parent snapshot should be set since TABLE_METADATA_RESPONSE has current-snapshot-id
+		expect(commitBody.updates[0].snapshot["parent-snapshot-id"]).toBe(100);
+
+		// Verify set-snapshot-ref update
+		expect(commitBody.updates[1].action).toBe("set-snapshot-ref");
+		expect(commitBody.updates[1]["ref-name"]).toBe("main");
+		expect(commitBody.updates[1].type).toBe("branch");
+		expect(commitBody.updates[1]["snapshot-id"]).toBe(
+			commitBody.updates[0].snapshot["snapshot-id"],
+		);
 	});
 
 	it("appendFiles propagates loadTable error", async () => {

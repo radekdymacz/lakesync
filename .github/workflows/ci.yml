@@ -46,19 +46,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - name: Create Docker network
+        run: docker network create lakesync-test
       - name: Start MinIO
         run: |
-          docker run -d --name minio \
+          docker run -d --name minio --network lakesync-test \
             -p 9000:9000 \
             -e MINIO_ROOT_USER=lakesync \
             -e MINIO_ROOT_PASSWORD=lakesync123 \
             quay.io/minio/minio:latest server /data
       - name: Start Nessie
         run: |
-          docker run -d --name nessie \
+          docker run -d --name nessie --network lakesync-test \
             -p 19120:19120 \
             -e NESSIE_VERSION_STORE_TYPE=IN_MEMORY \
-            -e NESSIE_CATALOG_DEFAULT_WAREHOUSE=s3://lakesync-test \
+            -e nessie.catalog.default-warehouse=warehouse \
+            -e nessie.catalog.warehouses.warehouse.location=s3://lakesync-test/ \
+            -e nessie.catalog.service.s3.default-options.endpoint=http://minio:9000 \
+            -e nessie.catalog.service.s3.default-options.path-style-access=true \
+            -e nessie.catalog.service.s3.default-options.region=us-east-1 \
+            -e nessie.catalog.service.s3.default-options.auth-type=STATIC \
+            -e "nessie.catalog.service.s3.default-options.access-key=urn:nessie-secret:quarkus:nessie.catalog.secrets.access-key" \
+            -e nessie.catalog.secrets.access-key.name=lakesync \
+            -e nessie.catalog.secrets.access-key.secret=lakesync123 \
             ghcr.io/projectnessie/nessie:latest
       - name: Wait for Nessie
         run: |
@@ -79,5 +89,6 @@ jobs:
           curl -sL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
           chmod +x /usr/local/bin/mc
           mc alias set local http://localhost:9000 lakesync lakesync123
+          mc mb --ignore-existing local/lakesync-test
           mc mb --ignore-existing local/lakesync-dev
       - run: bun run test:integration
