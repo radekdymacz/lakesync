@@ -12,7 +12,12 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "@lakesync/core": "workspace:*",
+    "idb": "^8.0.3"
   }
 }
