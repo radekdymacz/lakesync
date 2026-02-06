@@ -1,0 +1,40 @@
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-lakesync}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-lakesync123}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command: /init-minio.sh
+    volumes:
+      - ./init-minio.sh:/init-minio.sh:ro
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-lakesync}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-lakesync123}
+
+  nessie:
+    image: projectnessie/nessie:latest
+    ports:
+      - "19120:19120"
+    environment:
+      NESSIE_VERSION_STORE_TYPE: IN_MEMORY
+
+volumes:
+  minio-data:
