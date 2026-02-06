@@ -3,7 +3,7 @@
 [![CI](https://github.com/radekdymacz/lakesync/actions/workflows/ci.yml/badge.svg)](https://github.com/radekdymacz/lakesync/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**Column-level delta sync engine over an Iceberg-style lakehouse.**
+**Offline-first sync engine for browser apps — tracks column-level changes locally and lands them as Parquet in an Iceberg lakehouse.**
 
 LakeSync synchronises data between browser clients and a shared lakehouse backend. Instead of syncing entire rows, it tracks changes at the **column level** — so when one user edits a title and another marks a task complete, both changes merge cleanly without conflict. Data flows through a sync gateway into **Apache Parquet files** managed by an **Iceberg-compatible catalogue**, giving you a full audit trail and time-travel queries out of the box.
 
