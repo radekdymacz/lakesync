@@ -107,7 +107,10 @@ export class IDBQueue implements SyncQueue {
 			while (cursor && results.length < limit) {
 				const serialised = cursor.value as SerialisedQueueEntry;
 				if (serialised.status === "pending") {
-					results.push(deserialiseEntry(serialised));
+					const entry = deserialiseEntry(serialised);
+					if (entry.retryAfter === undefined || entry.retryAfter <= Date.now()) {
+						results.push(entry);
+					}
 				}
 				cursor = await cursor.continue();
 			}
@@ -147,7 +150,7 @@ export class IDBQueue implements SyncQueue {
 		});
 	}
 
-	/** Negative acknowledge — reset to pending with incremented retryCount */
+	/** Negative acknowledge — reset to pending with incremented retryCount and exponential backoff */
 	async nack(ids: string[]): Promise<Result<void, LakeSyncError>> {
 		return wrapIdbOp("nack", async () => {
 			const db = await this.dbPromise;
@@ -159,6 +162,8 @@ export class IDBQueue implements SyncQueue {
 				if (serialised) {
 					serialised.status = "pending";
 					serialised.retryCount++;
+					const backoffMs = Math.min(1000 * 2 ** serialised.retryCount, 30_000);
+					(serialised as Record<string, unknown>).retryAfter = Date.now() + backoffMs;
 					await store.put(serialised);
 				}
 			}

@@ -2,17 +2,40 @@
 	"name": "@lakesync/parquet",
 	"version": "0.0.1",
 	"type": "module",
+	"description": "Parquet file encoding and decoding for LakeSync delta persistence in Apache Iceberg format",
+	"keywords": [
+		"sync",
+		"offline-first",
+		"lakehouse",
+		"iceberg",
+		"parquet",
+		"arrow"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/radekdymacz/lakesync.git",
+		"directory": "packages/parquet"
+	},
+	"license": "Apache-2.0",
+	"author": "Radek Dymacz",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
 	"exports": {
-		".": "./src/index.ts",
-		"./*": "./src/*.ts"
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
 	},
 	"scripts": {
 		"build": "tsc --noEmit",
 		"test": "vitest run",
 		"typecheck": "tsc --noEmit"
 	},
+	"peerDependencies": {
+		"@lakesync/core": "workspace:*"
+	},
 	"dependencies": {
-		"@lakesync/core": "workspace:*",
 		"parquet-wasm": "^0.7.0",
 		"apache-arrow": "^18.0.0"
 	},

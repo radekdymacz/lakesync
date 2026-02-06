@@ -92,6 +92,28 @@ export default {
 			return stub.fetch(new Request(doUrl.toString(), { method: "POST", headers: doHeaders }));
 		}
 
+		// Route: POST /admin/schema/:gatewayId
+		const schemaMatch = path.match(/^\/admin\/schema\/([^/]+)$/);
+		if (schemaMatch) {
+			const [, gatewayId] = schemaMatch;
+			if (!gatewayId) return new Response("Bad request", { status: 400 });
+
+			const id = env.SYNC_GATEWAY.idFromName(gatewayId);
+			const stub = env.SYNC_GATEWAY.get(id);
+
+			const doUrl = new URL(request.url);
+			doUrl.pathname = "/admin/schema";
+			const doHeaders = new Headers(request.headers);
+			doHeaders.set("X-Client-Id", clientId);
+			return stub.fetch(
+				new Request(doUrl.toString(), {
+					method: "POST",
+					headers: doHeaders,
+					body: request.body,
+				}),
+			);
+		}
+
 		return new Response("Not found", { status: 404 });
 	},
 } satisfies ExportedHandler<Env>;

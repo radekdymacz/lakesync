@@ -1,4 +1,4 @@
-import type { SyncCoordinator } from "./sync";
+import type { SyncCoordinator } from "@lakesync/client";
 
 /** Todo row shape returned from SQLite queries */
 interface Todo {
@@ -15,7 +15,6 @@ export function setupUI(coordinator: SyncCoordinator): void {
 	const addBtn = document.getElementById("add-btn") as HTMLButtonElement;
 	const list = document.getElementById("todo-list") as HTMLUListElement;
 	const status = document.getElementById("status") as HTMLDivElement;
-	const flushBtn = document.getElementById("flush-btn") as HTMLButtonElement;
 
 	// ── Online/offline indicator ────────────────────────────────────
 	const onlineIndicator = document.createElement("div");
@@ -90,15 +89,12 @@ export function setupUI(coordinator: SyncCoordinator): void {
 	}
 
 	async function updateStatus(): Promise<void> {
-		const stats = coordinator.stats;
 		const depth = await coordinator.queueDepth();
 		const lastSync = coordinator.lastSyncTime;
 		const lastSyncStr = lastSync ? lastSync.toLocaleTimeString() : "never";
-		const pendingBadge = depth > 0 ? ` (${depth} pending)` : "";
 
 		status.textContent =
-			`Buffer: ${stats.logSize} deltas | ${stats.indexSize} rows | ` +
-			`Queue: ${depth === 0 ? "synced" : `${depth} pending`}${pendingBadge} | ` +
+			`Queue: ${depth === 0 ? "synced" : `${depth} pending`} | ` +
 			`Last sync: ${lastSyncStr} | ` +
 			`Client: ${coordinator.clientId.slice(0, 8)}...`;
 	}
@@ -129,17 +125,6 @@ export function setupUI(coordinator: SyncCoordinator): void {
 
 	input.addEventListener("keydown", (e) => {
 		if (e.key === "Enter") addBtn.click();
-	});
-
-	flushBtn.addEventListener("click", async () => {
-		status.textContent = "Flushing...";
-		const result = await coordinator.flush();
-		status.textContent = result.ok
-			? `Flushed! ${result.message}`
-			: `Flush failed: ${result.message}`;
-		setTimeout(() => {
-			void updateStatus();
-		}, 2000);
 	});
 
 	void render();

@@ -1,6 +1,6 @@
 import type { RowDelta } from "@lakesync/core";
 import { HLC } from "@lakesync/core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryQueue } from "../memory-queue";
 
 function makeDelta(id: string): RowDelta {
@@ -116,20 +116,34 @@ describe("MemoryQueue", () => {
 	});
 
 	it("nack resets to pending and increments retryCount", async () => {
-		const pushResult = await queue.push(makeDelta("1"));
-		if (!pushResult.ok) return;
+		vi.useFakeTimers();
+		try {
+			const pushResult = await queue.push(makeDelta("1"));
+			if (!pushResult.ok) return;
 
-		await queue.markSending([pushResult.value.id]);
-		await queue.nack([pushResult.value.id]);
+			await queue.markSending([pushResult.value.id]);
+			await queue.nack([pushResult.value.id]);
 
-		const peekResult = await queue.peek(10);
-		expect(peekResult.ok).toBe(true);
-		if (!peekResult.ok) return;
-		expect(peekResult.value).toHaveLength(1);
+			// After nack, retryCount=1, backoff=2000ms — entry not yet peekable
+			const peekImmediate = await queue.peek(10);
+			expect(peekImmediate.ok).toBe(true);
+			if (!peekImmediate.ok) return;
+			expect(peekImmediate.value).toHaveLength(0);
 
-		const entry = peekResult.value[0];
-		expect(entry?.status).toBe("pending");
-		expect(entry?.retryCount).toBe(1);
+			// Advance past the backoff period (2000ms for retryCount=1)
+			vi.advanceTimersByTime(2001);
+
+			const peekResult = await queue.peek(10);
+			expect(peekResult.ok).toBe(true);
+			if (!peekResult.ok) return;
+			expect(peekResult.value).toHaveLength(1);
+
+			const entry = peekResult.value[0];
+			expect(entry?.status).toBe("pending");
+			expect(entry?.retryCount).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("depth returns correct count of pending + sending entries", async () => {

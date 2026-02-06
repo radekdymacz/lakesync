@@ -13,45 +13,19 @@ import {
 	type HLCTimestamp,
 	Ok,
 	type Result,
-	type RowDelta,
 	resolveLWW,
 	rowKey,
 	type SchemaError,
+	type SyncPull,
+	type SyncPush,
+	type SyncResponse,
 } from "@lakesync/core";
 import { writeDeltasToParquet } from "@lakesync/parquet";
 import { DeltaBuffer } from "./buffer";
 import { bigintReplacer } from "./json";
 import type { FlushEnvelope, GatewayConfig } from "./types";
 
-/** SyncPush input message */
-export interface SyncPush {
-	/** Client that sent the push */
-	clientId: string;
-	/** Deltas to push */
-	deltas: RowDelta[];
-	/** Client's last-seen HLC */
-	lastSeenHlc: HLCTimestamp;
-}
-
-/** SyncPull input message */
-export interface SyncPull {
-	/** Client that sent the pull */
-	clientId: string;
-	/** Return deltas with HLC strictly after this value */
-	sinceHlc: HLCTimestamp;
-	/** Maximum number of deltas to return */
-	maxDeltas: number;
-}
-
-/** SyncResponse output */
-export interface SyncResponse {
-	/** Deltas matching the pull criteria */
-	deltas: RowDelta[];
-	/** Current server HLC */
-	serverHlc: HLCTimestamp;
-	/** Whether there are more deltas to fetch */
-	hasMore: boolean;
-}
+export type { SyncPush, SyncPull, SyncResponse };
 
 /**
  * Sync gateway -- coordinates delta ingestion, conflict resolution, and flush.

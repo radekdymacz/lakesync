@@ -2,22 +2,32 @@ import type { Result } from "@lakesync/core";
 import { Err, Ok } from "@lakesync/core";
 import type { Database } from "sql.js";
 import initSqlJs from "sql.js";
+import { loadSnapshot, saveSnapshot } from "./idb-persistence";
 import type { DbConfig, Transaction } from "./types";
 import { DbError } from "./types";
+
+/** Resolved storage backend after auto-detection */
+type ResolvedBackend = "idb" | "memory";
 
 /**
  * Local SQLite database backed by sql.js (SQLite compiled to WASM).
  *
- * Currently uses in-memory mode for all operations. Future versions
- * will support OPFS and IndexedDB persistence backends.
+ * Supports two persistence backends:
+ * - `"memory"` — purely in-memory, data lost on close
+ * - `"idb"` — snapshots persisted to IndexedDB between sessions
+ *
+ * When no backend is specified, auto-detects: uses `"idb"` if
+ * `indexedDB` is available, otherwise falls back to `"memory"`.
  */
 export class LocalDB {
 	readonly #db: Database;
 	readonly #config: DbConfig;
+	readonly #backend: ResolvedBackend;
 
-	private constructor(db: Database, config: DbConfig) {
+	private constructor(db: Database, config: DbConfig, backend: ResolvedBackend) {
 		this.#db = db;
 		this.#config = config;
+		this.#backend = backend;
 	}
 
 	/** The database name from configuration */
@@ -25,17 +35,31 @@ export class LocalDB {
 		return this.#config.name;
 	}
 
+	/** The resolved storage backend for this instance */
+	get backend(): ResolvedBackend {
+		return this.#backend;
+	}
+
 	/**
 	 * Open a new LocalDB instance.
 	 *
-	 * Initialises the sql.js WASM engine and creates an in-memory database.
-	 * Future backends (OPFS, IndexedDB) will be selected via `config.backend`.
+	 * Initialises the sql.js WASM engine and creates a database. When the
+	 * backend is `"idb"`, any existing snapshot is loaded from IndexedDB.
+	 * If no backend is specified, auto-detects based on `indexedDB` availability.
 	 */
 	static async open(config: DbConfig): Promise<Result<LocalDB, DbError>> {
 		try {
+			const backend: ResolvedBackend = resolveBackend(config.backend);
+
 			const SQL = await initSqlJs();
-			const db = new SQL.Database();
-			return Ok(new LocalDB(db, config));
+
+			let data: Uint8Array | null = null;
+			if (backend === "idb") {
+				data = await loadSnapshot(config.name);
+			}
+
+			const db = data ? new SQL.Database(data) : new SQL.Database();
+			return Ok(new LocalDB(db, config, backend));
 		} catch (err) {
 			return Err(
 				new DbError(
@@ -138,8 +162,39 @@ export class LocalDB {
 		}
 	}
 
-	/** Close the database and release resources */
+	/**
+	 * Export the current database state and persist it to IndexedDB.
+	 *
+	 * No-op when the backend is `"memory"`.
+	 */
+	async save(): Promise<Result<void, DbError>> {
+		if (this.#backend !== "idb") {
+			return Ok(undefined);
+		}
+		try {
+			const data = this.#db.export();
+			await saveSnapshot(this.#config.name, data);
+			return Ok(undefined);
+		} catch (err) {
+			return Err(
+				new DbError(
+					`Failed to save database "${this.#config.name}" to IndexedDB`,
+					err instanceof Error ? err : new Error(String(err)),
+				),
+			);
+		}
+	}
+
+	/**
+	 * Close the database and release resources.
+	 *
+	 * When the backend is `"idb"`, the database snapshot is persisted
+	 * to IndexedDB before closing.
+	 */
 	async close(): Promise<void> {
+		if (this.#backend === "idb") {
+			await this.save();
+		}
 		this.#db.close();
 	}
 
@@ -192,4 +247,18 @@ export class LocalDB {
 			},
 		};
 	}
+}
+
+/**
+ * Resolve the storage backend from configuration.
+ *
+ * When no backend is specified, auto-detects: uses `"idb"` if
+ * the `indexedDB` global is available, otherwise `"memory"`.
+ */
+function resolveBackend(configured?: DbConfig["backend"]): ResolvedBackend {
+	if (configured === "memory") return "memory";
+	if (configured === "idb") return "idb";
+	// Auto-detect: prefer IndexedDB when available
+	if (typeof indexedDB !== "undefined") return "idb";
+	return "memory";
 }

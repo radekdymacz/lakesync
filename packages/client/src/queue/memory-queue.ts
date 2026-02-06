@@ -23,10 +23,11 @@ export class MemoryQueue implements SyncQueue {
 		return Ok(entry);
 	}
 
-	/** Peek at pending entries (ordered by createdAt) */
+	/** Peek at pending entries (ordered by createdAt), skipping entries with future retryAfter */
 	async peek(limit: number): Promise<Result<QueueEntry[], LakeSyncError>> {
+		const now = Date.now();
 		const pending = [...this.entries.values()]
-			.filter((e) => e.status === "pending")
+			.filter((e) => e.status === "pending" && (e.retryAfter === undefined || e.retryAfter <= now))
 			.sort((a, b) => a.createdAt - b.createdAt)
 			.slice(0, limit);
 		return Ok(pending);
@@ -51,13 +52,15 @@ export class MemoryQueue implements SyncQueue {
 		return Ok(undefined);
 	}
 
-	/** Negative acknowledge — reset to pending with incremented retryCount */
+	/** Negative acknowledge — reset to pending with incremented retryCount and exponential backoff */
 	async nack(ids: string[]): Promise<Result<void, LakeSyncError>> {
 		for (const id of ids) {
 			const entry = this.entries.get(id);
 			if (entry) {
 				entry.status = "pending";
 				entry.retryCount++;
+				const backoffMs = Math.min(1000 * 2 ** entry.retryCount, 30_000);
+				entry.retryAfter = Date.now() + backoffMs;
 			}
 		}
 		return Ok(undefined);

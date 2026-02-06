@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { HLCTimestamp } from "@lakesync/core";
+import type { HLCTimestamp, TableSchema } from "@lakesync/core";
 import { SyncGateway, type SyncPull, type SyncPush, type SyncResponse } from "@lakesync/gateway";
 import {
 	type CodecError,
@@ -96,26 +96,50 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 *
 	 * Creates an {@link R2Adapter} from the environment's LAKE_BUCKET
 	 * binding and passes it to the gateway. Uses Parquet flush format
-	 * by default, falling back to JSON when no tableSchema is configured.
+	 * when a {@link TableSchema} is stored in Durable Storage, falling
+	 * back to JSON when no schema is configured.
 	 */
-	private getGateway(): SyncGateway {
+	private async getGateway(): Promise<SyncGateway> {
 		if (this.gateway) {
 			return this.gateway;
 		}
 
 		const adapter = new R2Adapter(this.env.LAKE_BUCKET);
+		const tableSchema = await this.loadTableSchema();
 
 		this.gateway = new SyncGateway(
 			{
 				gatewayId: this.ctx.id.toString(),
 				maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
 				maxBufferAgeMs: DEFAULT_MAX_BUFFER_AGE_MS,
-				flushFormat: "parquet",
+				flushFormat: tableSchema ? "parquet" : "json",
+				tableSchema,
 			},
 			adapter,
 		);
 
 		return this.gateway;
+	}
+
+	/**
+	 * Load a previously saved {@link TableSchema} from Durable Storage.
+	 *
+	 * @returns The stored schema, or `undefined` if none has been saved.
+	 */
+	private async loadTableSchema(): Promise<TableSchema | undefined> {
+		const schema = await this.ctx.storage.get<TableSchema>("tableSchema");
+		return schema ?? undefined;
+	}
+
+	/**
+	 * Persist a {@link TableSchema} to Durable Storage and reset the
+	 * cached gateway so the next {@link getGateway} call picks up the
+	 * new schema and flush format.
+	 */
+	private async saveTableSchema(schema: TableSchema): Promise<void> {
+		await this.ctx.storage.put("tableSchema", schema);
+		// Reset gateway so next getGateway() picks up the new schema
+		this.gateway = null;
 	}
 
 	/**
@@ -146,6 +170,8 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				return this.handlePull(url);
 			case "/flush":
 				return this.handleFlush();
+			case "/admin/schema":
+				return this.handleSaveSchema(request);
 			default:
 				return errorResponse("Not found", 404);
 		}
@@ -179,7 +205,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			return errorResponse("Missing required fields: clientId, deltas", 400);
 		}
 
-		const gateway = this.getGateway();
+		const gateway = await this.getGateway();
 		const result = gateway.handlePush(body);
 
 		if (!result.ok) {
@@ -206,7 +232,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 * - `limit` (optional) -- maximum number of deltas (default 100)
 	 * - `clientId` (required) -- requesting client identifier
 	 */
-	private handlePull(url: URL): Response {
+	private async handlePull(url: URL): Promise<Response> {
 		const sinceParam = url.searchParams.get("since");
 		const clientId = url.searchParams.get("clientId");
 		const limitParam = url.searchParams.get("limit");
@@ -228,7 +254,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		}
 
 		const msg: SyncPull = { clientId, sinceHlc, maxDeltas };
-		const gateway = this.getGateway();
+		const gateway = await this.getGateway();
 		const result = gateway.handlePull(msg);
 
 		// handlePull never fails (Result<SyncResponse, never>), but guard for safety
@@ -246,7 +272,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 * fails (e.g. already in progress, no adapter configured).
 	 */
 	private async handleFlush(): Promise<Response> {
-		const gateway = this.getGateway();
+		const gateway = await this.getGateway();
 		const result = await gateway.flush();
 
 		if (!result.ok) {
@@ -254,6 +280,33 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		}
 
 		return jsonResponse({ flushed: true });
+	}
+
+	/**
+	 * Handle `POST /admin/schema` -- save a table schema to Durable Storage.
+	 *
+	 * Expects a JSON body matching {@link TableSchema} with at least
+	 * `table` (string) and `columns` (array) fields. Once saved, future
+	 * flushes will use the Parquet format instead of JSON.
+	 */
+	private async handleSaveSchema(request: Request): Promise<Response> {
+		if (request.method !== "POST") {
+			return errorResponse("Method not allowed", 405);
+		}
+
+		let schema: TableSchema;
+		try {
+			schema = (await request.json()) as TableSchema;
+		} catch {
+			return errorResponse("Invalid JSON body", 400);
+		}
+
+		if (!schema.table || !Array.isArray(schema.columns)) {
+			return errorResponse("Missing required fields: table, columns", 400);
+		}
+
+		await this.saveTableSchema(schema);
+		return jsonResponse({ saved: true });
 	}
 
 	// -----------------------------------------------------------------------
@@ -305,7 +358,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		const tag = bytes[0];
 		const payload = bytes.subarray(1);
 
-		const gateway = this.getGateway();
+		const gateway = await this.getGateway();
 
 		if (tag === 0x01) {
 			// SyncPush
@@ -371,18 +424,22 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 */
 	async webSocketClose(
 		_ws: WebSocket,
-		_code: number,
-		_reason: string,
-		_wasClean: boolean,
+		code: number,
+		reason: string,
+		wasClean: boolean,
 	): Promise<void> {
-		// No per-client cleanup required in Phase 1.
+		console.log(
+			`[SyncGatewayDO] WebSocket closed: code=${code}, reason="${reason}", clean=${wasClean}`,
+		);
 	}
 
 	/**
 	 * Handle WebSocket errors — log and clean up.
 	 */
-	async webSocketError(_ws: WebSocket, _error: unknown): Promise<void> {
-		// No per-client cleanup required in Phase 1.
+	async webSocketError(_ws: WebSocket, error: unknown): Promise<void> {
+		console.log(
+			`[SyncGatewayDO] WebSocket error: ${error instanceof Error ? error.message : String(error)}`,
+		);
 	}
 
 	// -----------------------------------------------------------------------
@@ -398,7 +455,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 * leaves rescheduling to the next push.
 	 */
 	async alarm(): Promise<void> {
-		const gateway = this.getGateway();
+		const gateway = await this.getGateway();
 		const stats = gateway.bufferStats;
 
 		if (stats.logSize === 0) {

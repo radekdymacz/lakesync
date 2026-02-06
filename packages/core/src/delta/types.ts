@@ -45,3 +45,33 @@ export type RowKey = string & { readonly __brand: "RowKey" };
 export function rowKey(table: string, rowId: string): RowKey {
 	return `${table}:${rowId}` as RowKey;
 }
+
+/** SyncPush input message — sent by clients to push local deltas to the gateway */
+export interface SyncPush {
+	/** Client that sent the push */
+	clientId: string;
+	/** Deltas to push */
+	deltas: RowDelta[];
+	/** Client's last-seen HLC */
+	lastSeenHlc: HLCTimestamp;
+}
+
+/** SyncPull input message — sent by clients to pull remote deltas from the gateway */
+export interface SyncPull {
+	/** Client that sent the pull */
+	clientId: string;
+	/** Return deltas with HLC strictly after this value */
+	sinceHlc: HLCTimestamp;
+	/** Maximum number of deltas to return */
+	maxDeltas: number;
+}
+
+/** SyncResponse output — returned by the gateway after push or pull */
+export interface SyncResponse {
+	/** Deltas matching the pull criteria */
+	deltas: RowDelta[];
+	/** Current server HLC */
+	serverHlc: HLCTimestamp;
+	/** Whether there are more deltas to fetch */
+	hasMore: boolean;
+}

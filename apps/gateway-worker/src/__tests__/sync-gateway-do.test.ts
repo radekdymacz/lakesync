@@ -59,13 +59,19 @@ import { SyncGatewayDO } from "../sync-gateway-do";
  */
 function createMockCtx(): {
 	id: { toString: () => string };
-	storage: { setAlarm: ReturnType<typeof vi.fn> };
+	storage: {
+		setAlarm: ReturnType<typeof vi.fn>;
+		get: ReturnType<typeof vi.fn>;
+		put: ReturnType<typeof vi.fn>;
+	};
 	acceptWebSocket: ReturnType<typeof vi.fn>;
 } {
 	return {
 		id: { toString: () => "do-test-id" },
 		storage: {
 			setAlarm: vi.fn(),
+			get: vi.fn().mockResolvedValue(undefined),
+			put: vi.fn().mockResolvedValue(undefined),
 		},
 		acceptWebSocket: vi.fn(),
 	};

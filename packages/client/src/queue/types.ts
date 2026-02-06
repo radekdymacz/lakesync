@@ -15,6 +15,8 @@ export interface QueueEntry {
 	createdAt: number;
 	/** Number of times this entry has been retried */
 	retryCount: number;
+	/** Earliest time (ms since epoch) this entry should be retried. Undefined = immediately. */
+	retryAfter?: number;
 }
 
 /** Outbox-pattern sync queue interface */
