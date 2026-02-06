@@ -37,31 +37,6 @@ jobs:
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
-    if: |
-      contains(github.event.head_commit.modified, 'packages/adapter') ||
-      contains(github.event.head_commit.modified, 'packages/gateway') ||
-      contains(github.event.head_commit.modified, 'tests/integration') ||
-      github.event_name == 'push'
-    services:
-      minio:
-        image: bitnami/minio:latest
-        ports:
-          - 9000:9000
-          - 9001:9001
-        env:
-          MINIO_ROOT_USER: lakesync
-          MINIO_ROOT_PASSWORD: lakesync123
-          MINIO_DEFAULT_BUCKETS: lakesync-dev
-        options: >-
-          --health-cmd "curl -sf http://localhost:9000/minio/health/live || exit 1"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-          --health-start-period 10s
-      nessie:
-        image: projectnessie/nessie:latest
-        ports:
-          - 19120:19120
     env:
       MINIO_ENDPOINT: http://localhost:9000
       MINIO_ROOT_USER: lakesync
@@ -71,4 +46,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=lakesync \
+            -e MINIO_ROOT_PASSWORD=lakesync123 \
+            quay.io/minio/minio:latest server /data
+      - name: Start Nessie
+        run: |
+          docker run -d --name nessie \
+            -p 19120:19120 \
+            -e NESSIE_VERSION_STORE_TYPE=IN_MEMORY \
+            ghcr.io/projectnessie/nessie:latest
+      - name: Wait for MinIO and create bucket
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/live; then
+              break
+            fi
+            sleep 1
+          done
+          curl -sL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc alias set local http://localhost:9000 lakesync lakesync123
+          mc mb --ignore-existing local/lakesync-dev
       - run: bun run test:integration
