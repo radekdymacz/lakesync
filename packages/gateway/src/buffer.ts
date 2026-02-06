@@ -1,5 +1,6 @@
 import type { HLCTimestamp, RowDelta, RowKey } from "@lakesync/core";
 import { HLC, rowKey } from "@lakesync/core";
+import { bigintReplacer } from "./json";
 
 /**
  * Dual-structure delta buffer.
@@ -18,10 +19,7 @@ export class DeltaBuffer {
 		this.log.push(delta);
 		const key = rowKey(delta.table, delta.rowId);
 		this.index.set(key, delta);
-		// Rough byte estimate: JSON length (BigInt-safe serialisation)
-		this.estimatedBytes += JSON.stringify(delta, (_key, value) =>
-			typeof value === "bigint" ? value.toString() : (value as unknown),
-		).length;
+		this.estimatedBytes += JSON.stringify(delta, bigintReplacer).length;
 	}
 
 	/** Get the current merged state for a row (for conflict resolution). */
@@ -38,18 +36,13 @@ export class DeltaBuffer {
 	getEventsSince(hlc: HLCTimestamp, limit: number): { deltas: RowDelta[]; hasMore: boolean } {
 		const filtered = this.log.filter((d) => HLC.compare(d.hlc, hlc) > 0);
 		const hasMore = filtered.length > limit;
-		return {
-			deltas: filtered.slice(0, limit),
-			hasMore,
-		};
+		return { deltas: filtered.slice(0, limit), hasMore };
 	}
 
-	/** Check if the buffer should be flushed. */
+	/** Check if the buffer should be flushed based on size or age thresholds. */
 	shouldFlush(config: { maxBytes: number; maxAgeMs: number }): boolean {
 		if (this.log.length === 0) return false;
-		if (this.estimatedBytes >= config.maxBytes) return true;
-		if (Date.now() - this.createdAt >= config.maxAgeMs) return true;
-		return false;
+		return this.estimatedBytes >= config.maxBytes || Date.now() - this.createdAt >= config.maxAgeMs;
 	}
 
 	/** Drain the log for flush. Returns log entries and clears both structures. */

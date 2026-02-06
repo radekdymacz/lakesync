@@ -1,5 +1,4 @@
-import { Err, Ok, type Result } from "../result";
-import { ClockDriftError } from "../result";
+import { ClockDriftError, Err, Ok, type Result } from "../result";
 import type { HLCTimestamp } from "./types";
 
 /**
@@ -11,7 +10,7 @@ import type { HLCTimestamp } from "./types";
  * The wall clock source is injectable for deterministic testing.
  */
 export class HLC {
-	private wallClock: () => number;
+	private readonly wallClock: () => number;
 	private counter = 0;
 	private lastWall = 0;
 
@@ -88,7 +87,7 @@ export class HLC {
 			this.counter = Math.max(this.counter, remoteCounter) + 1;
 		} else {
 			this.lastWall = localWall;
-			this.counter = this.counter + 1;
+			this.counter++;
 		}
 
 		if (this.counter > HLC.MAX_COUNTER) {

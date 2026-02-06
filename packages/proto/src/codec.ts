@@ -5,20 +5,50 @@ import type {
 	RowDelta as CoreRowDelta,
 	HLCTimestamp,
 } from "@lakesync/core";
-import type { Err, Ok, Result } from "@lakesync/core";
+import { Err, Ok } from "@lakesync/core";
+import type { Result } from "@lakesync/core";
 import {
 	ColumnDeltaSchema,
 	type ColumnDelta as ProtoColumnDelta,
 	DeltaOp as ProtoDeltaOp,
 	type RowDelta as ProtoRowDelta,
-	type SyncPull as ProtoSyncPull,
-	type SyncPush as ProtoSyncPush,
-	type SyncResponse as ProtoSyncResponse,
 	RowDeltaSchema,
 	SyncPullSchema,
 	SyncPushSchema,
 	SyncResponseSchema,
 } from "./gen/lakesync_pb.js";
+
+// ---------------------------------------------------------------------------
+// Codec error
+// ---------------------------------------------------------------------------
+
+/** Error returned when encoding or decoding a protobuf message fails. */
+export class CodecError extends Error {
+	readonly code = "CODEC_ERROR";
+
+	constructor(message: string, cause?: Error) {
+		super(message);
+		this.name = "CodecError";
+		this.cause = cause;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Result helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap a codec operation in a try/catch, returning a `Result`.
+ * Centralises the error-wrapping logic shared by all encode/decode functions.
+ */
+function tryCodec<T>(label: string, fn: () => T): Result<T, CodecError> {
+	try {
+		return Ok(fn());
+	} catch (err) {
+		const cause = err instanceof Error ? err : new Error(String(err));
+		return Err(new CodecError(label, cause));
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Value serialisation helpers
@@ -27,22 +57,12 @@ import {
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-/**
- * Encode an arbitrary serialisable column value to UTF-8 JSON bytes.
- *
- * @param value - The column value to serialise (must be JSON-safe).
- * @returns UTF-8 encoded JSON bytes.
- */
+/** Encode an arbitrary serialisable column value to UTF-8 JSON bytes. */
 function encodeValue(value: unknown): Uint8Array {
 	return textEncoder.encode(JSON.stringify(value));
 }
 
-/**
- * Decode UTF-8 JSON bytes back to a column value.
- *
- * @param bytes - The UTF-8 encoded JSON bytes.
- * @returns The deserialised value.
- */
+/** Decode UTF-8 JSON bytes back to a column value. */
 function decodeValue(bytes: Uint8Array): unknown {
 	return JSON.parse(textDecoder.decode(bytes));
 }
@@ -67,27 +87,10 @@ const PROTO_OP_TO_CORE: Record<ProtoDeltaOp, CoreDeltaOp | undefined> = {
 };
 
 // ---------------------------------------------------------------------------
-// Codec error
-// ---------------------------------------------------------------------------
-
-/** Error returned when decoding a protobuf message fails. */
-export class CodecError extends Error {
-	readonly code = "CODEC_ERROR";
-
-	constructor(message: string, cause?: Error) {
-		super(message);
-		this.name = "CodecError";
-		this.cause = cause;
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Internal conversion helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Convert a core ColumnDelta to a proto ColumnDelta message.
- */
+/** Convert a core ColumnDelta to a proto ColumnDelta message. */
 function coreColumnToProto(col: CoreColumnDelta): ProtoColumnDelta {
 	return create(ColumnDeltaSchema, {
 		column: col.column,
@@ -95,9 +98,7 @@ function coreColumnToProto(col: CoreColumnDelta): ProtoColumnDelta {
 	});
 }
 
-/**
- * Convert a proto ColumnDelta message to a core ColumnDelta.
- */
+/** Convert a proto ColumnDelta message to a core ColumnDelta. */
 function protoColumnToCore(col: ProtoColumnDelta): CoreColumnDelta {
 	return {
 		column: col.column,
@@ -105,9 +106,7 @@ function protoColumnToCore(col: ProtoColumnDelta): CoreColumnDelta {
 	};
 }
 
-/**
- * Convert a core RowDelta to a proto RowDelta message.
- */
+/** Convert a core RowDelta to a proto RowDelta message. */
 function coreRowToProto(delta: CoreRowDelta): ProtoRowDelta {
 	return create(RowDeltaSchema, {
 		op: CORE_OP_TO_PROTO[delta.op],
@@ -186,18 +185,9 @@ export interface SyncResponsePayload {
  * @returns A `Result` containing the binary bytes, or a `CodecError` on failure.
  */
 export function encodeRowDelta(delta: CoreRowDelta): Result<Uint8Array, CodecError> {
-	try {
-		const proto = coreRowToProto(delta);
-		return { ok: true, value: toBinary(RowDeltaSchema, proto) };
-	} catch (err) {
-		return {
-			ok: false,
-			error: new CodecError(
-				"Failed to encode RowDelta",
-				err instanceof Error ? err : new Error(String(err)),
-			),
-		};
-	}
+	return tryCodec("Failed to encode RowDelta", () =>
+		toBinary(RowDeltaSchema, coreRowToProto(delta)),
+	);
 }
 
 /**
@@ -207,18 +197,9 @@ export function encodeRowDelta(delta: CoreRowDelta): Result<Uint8Array, CodecErr
  * @returns A `Result` containing the core RowDelta, or a `CodecError` on failure.
  */
 export function decodeRowDelta(bytes: Uint8Array): Result<CoreRowDelta, CodecError> {
-	try {
-		const proto = fromBinary(RowDeltaSchema, bytes);
-		return { ok: true, value: protoRowToCore(proto) };
-	} catch (err) {
-		return {
-			ok: false,
-			error: new CodecError(
-				"Failed to decode RowDelta",
-				err instanceof Error ? err : new Error(String(err)),
-			),
-		};
-	}
+	return tryCodec("Failed to decode RowDelta", () =>
+		protoRowToCore(fromBinary(RowDeltaSchema, bytes)),
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -232,22 +213,14 @@ export function decodeRowDelta(bytes: Uint8Array): Result<CoreRowDelta, CodecErr
  * @returns A `Result` containing the binary bytes, or a `CodecError` on failure.
  */
 export function encodeSyncPush(push: SyncPushPayload): Result<Uint8Array, CodecError> {
-	try {
+	return tryCodec("Failed to encode SyncPush", () => {
 		const proto = create(SyncPushSchema, {
 			clientId: push.clientId,
 			deltas: push.deltas.map(coreRowToProto),
 			lastSeenHlc: push.lastSeenHlc as bigint,
 		});
-		return { ok: true, value: toBinary(SyncPushSchema, proto) };
-	} catch (err) {
-		return {
-			ok: false,
-			error: new CodecError(
-				"Failed to encode SyncPush",
-				err instanceof Error ? err : new Error(String(err)),
-			),
-		};
-	}
+		return toBinary(SyncPushSchema, proto);
+	});
 }
 
 /**
@@ -257,25 +230,14 @@ export function encodeSyncPush(push: SyncPushPayload): Result<Uint8Array, CodecE
  * @returns A `Result` containing the SyncPush payload, or a `CodecError` on failure.
  */
 export function decodeSyncPush(bytes: Uint8Array): Result<SyncPushPayload, CodecError> {
-	try {
+	return tryCodec("Failed to decode SyncPush", () => {
 		const proto = fromBinary(SyncPushSchema, bytes);
 		return {
-			ok: true,
-			value: {
-				clientId: proto.clientId,
-				deltas: proto.deltas.map(protoRowToCore),
-				lastSeenHlc: proto.lastSeenHlc as HLCTimestamp,
-			},
+			clientId: proto.clientId,
+			deltas: proto.deltas.map(protoRowToCore),
+			lastSeenHlc: proto.lastSeenHlc as HLCTimestamp,
 		};
-	} catch (err) {
-		return {
-			ok: false,
-			error: new CodecError(
-				"Failed to decode SyncPush",
-				err instanceof Error ? err : new Error(String(err)),
-			),
-		};
-	}
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -289,22 +251,14 @@ export function decodeSyncPush(bytes: Uint8Array): Result<SyncPushPayload, Codec
  * @returns A `Result` containing the binary bytes, or a `CodecError` on failure.
  */
 export function encodeSyncPull(pull: SyncPullPayload): Result<Uint8Array, CodecError> {
-	try {
+	return tryCodec("Failed to encode SyncPull", () => {
 		const proto = create(SyncPullSchema, {
 			clientId: pull.clientId,
 			sinceHlc: pull.sinceHlc as bigint,
 			maxDeltas: pull.maxDeltas,
 		});
-		return { ok: true, value: toBinary(SyncPullSchema, proto) };
-	} catch (err) {
-		return {
-			ok: false,
-			error: new CodecError(
-				"Failed to encode SyncPull",
-				err instanceof Error ? err : new Error(String(err)),
-			),
-		};
-	}
+		return toBinary(SyncPullSchema, proto);
+	});
 }
 
 /**
@@ -314,25 +268,14 @@ export function encodeSyncPull(pull: SyncPullPayload): Result<Uint8Array, CodecE
  * @returns A `Result` containing the SyncPull payload, or a `CodecError` on failure.
  */
 export function decodeSyncPull(bytes: Uint8Array): Result<SyncPullPayload, CodecError> {
-	try {
+	return tryCodec("Failed to decode SyncPull", () => {
 		const proto = fromBinary(SyncPullSchema, bytes);
 		return {
-			ok: true,
-			value: {
-				clientId: proto.clientId,
-				sinceHlc: proto.sinceHlc as HLCTimestamp,
-				maxDeltas: proto.maxDeltas,
-			},
+			clientId: proto.clientId,
+			sinceHlc: proto.sinceHlc as HLCTimestamp,
+			maxDeltas: proto.maxDeltas,
 		};
-	} catch (err) {
-		return {
-			ok: false,
-			error: new CodecError(
-				"Failed to decode SyncPull",
-				err instanceof Error ? err : new Error(String(err)),
-			),
-		};
-	}
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -346,22 +289,14 @@ export function decodeSyncPull(bytes: Uint8Array): Result<SyncPullPayload, Codec
  * @returns A `Result` containing the binary bytes, or a `CodecError` on failure.
  */
 export function encodeSyncResponse(response: SyncResponsePayload): Result<Uint8Array, CodecError> {
-	try {
+	return tryCodec("Failed to encode SyncResponse", () => {
 		const proto = create(SyncResponseSchema, {
 			deltas: response.deltas.map(coreRowToProto),
 			serverHlc: response.serverHlc as bigint,
 			hasMore: response.hasMore,
 		});
-		return { ok: true, value: toBinary(SyncResponseSchema, proto) };
-	} catch (err) {
-		return {
-			ok: false,
-			error: new CodecError(
-				"Failed to encode SyncResponse",
-				err instanceof Error ? err : new Error(String(err)),
-			),
-		};
-	}
+		return toBinary(SyncResponseSchema, proto);
+	});
 }
 
 /**
@@ -371,23 +306,12 @@ export function encodeSyncResponse(response: SyncResponsePayload): Result<Uint8A
  * @returns A `Result` containing the SyncResponse payload, or a `CodecError` on failure.
  */
 export function decodeSyncResponse(bytes: Uint8Array): Result<SyncResponsePayload, CodecError> {
-	try {
+	return tryCodec("Failed to decode SyncResponse", () => {
 		const proto = fromBinary(SyncResponseSchema, bytes);
 		return {
-			ok: true,
-			value: {
-				deltas: proto.deltas.map(protoRowToCore),
-				serverHlc: proto.serverHlc as HLCTimestamp,
-				hasMore: proto.hasMore,
-			},
+			deltas: proto.deltas.map(protoRowToCore),
+			serverHlc: proto.serverHlc as HLCTimestamp,
+			hasMore: proto.hasMore,
 		};
-	} catch (err) {
-		return {
-			ok: false,
-			error: new CodecError(
-				"Failed to decode SyncResponse",
-				err instanceof Error ? err : new Error(String(err)),
-			),
-		};
-	}
+	});
 }

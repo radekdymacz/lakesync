@@ -1,5 +1,4 @@
-import type { AdapterError } from "@lakesync/core";
-import type { Result } from "@lakesync/core";
+import type { AdapterError, Result } from "@lakesync/core";
 
 /** Information about an object in the lake store */
 export interface ObjectInfo {

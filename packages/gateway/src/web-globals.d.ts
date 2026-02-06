@@ -4,7 +4,6 @@
  * included in the ES2022 lib by default.
  */
 
-/* eslint-disable no-var */
 declare let crypto: {
 	subtle: {
 		digest(algorithm: string, data: BufferSource): Promise<ArrayBuffer>;

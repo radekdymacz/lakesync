@@ -1,6 +1,5 @@
-import type { RowDelta } from "@lakesync/core";
+import type { LakeSyncError, Result, RowDelta } from "@lakesync/core";
 import { Ok } from "@lakesync/core";
-import type { LakeSyncError, Result } from "@lakesync/core";
 import type { QueueEntry, SyncQueue } from "./types";
 
 /**
@@ -37,7 +36,7 @@ export class MemoryQueue implements SyncQueue {
 	async markSending(ids: string[]): Promise<Result<void, LakeSyncError>> {
 		for (const id of ids) {
 			const entry = this.entries.get(id);
-			if (entry && entry.status === "pending") {
+			if (entry?.status === "pending") {
 				entry.status = "sending";
 			}
 		}

@@ -1,9 +1,7 @@
 import type { ColumnDelta, DeltaOp, RowDelta } from "../delta/types";
 import { HLC } from "../hlc/hlc";
-import type { HLCTimestamp } from "../hlc/types";
 import { ConflictError } from "../result/errors";
-import { Err, Ok } from "../result/result";
-import type { Result } from "../result/result";
+import { Err, Ok, type Result } from "../result/result";
 import type { ConflictResolver } from "./resolver";
 
 /**
@@ -86,9 +84,9 @@ export class LWWResolver implements ConflictResolver {
  * @returns The delta that wins the comparison.
  */
 function pickWinner(local: RowDelta, remote: RowDelta): RowDelta {
-	const hlcCmp = HLC.compare(local.hlc, remote.hlc);
-	if (hlcCmp > 0) return local;
-	if (hlcCmp < 0) return remote;
+	const cmp = HLC.compare(local.hlc, remote.hlc);
+	if (cmp > 0) return local;
+	if (cmp < 0) return remote;
 	// Equal HLC — lexicographically higher clientId wins
 	return local.clientId > remote.clientId ? local : remote;
 }
@@ -108,6 +106,7 @@ function mergeColumns(local: RowDelta, remote: RowDelta): ColumnDelta[] {
 	const localMap = new Map(local.columns.map((c) => [c.column, c]));
 	const remoteMap = new Map(remote.columns.map((c) => [c.column, c]));
 	const allColumns = new Set([...localMap.keys(), ...remoteMap.keys()]);
+	const winner = pickWinner(local, remote);
 
 	const merged: ColumnDelta[] = [];
 
@@ -115,21 +114,13 @@ function mergeColumns(local: RowDelta, remote: RowDelta): ColumnDelta[] {
 		const localCol = localMap.get(col);
 		const remoteCol = remoteMap.get(col);
 
-		if (localCol && !remoteCol) {
-			merged.push(localCol);
-		} else if (!localCol && remoteCol) {
+		if (!remoteCol) {
+			merged.push(localCol!);
+		} else if (!localCol) {
 			merged.push(remoteCol);
-		} else if (localCol && remoteCol) {
-			// Both have this column — HLC wins, clientId tiebreak
-			const cmp = HLC.compare(local.hlc, remote.hlc);
-			if (cmp > 0) {
-				merged.push(localCol);
-			} else if (cmp < 0) {
-				merged.push(remoteCol);
-			} else {
-				// Equal HLC — lexicographically higher clientId wins
-				merged.push(local.clientId > remote.clientId ? localCol : remoteCol);
-			}
+		} else {
+			// Both have this column — winner takes it
+			merged.push(winner === local ? localCol : remoteCol);
 		}
 	}
 

@@ -6,10 +6,10 @@ import type { ColumnDelta, RowDelta, TableSchema } from "./types";
 /**
  * Extract a column-level delta between two row states.
  *
- * - `before` null/undefined + `after` present → INSERT (all columns)
- * - `before` present + `after` null/undefined → DELETE (empty columns)
- * - Both present → compare each column, emit only changed columns as UPDATE
- * - No columns changed → returns null (no-op)
+ * - `before` null/undefined + `after` present -> INSERT (all columns)
+ * - `before` present + `after` null/undefined -> DELETE (empty columns)
+ * - Both present -> compare each column, emit only changed columns as UPDATE
+ * - No columns changed -> returns null (no-op)
  *
  * If `schema` is provided, only columns listed in the schema are considered.
  *
@@ -34,7 +34,6 @@ export async function extractDelta(
 	const beforeExists = before != null;
 	const afterExists = after != null;
 
-	// Both absent — nothing to do
 	if (!beforeExists && !afterExists) {
 		return null;
 	}
@@ -54,9 +53,7 @@ export async function extractDelta(
 	}
 
 	// UPDATE: both states exist — compare columns
-	// TypeScript narrowing: at this point both before and after are non-null
 	const columns = diffColumns(before!, after!, schema);
-
 	if (columns.length === 0) {
 		return null;
 	}
@@ -65,18 +62,22 @@ export async function extractDelta(
 	return { op: "UPDATE", table, rowId, clientId, columns, hlc, deltaId };
 }
 
+/** Build an allow-set from a schema, or null if no schema is provided. */
+function allowedSet(schema?: TableSchema): Set<string> | null {
+	return schema ? new Set(schema.columns.map((c) => c.name)) : null;
+}
+
 /**
  * Build column deltas from a row, optionally filtered by schema.
  * Skips columns whose value is undefined (treated as absent).
  */
 function buildColumns(row: Record<string, unknown>, schema?: TableSchema): ColumnDelta[] {
-	const allowedColumns = schema ? new Set(schema.columns.map((c) => c.name)) : null;
-
+	const allowed = allowedSet(schema);
 	const columns: ColumnDelta[] = [];
 
 	for (const [key, value] of Object.entries(row)) {
 		if (value === undefined) continue;
-		if (allowedColumns && !allowedColumns.has(key)) continue;
+		if (allowed && !allowed.has(key)) continue;
 		columns.push({ column: key, value });
 	}
 
@@ -86,49 +87,43 @@ function buildColumns(row: Record<string, unknown>, schema?: TableSchema): Colum
 /**
  * Diff two row objects and return only the changed columns.
  * Uses Object.is() for primitives and fast-deep-equal for objects/arrays.
- * Skips columns whose value is undefined in both before and after.
  */
 function diffColumns(
 	before: Record<string, unknown>,
 	after: Record<string, unknown>,
 	schema?: TableSchema,
 ): ColumnDelta[] {
-	const allowedColumns = schema ? new Set(schema.columns.map((c) => c.name)) : null;
-
-	// Collect all unique keys from both objects
+	const allowed = allowedSet(schema);
 	const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
-
 	const columns: ColumnDelta[] = [];
 
 	for (const key of allKeys) {
-		if (allowedColumns && !allowedColumns.has(key)) continue;
+		if (allowed && !allowed.has(key)) continue;
 
 		const beforeVal = before[key];
 		const afterVal = after[key];
 
-		// Skip if both are undefined (absent in both states)
-		if (beforeVal === undefined && afterVal === undefined) continue;
-
-		// Skip columns where after is undefined (column removed — treat as absent)
+		// Skip absent or removed columns
 		if (afterVal === undefined) continue;
 
-		// If before is undefined but after is not, it's a new column
+		// New column — before was undefined
 		if (beforeVal === undefined) {
 			columns.push({ column: key, value: afterVal });
 			continue;
 		}
 
-		// For primitives, use Object.is for exact comparison (handles NaN, +0/-0)
+		// Exact primitive equality (handles NaN, +0/-0)
 		if (Object.is(beforeVal, afterVal)) continue;
 
-		// For objects/arrays, use deep equality (key-order-agnostic)
+		// Deep equality for objects/arrays (key-order-agnostic)
 		if (
 			typeof beforeVal === "object" &&
 			beforeVal !== null &&
 			typeof afterVal === "object" &&
-			afterVal !== null
+			afterVal !== null &&
+			equal(beforeVal, afterVal)
 		) {
-			if (equal(beforeVal, afterVal)) continue;
+			continue;
 		}
 
 		columns.push({ column: key, value: afterVal });
@@ -156,11 +151,13 @@ async function generateDeltaId(params: {
 		columns: params.columns,
 	});
 
-	const encoder = new TextEncoder();
-	const data = encoder.encode(payload);
+	const data = new TextEncoder().encode(payload);
 	const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-	const hashArray = new Uint8Array(hashBuffer);
-	return Array.from(hashArray)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
+	const bytes = new Uint8Array(hashBuffer);
+
+	let hex = "";
+	for (const b of bytes) {
+		hex += b.toString(16).padStart(2, "0");
+	}
+	return hex;
 }

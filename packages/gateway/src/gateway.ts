@@ -12,6 +12,7 @@ import {
 	rowKey,
 } from "@lakesync/core";
 import { DeltaBuffer } from "./buffer";
+import { bigintReplacer } from "./json";
 import type { FlushEnvelope, GatewayConfig } from "./types";
 
 /** SyncPush input message */
@@ -146,23 +147,17 @@ export class SyncGateway {
 
 		this.flushing = true;
 
-		// Drain buffer before computing envelope
+		// Capture byte size before draining (avoids recomputing)
+		const byteSize = this.buffer.byteSize;
 		const entries = this.buffer.drain();
 
-		// Find HLC range
+		// Find HLC range across all entries
 		let min = entries[0]!.hlc;
 		let max = entries[0]!.hlc;
-		for (const delta of entries) {
-			if (HLC.compare(delta.hlc, min) < 0) min = delta.hlc;
-			if (HLC.compare(delta.hlc, max) > 0) max = delta.hlc;
-		}
-
-		// Compute byte size from the entries (BigInt-safe serialisation)
-		let byteSize = 0;
-		for (const delta of entries) {
-			byteSize += JSON.stringify(delta, (_key, value) =>
-				typeof value === "bigint" ? value.toString() : (value as unknown),
-			).length;
+		for (let i = 1; i < entries.length; i++) {
+			const hlc = entries[i]!.hlc;
+			if (HLC.compare(hlc, min) < 0) min = hlc;
+			if (HLC.compare(hlc, max) > 0) max = hlc;
 		}
 
 		const envelope: FlushEnvelope = {
@@ -179,16 +174,13 @@ export class SyncGateway {
 		const date = new Date().toISOString().split("T")[0];
 		const objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.json`;
 
-		// Serialise BigInt values for JSON
-		const jsonStr = JSON.stringify(envelope, (_key, value) =>
-			typeof value === "bigint" ? value.toString() : (value as unknown),
-		);
+		const jsonStr = JSON.stringify(envelope, bigintReplacer);
 		const data = new TextEncoder().encode(jsonStr);
 
 		const result = await this.adapter.putObject(objectKey, data, "application/json");
 
 		if (!result.ok) {
-			// Flush failed -- restore the buffer entries so they can be retried
+			// Flush failed -- restore buffer entries so they can be retried
 			for (const entry of entries) {
 				this.buffer.append(entry);
 			}

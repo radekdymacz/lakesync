@@ -1,13 +1,17 @@
+import type { LakeSyncError } from "./errors";
+
 /** Discriminated union representing either success or failure */
 export type Result<T, E = LakeSyncError> = { ok: true; value: T } | { ok: false; error: E };
 
-import type { LakeSyncError } from "./errors";
-
 /** Create a successful Result */
-export const Ok = <T>(value: T): Result<T, never> => ({ ok: true, value });
+export function Ok<T>(value: T): Result<T, never> {
+	return { ok: true, value };
+}
 
 /** Create a failed Result */
-export const Err = <E>(error: E): Result<never, E> => ({ ok: false, error });
+export function Err<E>(error: E): Result<never, E> {
+	return { ok: false, error };
+}
 
 /** Transform the success value of a Result */
 export function mapResult<T, U, E>(result: Result<T, E>, fn: (value: T) => U): Result<U, E> {
