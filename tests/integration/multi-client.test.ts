@@ -170,11 +170,19 @@ describe("Offline queue drain", () => {
 			expect(depth.value).toBe(1);
 		}
 
-		// Retry count should have incremented
+		// Entry is re-enqueued but not yet peekable (retryAfter is in the future due to backoff)
 		const peek2 = await queue.peek(10);
 		expect(peek2.ok).toBe(true);
 		if (peek2.ok) {
-			expect(peek2.value[0]?.retryCount).toBe(1);
+			// peek returns empty because retryAfter backoff has not elapsed
+			expect(peek2.value).toHaveLength(0);
+		}
+
+		// Depth still shows 1 — entry exists but is waiting for backoff
+		const depth2 = await queue.depth();
+		expect(depth2.ok).toBe(true);
+		if (depth2.ok) {
+			expect(depth2.value).toBe(1);
 		}
 	});
 });
