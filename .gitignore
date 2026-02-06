@@ -1,0 +1,9 @@
+node_modules
+dist
+.turbo
+*.wasm
+.DS_Store
+.env
+*.local
+.vite
+coverage
