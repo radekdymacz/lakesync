@@ -1,16 +1,16 @@
 export { NessieCatalogueClient } from "./nessie-client";
+export {
+	buildPartitionSpec,
+	lakeSyncTableName,
+	tableSchemaToIceberg,
+} from "./schema-mapping";
 export type {
 	CatalogueConfig,
-	IcebergSchema,
-	IcebergField,
-	PartitionSpec,
 	DataFile,
+	IcebergField,
+	IcebergSchema,
+	PartitionSpec,
 	Snapshot,
 	TableMetadata,
 } from "./types";
 export { CatalogueError } from "./types";
-export {
-	tableSchemaToIceberg,
-	buildPartitionSpec,
-	lakeSyncTableName,
-} from "./schema-mapping";

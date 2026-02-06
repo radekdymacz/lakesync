@@ -1,7 +1,7 @@
 import type { LakeAdapter } from "@lakesync/adapter";
 import {
-	type DataFile,
 	buildPartitionSpec,
+	type DataFile,
 	lakeSyncTableName,
 	tableSchemaToIceberg,
 } from "@lakesync/catalogue";
@@ -14,9 +14,9 @@ import {
 	Ok,
 	type Result,
 	type RowDelta,
-	type SchemaError,
 	resolveLWW,
 	rowKey,
+	type SchemaError,
 } from "@lakesync/core";
 import { writeDeltasToParquet } from "@lakesync/parquet";
 import { DeltaBuffer } from "./buffer";
@@ -83,10 +83,7 @@ export class SyncGateway {
 	 */
 	handlePush(
 		msg: SyncPush,
-	): Result<
-		{ serverHlc: HLCTimestamp; accepted: number },
-		ClockDriftError | SchemaError
-	> {
+	): Result<{ serverHlc: HLCTimestamp; accepted: number }, ClockDriftError | SchemaError> {
 		let accepted = 0;
 
 		for (const delta of msg.deltas) {

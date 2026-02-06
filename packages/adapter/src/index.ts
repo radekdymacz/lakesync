@@ -1,2 +1,2 @@
-export type { LakeAdapter, AdapterConfig, ObjectInfo } from "./types";
 export { MinIOAdapter } from "./minio";
+export type { AdapterConfig, LakeAdapter, ObjectInfo } from "./types";

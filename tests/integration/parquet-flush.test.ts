@@ -1,13 +1,8 @@
-import { HLC } from "@lakesync/core";
 import type { TableSchema } from "@lakesync/core";
+import { HLC } from "@lakesync/core";
 import { readParquetToDeltas } from "@lakesync/parquet";
 import { describe, expect, it } from "vitest";
-import {
-	createMockAdapter,
-	createTestGateway,
-	createTestHLC,
-	makeDelta,
-} from "./helpers";
+import { createMockAdapter, createTestGateway, createTestHLC, makeDelta } from "./helpers";
 
 /** Shared schema used across all Parquet flush tests. */
 const todoSchema: TableSchema = {
@@ -67,8 +62,7 @@ describe("Parquet flush pipeline", () => {
 		expect(storedKey).toMatch(/\.parquet$/);
 
 		// Verify key follows the expected pattern: deltas/{date}/{gatewayId}/{hlcRange}.parquet
-		const keyPattern =
-			/^deltas\/\d{4}-\d{2}-\d{2}\/test-gateway\/\d+-\d+\.parquet$/;
+		const keyPattern = /^deltas\/\d{4}-\d{2}-\d{2}\/test-gateway\/\d+-\d+\.parquet$/;
 		expect(storedKey).toMatch(keyPattern);
 	});
 
@@ -291,19 +285,13 @@ describe("Parquet flush pipeline", () => {
 		expect(restoredInsert!.clientId).toBe("client-a");
 		expect(restoredInsert!.columns).toHaveLength(3);
 
-		const titleCol = restoredInsert!.columns.find(
-			(c) => c.column === "title",
-		);
+		const titleCol = restoredInsert!.columns.find((c) => c.column === "title");
 		expect(titleCol?.value).toBe("Buy milk");
 
-		const completedCol = restoredInsert!.columns.find(
-			(c) => c.column === "completed",
-		);
+		const completedCol = restoredInsert!.columns.find((c) => c.column === "completed");
 		expect(completedCol?.value).toBe(false);
 
-		const priorityCol = restoredInsert!.columns.find(
-			(c) => c.column === "priority",
-		);
+		const priorityCol = restoredInsert!.columns.find((c) => c.column === "priority");
 		expect(priorityCol?.value).toBe(3);
 
 		// Verify UPDATE delta

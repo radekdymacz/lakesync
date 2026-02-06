@@ -1,5 +1,5 @@
-import { Err, LakeSyncError, Ok, type Result } from "@lakesync/core";
 import type { HLCTimestamp } from "@lakesync/core";
+import { Err, LakeSyncError, Ok, type Result } from "@lakesync/core";
 import type { DuckDBClient } from "./duckdb";
 
 /** System columns present in every delta Parquet file. */

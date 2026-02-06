@@ -1,5 +1,5 @@
+import type { RowDelta, TableSchema } from "@lakesync/core";
 import { HLC, LWWResolver, unwrapOrThrow } from "@lakesync/core";
-import type { HLCTimestamp, RowDelta, TableSchema } from "@lakesync/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LocalDB } from "../../db/local-db";
 import { registerSchema } from "../../db/schema-registry";

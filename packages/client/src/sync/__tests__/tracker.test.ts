@@ -1,6 +1,6 @@
-import { HLC, unwrapOrThrow } from "@lakesync/core";
 import type { TableSchema } from "@lakesync/core";
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { HLC } from "@lakesync/core";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LocalDB } from "../../db/local-db";
 import { registerSchema } from "../../db/schema-registry";
 import { MemoryQueue } from "../../queue/memory-queue";

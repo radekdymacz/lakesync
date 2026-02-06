@@ -1,5 +1,5 @@
-import { MemoryQueue, SyncTracker, applyRemoteDeltas } from "@lakesync/client";
 import type { LocalDB } from "@lakesync/client";
+import { applyRemoteDeltas, MemoryQueue, SyncTracker } from "@lakesync/client";
 import { HLC, LWWResolver } from "@lakesync/core";
 import type { SyncGateway } from "@lakesync/gateway";
 

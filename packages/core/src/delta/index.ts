@@ -1,3 +1,3 @@
-export * from "./types";
-export { extractDelta } from "./extract";
 export { applyDelta } from "./apply";
+export { extractDelta } from "./extract";
+export * from "./types";

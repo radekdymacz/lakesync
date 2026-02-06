@@ -5,12 +5,12 @@ import {
 	ConflictError,
 	Err,
 	FlushError,
-	LakeSyncError,
-	Ok,
-	SchemaError,
 	flatMapResult,
 	fromPromise,
+	LakeSyncError,
 	mapResult,
+	Ok,
+	SchemaError,
 	unwrapOrThrow,
 } from "../../result";
 

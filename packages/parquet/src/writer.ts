@@ -1,11 +1,11 @@
 import {
+	deltasToArrowTable,
 	Err,
 	FlushError,
 	Ok,
 	type Result,
 	type RowDelta,
 	type TableSchema,
-	deltasToArrowTable,
 } from "@lakesync/core";
 import * as arrow from "apache-arrow";
 import {

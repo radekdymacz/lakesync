@@ -1,5 +1,5 @@
-import { Err, HLC, LakeSyncError, Ok } from "@lakesync/core";
 import type { ConflictResolver, HLCTimestamp, Result, RowDelta } from "@lakesync/core";
+import { Err, HLC, LakeSyncError, Ok } from "@lakesync/core";
 import type { LocalDB } from "../db/local-db";
 import type { SyncQueue } from "../queue/types";
 

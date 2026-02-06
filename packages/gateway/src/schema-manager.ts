@@ -1,11 +1,4 @@
-import {
-	Err,
-	Ok,
-	type Result,
-	type RowDelta,
-	SchemaError,
-	type TableSchema,
-} from "@lakesync/core";
+import { Err, Ok, type Result, type RowDelta, SchemaError, type TableSchema } from "@lakesync/core";
 
 /**
  * Manages schema versioning and validation for the gateway.
@@ -58,19 +51,13 @@ export class SchemaManager {
 	 * Only adding columns is allowed. Removing columns or changing types
 	 * returns a SchemaError.
 	 */
-	evolveSchema(
-		newSchema: TableSchema,
-	): Result<{ version: number }, SchemaError> {
+	evolveSchema(newSchema: TableSchema): Result<{ version: number }, SchemaError> {
 		if (newSchema.table !== this.currentSchema.table) {
 			return Err(new SchemaError("Cannot evolve schema: table name mismatch"));
 		}
 
-		const oldColumnMap = new Map(
-			this.currentSchema.columns.map((c) => [c.name, c.type]),
-		);
-		const newColumnMap = new Map(
-			newSchema.columns.map((c) => [c.name, c.type]),
-		);
+		const oldColumnMap = new Map(this.currentSchema.columns.map((c) => [c.name, c.type]));
+		const newColumnMap = new Map(newSchema.columns.map((c) => [c.name, c.type]));
 
 		// Check for removed columns
 		for (const [name] of oldColumnMap) {

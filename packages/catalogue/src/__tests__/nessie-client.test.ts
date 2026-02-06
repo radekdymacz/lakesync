@@ -1,8 +1,8 @@
 import type { MockInstance } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NessieCatalogueClient } from "../nessie-client";
-import { CatalogueError } from "../types";
 import type { IcebergSchema, PartitionSpec, TableMetadata } from "../types";
+import { CatalogueError } from "../types";
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -125,13 +125,10 @@ describe("NessieCatalogueClient (unit)", () => {
 
 	it("listNamespaces parses response correctly", async () => {
 		fetchSpy.mockResolvedValueOnce(
-			new Response(
-				JSON.stringify({ namespaces: [["lakesync"], ["other", "nested"]] }),
-				{
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				},
-			),
+			new Response(JSON.stringify({ namespaces: [["lakesync"], ["other", "nested"]] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
 		);
 
 		const result = await client.listNamespaces();
@@ -182,9 +179,7 @@ describe("NessieCatalogueClient (unit)", () => {
 		expect(result.ok).toBe(true);
 
 		const [url, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
-		expect(url).toBe(
-			"http://localhost:19120/iceberg/v1/namespaces/lakesync/tables",
-		);
+		expect(url).toBe("http://localhost:19120/iceberg/v1/namespaces/lakesync/tables");
 		expect(options.method).toBe("POST");
 		const body = JSON.parse(options.body as string);
 		expect(body.name).toBe("events");
@@ -209,16 +204,12 @@ describe("NessieCatalogueClient (unit)", () => {
 
 		expect(result.ok).toBe(true);
 		if (result.ok) {
-			expect(result.value.metadata["table-uuid"]).toBe(
-				"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-			);
+			expect(result.value.metadata["table-uuid"]).toBe("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
 			expect(result.value.metadata["format-version"]).toBe(2);
 		}
 
 		const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
-		expect(url).toBe(
-			"http://localhost:19120/iceberg/v1/namespaces/lakesync/tables/test-table",
-		);
+		expect(url).toBe("http://localhost:19120/iceberg/v1/namespaces/lakesync/tables/test-table");
 	});
 
 	it("loadTable returns CatalogueError on 404", async () => {
@@ -275,13 +266,8 @@ describe("NessieCatalogueClient (unit)", () => {
 		expect(fetchSpy).toHaveBeenCalledTimes(2);
 
 		// Verify the commit request
-		const [commitUrl, commitOptions] = fetchSpy.mock.calls[1] as [
-			string,
-			RequestInit,
-		];
-		expect(commitUrl).toBe(
-			"http://localhost:19120/iceberg/v1/namespaces/lakesync/tables/events",
-		);
+		const [commitUrl, commitOptions] = fetchSpy.mock.calls[1] as [string, RequestInit];
+		expect(commitUrl).toBe("http://localhost:19120/iceberg/v1/namespaces/lakesync/tables/events");
 		expect(commitOptions.method).toBe("POST");
 
 		const commitBody = JSON.parse(commitOptions.body as string);
@@ -423,9 +409,7 @@ describe("NessieCatalogueClient (unit)", () => {
 		await client.loadTable(["org", "team"], "events");
 
 		const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
-		expect(url).toBe(
-			"http://localhost:19120/iceberg/v1/namespaces/org%1Fteam/tables/events",
-		);
+		expect(url).toBe("http://localhost:19120/iceberg/v1/namespaces/org%1Fteam/tables/events");
 	});
 
 	// -----------------------------------------------------------------------
@@ -517,12 +501,7 @@ describe.skipIf(!process.env.NESSIE_URI)("NessieCatalogueClient (integration)", 
 		};
 
 		const tableName = `tbl_${Date.now()}`;
-		const createResult = await client.createTable(
-			testNamespace,
-			tableName,
-			schema,
-			partitionSpec,
-		);
+		const createResult = await client.createTable(testNamespace, tableName, schema, partitionSpec);
 		expect(createResult.ok).toBe(true);
 
 		const loadResult = await client.loadTable(testNamespace, tableName);
@@ -539,9 +518,7 @@ describe.skipIf(!process.env.NESSIE_URI)("NessieCatalogueClient (integration)", 
 		const schema: IcebergSchema = {
 			type: "struct",
 			"schema-id": 0,
-			fields: [
-				{ id: 1, name: "id", required: true, type: "long" },
-			],
+			fields: [{ id: 1, name: "id", required: true, type: "long" }],
 		};
 
 		const tableName = `append_${Date.now()}`;
@@ -560,17 +537,10 @@ describe.skipIf(!process.env.NESSIE_URI)("NessieCatalogueClient (integration)", 
 			},
 		];
 
-		const appendResult = await client.appendFiles(
-			testNamespace,
-			tableName,
-			files,
-		);
+		const appendResult = await client.appendFiles(testNamespace, tableName, files);
 		expect(appendResult.ok).toBe(true);
 
-		const snapshotResult = await client.currentSnapshot(
-			testNamespace,
-			tableName,
-		);
+		const snapshotResult = await client.currentSnapshot(testNamespace, tableName);
 		expect(snapshotResult.ok).toBe(true);
 		if (snapshotResult.ok && snapshotResult.value) {
 			expect(snapshotResult.value["snapshot-id"]).toBeDefined();
@@ -579,10 +549,7 @@ describe.skipIf(!process.env.NESSIE_URI)("NessieCatalogueClient (integration)", 
 	});
 
 	it("returns error for missing table", async () => {
-		const result = await client.loadTable(
-			testNamespace,
-			`nonexistent_${Date.now()}`,
-		);
+		const result = await client.loadTable(testNamespace, `nonexistent_${Date.now()}`);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.error).toBeInstanceOf(CatalogueError);

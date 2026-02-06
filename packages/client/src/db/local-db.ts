@@ -1,7 +1,7 @@
-import { Err, Ok } from "@lakesync/core";
 import type { Result } from "@lakesync/core";
-import initSqlJs from "sql.js";
+import { Err, Ok } from "@lakesync/core";
 import type { Database } from "sql.js";
+import initSqlJs from "sql.js";
 import type { DbConfig, Transaction } from "./types";
 import { DbError } from "./types";
 

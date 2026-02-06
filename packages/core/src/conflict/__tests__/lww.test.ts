@@ -3,7 +3,7 @@ import type { DeltaOp, RowDelta } from "../../delta/types";
 import { HLC } from "../../hlc/hlc";
 import type { HLCTimestamp } from "../../hlc/types";
 import { ConflictError } from "../../result/errors";
-import { LWWResolver, resolveLWW } from "../lww";
+import { resolveLWW } from "../lww";
 
 /** Helper to build a RowDelta with sensible defaults */
 function makeDelta(overrides: Partial<RowDelta> & { hlc: HLCTimestamp }): RowDelta {

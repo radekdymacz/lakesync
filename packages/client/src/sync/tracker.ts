@@ -1,9 +1,8 @@
-import { Err, Ok, LakeSyncError, extractDelta } from "@lakesync/core";
-import type { Result, HLCTimestamp, TableSchema } from "@lakesync/core";
-import type { HLC } from "@lakesync/core";
+import type { HLC, Result } from "@lakesync/core";
+import { Err, extractDelta, LakeSyncError, Ok } from "@lakesync/core";
 import type { LocalDB } from "../db/local-db";
-import type { DbError } from "../db/types";
 import { getSchema } from "../db/schema-registry";
+import type { DbError } from "../db/types";
 import type { SyncQueue } from "../queue/types";
 
 /**
@@ -103,10 +102,7 @@ export class SyncTracker {
 		const rows = queryResult.value;
 		if (rows.length === 0 || !rows[0]) {
 			return Err(
-				new LakeSyncError(
-					`Row "${rowId}" not found in table "${table}"`,
-					"ROW_NOT_FOUND",
-				),
+				new LakeSyncError(`Row "${rowId}" not found in table "${table}"`, "ROW_NOT_FOUND"),
 			);
 		}
 
@@ -160,10 +156,7 @@ export class SyncTracker {
 	 * @param rowId - The unique row identifier
 	 * @returns Ok on success, Err if the row is not found or on failure
 	 */
-	async delete(
-		table: string,
-		rowId: string,
-	): Promise<Result<void, LakeSyncError>> {
+	async delete(table: string, rowId: string): Promise<Result<void, LakeSyncError>> {
 		// Fetch schema for delta extraction filtering
 		const schemaResult = await getSchema(this.db, table);
 		if (!schemaResult.ok) return schemaResult;
@@ -179,10 +172,7 @@ export class SyncTracker {
 		const rows = queryResult.value;
 		if (rows.length === 0 || !rows[0]) {
 			return Err(
-				new LakeSyncError(
-					`Row "${rowId}" not found in table "${table}"`,
-					"ROW_NOT_FOUND",
-				),
+				new LakeSyncError(`Row "${rowId}" not found in table "${table}"`, "ROW_NOT_FOUND"),
 			);
 		}
 
@@ -197,10 +187,7 @@ export class SyncTracker {
 		}
 
 		// Delete the row
-		const execResult = await this.db.exec(
-			`DELETE FROM ${table} WHERE _rowId = ?`,
-			[rowId],
-		);
+		const execResult = await this.db.exec(`DELETE FROM ${table} WHERE _rowId = ?`, [rowId]);
 		if (!execResult.ok) return execResult;
 
 		// Extract delta: data -> null means DELETE
@@ -230,10 +217,7 @@ export class SyncTracker {
 	 * @param params - Optional bind parameters
 	 * @returns The query results as typed rows, or a DbError on failure
 	 */
-	async query<T>(
-		sql: string,
-		params?: unknown[],
-	): Promise<Result<T[], DbError>> {
+	async query<T>(sql: string, params?: unknown[]): Promise<Result<T[], DbError>> {
 		return this.db.query<T>(sql, params);
 	}
 }

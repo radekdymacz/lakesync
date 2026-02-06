@@ -4,9 +4,9 @@ import type {
 	DeltaOp as CoreDeltaOp,
 	RowDelta as CoreRowDelta,
 	HLCTimestamp,
+	Result,
 } from "@lakesync/core";
 import { Err, Ok } from "@lakesync/core";
-import type { Result } from "@lakesync/core";
 import {
 	ColumnDeltaSchema,
 	type ColumnDelta as ProtoColumnDelta,

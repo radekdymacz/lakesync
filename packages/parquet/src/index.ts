@@ -1,2 +1,2 @@
-export { writeDeltasToParquet } from "./writer";
 export { readParquetToDeltas } from "./reader";
+export { writeDeltasToParquet } from "./writer";

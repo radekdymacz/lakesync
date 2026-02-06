@@ -1,3 +1,3 @@
-export * from "./queue";
 export * from "./db";
+export * from "./queue";
 export * from "./sync";

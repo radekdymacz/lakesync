@@ -1,4 +1,4 @@
 export { LocalDB } from "./local-db";
-export { DbError } from "./types";
+export { getSchema, migrateSchema, registerSchema } from "./schema-registry";
 export type { DbConfig, Transaction } from "./types";
-export { registerSchema, getSchema, migrateSchema } from "./schema-registry";
+export { DbError } from "./types";

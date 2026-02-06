@@ -1,6 +1,6 @@
 import { LocalDB, registerSchema } from "@lakesync/client";
-import { unwrapOrThrow } from "@lakesync/core";
 import type { TableSchema } from "@lakesync/core";
+import { unwrapOrThrow } from "@lakesync/core";
 
 /** Todo item as stored in SQLite */
 export interface Todo {

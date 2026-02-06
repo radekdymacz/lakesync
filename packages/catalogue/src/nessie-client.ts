@@ -1,8 +1,8 @@
-import { Err, Ok } from "@lakesync/core";
 import type { Result } from "@lakesync/core";
+import { Err, Ok } from "@lakesync/core";
 import {
-	CatalogueError,
 	type CatalogueConfig,
+	CatalogueError,
 	type DataFile,
 	type IcebergSchema,
 	type PartitionSpec,
@@ -27,12 +27,10 @@ function encodeNamespace(namespace: string[]): string {
 export class NessieCatalogueClient {
 	private readonly baseUri: string;
 	private readonly warehouseUri: string;
-	private readonly branch: string;
 
 	constructor(config: CatalogueConfig) {
 		this.baseUri = config.nessieUri.replace(/\/$/, "");
 		this.warehouseUri = config.warehouseUri;
-		this.branch = config.defaultBranch ?? "main";
 	}
 
 	/**
@@ -41,9 +39,7 @@ export class NessieCatalogueClient {
 	 * @param namespace - Namespace parts, e.g. `["lakesync"]`
 	 * @returns `Ok(void)` on success or if namespace already exists
 	 */
-	async createNamespace(
-		namespace: string[],
-	): Promise<Result<void, CatalogueError>> {
+	async createNamespace(namespace: string[]): Promise<Result<void, CatalogueError>> {
 		const url = `${this.baseUri}/v1/namespaces`;
 		const body = {
 			namespace,
@@ -314,9 +310,7 @@ export class NessieCatalogueClient {
 			return Ok(null);
 		}
 
-		const snapshot = snapshots.find(
-			(s) => s["snapshot-id"] === currentSnapshotId,
-		);
+		const snapshot = snapshots.find((s) => s["snapshot-id"] === currentSnapshotId);
 		return Ok(snapshot ?? null);
 	}
 }

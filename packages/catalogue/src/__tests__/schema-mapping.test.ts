@@ -1,10 +1,6 @@
-import { describe, expect, it } from "vitest";
 import type { TableSchema } from "@lakesync/core";
-import {
-	buildPartitionSpec,
-	lakeSyncTableName,
-	tableSchemaToIceberg,
-} from "../schema-mapping";
+import { describe, expect, it } from "vitest";
+import { buildPartitionSpec, lakeSyncTableName, tableSchemaToIceberg } from "../schema-mapping";
 
 // ---------------------------------------------------------------------------
 // Shared fixture — a schema with mixed column types
@@ -24,14 +20,7 @@ const MIXED_SCHEMA: TableSchema = {
 // System column names in expected order
 // ---------------------------------------------------------------------------
 
-const SYSTEM_COLUMN_NAMES = [
-	"op",
-	"table",
-	"rowId",
-	"clientId",
-	"hlc",
-	"deltaId",
-];
+const SYSTEM_COLUMN_NAMES = ["op", "table", "rowId", "clientId", "hlc", "deltaId"];
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -175,9 +164,7 @@ describe("buildPartitionSpec", () => {
 			fields: [{ id: 1, name: "id", required: true, type: "long" }],
 		};
 
-		expect(() => buildPartitionSpec(noHlcSchema)).toThrow(
-			"Schema must contain an 'hlc' field",
-		);
+		expect(() => buildPartitionSpec(noHlcSchema)).toThrow("Schema must contain an 'hlc' field");
 	});
 });
 

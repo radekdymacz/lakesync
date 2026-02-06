@@ -1,14 +1,9 @@
-import { HLC, Ok } from "@lakesync/core";
-import type { TableSchema } from "@lakesync/core";
 import type { NessieCatalogueClient } from "@lakesync/catalogue";
+import type { TableSchema } from "@lakesync/core";
+import { HLC, Ok } from "@lakesync/core";
 import { readParquetToDeltas } from "@lakesync/parquet";
 import { describe, expect, it, vi } from "vitest";
-import {
-	createMockAdapter,
-	createTestGateway,
-	createTestHLC,
-	makeDelta,
-} from "./helpers";
+import { createMockAdapter, createTestGateway, createTestHLC, makeDelta } from "./helpers";
 
 /** Shared schema used across all catalogue integration tests. */
 const todoSchema: TableSchema = {
@@ -333,10 +328,7 @@ describe.skipIf(!NESSIE_URI)("Iceberg catalogue integration (Docker)", () => {
 		expect(flushResult.ok).toBe(true);
 
 		// Verify a snapshot was created via the catalogue
-		const snapshotResult = await catalogue.currentSnapshot(
-			["lakesync"],
-			"todos",
-		);
+		const snapshotResult = await catalogue.currentSnapshot(["lakesync"], "todos");
 		expect(snapshotResult.ok).toBe(true);
 		if (!snapshotResult.ok) return;
 
@@ -393,10 +385,7 @@ describe.skipIf(!NESSIE_URI)("Iceberg catalogue integration (Docker)", () => {
 		expect(flush1.ok).toBe(true);
 
 		// Capture first snapshot
-		const snap1Result = await catalogue.currentSnapshot(
-			["lakesync"],
-			tableName,
-		);
+		const snap1Result = await catalogue.currentSnapshot(["lakesync"], tableName);
 		expect(snap1Result.ok).toBe(true);
 		if (!snap1Result.ok) return;
 
@@ -430,10 +419,7 @@ describe.skipIf(!NESSIE_URI)("Iceberg catalogue integration (Docker)", () => {
 		expect(flush2.ok).toBe(true);
 
 		// Capture second snapshot
-		const snap2Result = await catalogue.currentSnapshot(
-			["lakesync"],
-			tableName,
-		);
+		const snap2Result = await catalogue.currentSnapshot(["lakesync"], tableName);
 		expect(snap2Result.ok).toBe(true);
 		if (!snap2Result.ok) return;
 

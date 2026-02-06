@@ -1,8 +1,8 @@
 import type { LakeAdapter } from "@lakesync/adapter";
-import { CatalogueError } from "@lakesync/catalogue";
 import type { NessieCatalogueClient } from "@lakesync/catalogue";
-import { AdapterError, Err, HLC, Ok } from "@lakesync/core";
+import { CatalogueError } from "@lakesync/catalogue";
 import type { DeltaOp, HLCTimestamp, Result, RowDelta, TableSchema } from "@lakesync/core";
+import { AdapterError, Err, HLC, Ok } from "@lakesync/core";
 import { describe, expect, it, vi } from "vitest";
 import { SyncGateway } from "../gateway";
 import type { GatewayConfig } from "../types";

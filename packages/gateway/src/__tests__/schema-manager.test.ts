@@ -1,5 +1,5 @@
-import { HLC, Ok, SchemaError } from "@lakesync/core";
 import type { DeltaOp, HLCTimestamp, RowDelta, TableSchema } from "@lakesync/core";
+import { HLC, SchemaError } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
 import { SyncGateway } from "../gateway";
 import { SchemaManager } from "../schema-manager";

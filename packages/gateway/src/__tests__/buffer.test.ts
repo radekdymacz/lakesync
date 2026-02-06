@@ -1,5 +1,5 @@
-import { HLC, rowKey } from "@lakesync/core";
 import type { DeltaOp, HLCTimestamp, RowDelta } from "@lakesync/core";
+import { HLC, rowKey } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
 import { DeltaBuffer } from "../buffer";
 

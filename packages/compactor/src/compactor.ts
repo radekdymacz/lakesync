@@ -1,5 +1,6 @@
 import type { LakeAdapter } from "@lakesync/adapter";
 import {
+	applyDelta,
 	type ColumnDelta,
 	Err,
 	HLC,
@@ -7,9 +8,8 @@ import {
 	Ok,
 	type Result,
 	type RowDelta,
-	type TableSchema,
-	applyDelta,
 	rowKey,
+	type TableSchema,
 } from "@lakesync/core";
 import { readParquetToDeltas, writeDeltasToParquet } from "@lakesync/parquet";
 import { writeEqualityDeletes } from "./equality-delete";

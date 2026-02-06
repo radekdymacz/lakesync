@@ -13,7 +13,7 @@ import { writeDeltasToParquet } from "@lakesync/parquet";
 import { describe, expect, it } from "vitest";
 import { Compactor } from "../compactor";
 import { MaintenanceRunner } from "../maintenance";
-import type { CompactionConfig, CompactionResult } from "../types";
+import type { CompactionConfig } from "../types";
 
 /** Test schema for a todos table */
 const todoSchema: TableSchema = {

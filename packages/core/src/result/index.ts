@@ -1,17 +1,17 @@
 export {
-	type Result,
-	Ok,
-	Err,
-	mapResult,
-	flatMapResult,
-	unwrapOrThrow,
-	fromPromise,
-} from "./result";
-export {
-	LakeSyncError,
+	AdapterError,
 	ClockDriftError,
 	ConflictError,
 	FlushError,
+	LakeSyncError,
 	SchemaError,
-	AdapterError,
 } from "./errors";
+export {
+	Err,
+	flatMapResult,
+	fromPromise,
+	mapResult,
+	Ok,
+	type Result,
+	unwrapOrThrow,
+} from "./result";

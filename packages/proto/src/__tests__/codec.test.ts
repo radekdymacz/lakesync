@@ -1,6 +1,7 @@
-import type { ColumnDelta, DeltaOp, HLCTimestamp, RowDelta } from "@lakesync/core";
+import type { DeltaOp, HLCTimestamp, RowDelta } from "@lakesync/core";
 import { HLC } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
+import type { SyncPullPayload, SyncPushPayload, SyncResponsePayload } from "../codec";
 import {
 	decodeRowDelta,
 	decodeSyncPull,
@@ -11,7 +12,6 @@ import {
 	encodeSyncPush,
 	encodeSyncResponse,
 } from "../codec";
-import type { SyncPullPayload, SyncPushPayload, SyncResponsePayload } from "../codec";
 
 // ---------------------------------------------------------------------------
 // Helpers

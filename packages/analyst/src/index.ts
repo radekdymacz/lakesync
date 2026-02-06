@@ -1,3 +1,3 @@
 export { DuckDBClient, type DuckDBClientConfig } from "./duckdb";
-export { TimeTraveller, type TimeTravelConfig } from "./time-travel";
-export { UnionReader, type UnionReadConfig } from "./union-read";
+export { type TimeTravelConfig, TimeTraveller } from "./time-travel";
+export { type UnionReadConfig, UnionReader } from "./union-read";

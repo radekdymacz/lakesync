@@ -58,6 +58,8 @@ function createTestDeltas(count: number, schema: TableSchema): RowDelta[] {
 					};
 				case "null":
 					return { column: col.name, value: null };
+				default:
+					return { column: col.name, value: null };
 			}
 		});
 

@@ -1,6 +1,6 @@
 import type { LakeAdapter } from "@lakesync/adapter";
-import { AdapterError, Err, HLC, Ok } from "@lakesync/core";
 import type { DeltaOp, HLCTimestamp, Result, RowDelta, TableSchema } from "@lakesync/core";
+import { AdapterError, Err, HLC, Ok } from "@lakesync/core";
 import { readParquetToDeltas } from "@lakesync/parquet";
 import { describe, expect, it } from "vitest";
 import { SyncGateway } from "../gateway";
@@ -107,7 +107,7 @@ const parquetConfig: GatewayConfig = {
 describe("SyncGateway Parquet flush", () => {
 	const hlcLow = HLC.encode(1_000_000, 0);
 	const hlcMid = HLC.encode(2_000_000, 0);
-	const hlcHigh = HLC.encode(3_000_000, 0);
+	const _hlcHigh = HLC.encode(3_000_000, 0);
 
 	it("produces a .parquet object key", async () => {
 		const adapter = createMockAdapter();

@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
-import { HLC } from "@lakesync/core";
 import type { RowDelta } from "@lakesync/core";
+import { HLC } from "@lakesync/core";
 import { beforeEach, describe, expect, it } from "vitest";
 import { IDBQueue } from "../idb-queue";
 

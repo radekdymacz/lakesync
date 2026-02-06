@@ -1,6 +1,6 @@
 import type { LakeAdapter } from "@lakesync/adapter";
-import { AdapterError, Err, HLC, Ok, rowKey } from "@lakesync/core";
 import type { DeltaOp, HLCTimestamp, Result, RowDelta } from "@lakesync/core";
+import { AdapterError, Err, HLC, Ok } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
 import { SyncGateway } from "../gateway";
 import type { GatewayConfig } from "../types";
