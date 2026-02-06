@@ -1,5 +1,5 @@
-import type { RowDelta, RowKey, HLCTimestamp } from '@lakesync/core';
-import { rowKey, HLC } from '@lakesync/core';
+import type { HLCTimestamp, RowDelta, RowKey } from "@lakesync/core";
+import { HLC, rowKey } from "@lakesync/core";
 
 /**
  * Dual-structure delta buffer.
@@ -20,7 +20,7 @@ export class DeltaBuffer {
 		this.index.set(key, delta);
 		// Rough byte estimate: JSON length (BigInt-safe serialisation)
 		this.estimatedBytes += JSON.stringify(delta, (_key, value) =>
-			typeof value === 'bigint' ? value.toString() : (value as unknown),
+			typeof value === "bigint" ? value.toString() : (value as unknown),
 		).length;
 	}
 
@@ -35,10 +35,7 @@ export class DeltaBuffer {
 	}
 
 	/** Return change events from the log since a given HLC. */
-	getEventsSince(
-		hlc: HLCTimestamp,
-		limit: number,
-	): { deltas: RowDelta[]; hasMore: boolean } {
+	getEventsSince(hlc: HLCTimestamp, limit: number): { deltas: RowDelta[]; hasMore: boolean } {
 		const filtered = this.log.filter((d) => HLC.compare(d.hlc, hlc) > 0);
 		const hasMore = filtered.length > limit;
 		return {

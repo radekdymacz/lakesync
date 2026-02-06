@@ -39,9 +39,7 @@ export interface LakeAdapter {
 	getObject(path: string): Promise<Result<Uint8Array, AdapterError>>;
 
 	/** Get object metadata without retrieving the body */
-	headObject(
-		path: string,
-	): Promise<Result<{ size: number; lastModified: Date }, AdapterError>>;
+	headObject(path: string): Promise<Result<{ size: number; lastModified: Date }, AdapterError>>;
 
 	/** List objects matching a given prefix */
 	listObjects(prefix: string): Promise<Result<ObjectInfo[], AdapterError>>;

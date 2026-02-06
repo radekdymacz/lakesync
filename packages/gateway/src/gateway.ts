@@ -1,18 +1,18 @@
+import type { LakeAdapter } from "@lakesync/adapter";
 import {
+	type ClockDriftError,
+	Err,
+	FlushError,
 	HLC,
 	type HLCTimestamp,
-	type RowDelta,
-	rowKey,
 	Ok,
-	Err,
 	type Result,
-	type ClockDriftError,
-	FlushError,
+	type RowDelta,
 	resolveLWW,
-} from '@lakesync/core';
-import type { LakeAdapter } from '@lakesync/adapter';
-import { DeltaBuffer } from './buffer';
-import type { GatewayConfig, FlushEnvelope } from './types';
+	rowKey,
+} from "@lakesync/core";
+import { DeltaBuffer } from "./buffer";
+import type { FlushEnvelope, GatewayConfig } from "./types";
 
 /** SyncPush input message */
 export interface SyncPush {
@@ -120,10 +120,7 @@ export class SyncGateway {
 	 * @returns A `Result` containing the matching deltas, server HLC, and pagination flag.
 	 */
 	handlePull(msg: SyncPull): Result<SyncResponse, never> {
-		const { deltas, hasMore } = this.buffer.getEventsSince(
-			msg.sinceHlc,
-			msg.maxDeltas,
-		);
+		const { deltas, hasMore } = this.buffer.getEventsSince(msg.sinceHlc, msg.maxDeltas);
 		const serverHlc = this.hlc.now();
 		return Ok({ deltas, serverHlc, hasMore });
 	}
@@ -138,13 +135,13 @@ export class SyncGateway {
 	 */
 	async flush(): Promise<Result<void, FlushError>> {
 		if (this.flushing) {
-			return Err(new FlushError('Flush already in progress'));
+			return Err(new FlushError("Flush already in progress"));
 		}
 		if (this.buffer.logSize === 0) {
 			return Ok(undefined);
 		}
 		if (!this.adapter) {
-			return Err(new FlushError('No adapter configured'));
+			return Err(new FlushError("No adapter configured"));
 		}
 
 		this.flushing = true;
@@ -164,7 +161,7 @@ export class SyncGateway {
 		let byteSize = 0;
 		for (const delta of entries) {
 			byteSize += JSON.stringify(delta, (_key, value) =>
-				typeof value === 'bigint' ? value.toString() : (value as unknown),
+				typeof value === "bigint" ? value.toString() : (value as unknown),
 			).length;
 		}
 
@@ -179,20 +176,16 @@ export class SyncGateway {
 		};
 
 		// Object key: deltas/{YYYY-MM-DD}/{gatewayId}/{minHlc}-{maxHlc}.json
-		const date = new Date().toISOString().split('T')[0];
+		const date = new Date().toISOString().split("T")[0];
 		const objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.json`;
 
 		// Serialise BigInt values for JSON
 		const jsonStr = JSON.stringify(envelope, (_key, value) =>
-			typeof value === 'bigint' ? value.toString() : (value as unknown),
+			typeof value === "bigint" ? value.toString() : (value as unknown),
 		);
 		const data = new TextEncoder().encode(jsonStr);
 
-		const result = await this.adapter.putObject(
-			objectKey,
-			data,
-			'application/json',
-		);
+		const result = await this.adapter.putObject(objectKey, data, "application/json");
 
 		if (!result.ok) {
 			// Flush failed -- restore the buffer entries so they can be retried
@@ -200,11 +193,7 @@ export class SyncGateway {
 				this.buffer.append(entry);
 			}
 			this.flushing = false;
-			return Err(
-				new FlushError(
-					`Failed to write flush envelope: ${result.error.message}`,
-				),
-			);
+			return Err(new FlushError(`Failed to write flush envelope: ${result.error.message}`));
 		}
 
 		this.flushing = false;

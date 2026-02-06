@@ -1,7 +1,7 @@
-import equal from 'fast-deep-equal';
-import stableStringify from 'fast-json-stable-stringify';
-import type { HLCTimestamp } from '../hlc/types';
-import type { ColumnDelta, RowDelta, TableSchema } from './types';
+import equal from "fast-deep-equal";
+import stableStringify from "fast-json-stable-stringify";
+import type { HLCTimestamp } from "../hlc/types";
+import type { ColumnDelta, RowDelta, TableSchema } from "./types";
 
 /**
  * Extract a column-level delta between two row states.
@@ -43,14 +43,14 @@ export async function extractDelta(
 	if (!beforeExists && afterExists) {
 		const columns = buildColumns(after, schema);
 		const deltaId = await generateDeltaId({ clientId, hlc, table, rowId, columns });
-		return { op: 'INSERT', table, rowId, clientId, columns, hlc, deltaId };
+		return { op: "INSERT", table, rowId, clientId, columns, hlc, deltaId };
 	}
 
 	// DELETE: previous state exists, no new state
 	if (beforeExists && !afterExists) {
 		const columns: ColumnDelta[] = [];
 		const deltaId = await generateDeltaId({ clientId, hlc, table, rowId, columns });
-		return { op: 'DELETE', table, rowId, clientId, columns, hlc, deltaId };
+		return { op: "DELETE", table, rowId, clientId, columns, hlc, deltaId };
 	}
 
 	// UPDATE: both states exist — compare columns
@@ -62,20 +62,15 @@ export async function extractDelta(
 	}
 
 	const deltaId = await generateDeltaId({ clientId, hlc, table, rowId, columns });
-	return { op: 'UPDATE', table, rowId, clientId, columns, hlc, deltaId };
+	return { op: "UPDATE", table, rowId, clientId, columns, hlc, deltaId };
 }
 
 /**
  * Build column deltas from a row, optionally filtered by schema.
  * Skips columns whose value is undefined (treated as absent).
  */
-function buildColumns(
-	row: Record<string, unknown>,
-	schema?: TableSchema,
-): ColumnDelta[] {
-	const allowedColumns = schema
-		? new Set(schema.columns.map((c) => c.name))
-		: null;
+function buildColumns(row: Record<string, unknown>, schema?: TableSchema): ColumnDelta[] {
+	const allowedColumns = schema ? new Set(schema.columns.map((c) => c.name)) : null;
 
 	const columns: ColumnDelta[] = [];
 
@@ -98,9 +93,7 @@ function diffColumns(
 	after: Record<string, unknown>,
 	schema?: TableSchema,
 ): ColumnDelta[] {
-	const allowedColumns = schema
-		? new Set(schema.columns.map((c) => c.name))
-		: null;
+	const allowedColumns = schema ? new Set(schema.columns.map((c) => c.name)) : null;
 
 	// Collect all unique keys from both objects
 	const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
@@ -130,9 +123,9 @@ function diffColumns(
 
 		// For objects/arrays, use deep equality (key-order-agnostic)
 		if (
-			typeof beforeVal === 'object' &&
+			typeof beforeVal === "object" &&
 			beforeVal !== null &&
-			typeof afterVal === 'object' &&
+			typeof afterVal === "object" &&
 			afterVal !== null
 		) {
 			if (equal(beforeVal, afterVal)) continue;
@@ -165,9 +158,9 @@ async function generateDeltaId(params: {
 
 	const encoder = new TextEncoder();
 	const data = encoder.encode(payload);
-	const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+	const hashBuffer = await crypto.subtle.digest("SHA-256", data);
 	const hashArray = new Uint8Array(hashBuffer);
 	return Array.from(hashArray)
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
 }

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { AdapterError } from "@lakesync/core";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MinIOAdapter } from "../minio";
 import type { AdapterConfig } from "../types";
 
@@ -154,10 +154,7 @@ describe.skipIf(!minioAvailable)("MinIOAdapter (integration)", () => {
 			endpoint: "http://localhost:19999", // unreachable port
 		});
 
-		const result = await badAdapter.putObject(
-			"unreachable.bin",
-			new Uint8Array([1]),
-		);
+		const result = await badAdapter.putObject("unreachable.bin", new Uint8Array([1]));
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.error).toBeInstanceOf(AdapterError);

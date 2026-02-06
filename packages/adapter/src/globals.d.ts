@@ -35,7 +35,7 @@ interface AbortSignalTimeoutStatic {
 	timeout(ms: number): AbortSignal;
 }
 
-declare var AbortSignal: AbortSignalTimeoutStatic & {
+declare let AbortSignal: AbortSignalTimeoutStatic & {
 	prototype: AbortSignal;
 };
 
@@ -49,7 +49,7 @@ interface AbortSignal {
  * through workspace:* exports and needs these ambient types.
  */
 
-declare var crypto: {
+declare let crypto: {
 	subtle: {
 		digest(algorithm: string, data: BufferSource): Promise<ArrayBuffer>;
 	};

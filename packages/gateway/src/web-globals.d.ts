@@ -5,12 +5,9 @@
  */
 
 /* eslint-disable no-var */
-declare var crypto: {
+declare let crypto: {
 	subtle: {
-		digest(
-			algorithm: string,
-			data: BufferSource,
-		): Promise<ArrayBuffer>;
+		digest(algorithm: string, data: BufferSource): Promise<ArrayBuffer>;
 	};
 };
 

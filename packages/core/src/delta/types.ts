@@ -1,7 +1,7 @@
-import type { HLCTimestamp } from '../hlc/types';
+import type { HLCTimestamp } from "../hlc/types";
 
 /** Delta operation type */
-export type DeltaOp = 'INSERT' | 'UPDATE' | 'DELETE';
+export type DeltaOp = "INSERT" | "UPDATE" | "DELETE";
 
 /** A single column-level change */
 export interface ColumnDelta {
@@ -34,12 +34,12 @@ export interface TableSchema {
 	table: string;
 	columns: Array<{
 		name: string;
-		type: 'string' | 'number' | 'boolean' | 'json' | 'null';
+		type: "string" | "number" | "boolean" | "json" | "null";
 	}>;
 }
 
 /** Composite key utility — avoids string concatenation bugs */
-export type RowKey = string & { readonly __brand: 'RowKey' };
+export type RowKey = string & { readonly __brand: "RowKey" };
 
 /** Create a composite row key from table and row ID */
 export function rowKey(table: string, rowId: string): RowKey {

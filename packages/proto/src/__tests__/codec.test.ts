@@ -1,21 +1,17 @@
-import { describe, expect, it } from "vitest";
 import type { ColumnDelta, DeltaOp, HLCTimestamp, RowDelta } from "@lakesync/core";
 import { HLC } from "@lakesync/core";
+import { describe, expect, it } from "vitest";
 import {
-	decodeSyncPush,
-	decodeSyncPull,
-	decodeSyncResponse,
 	decodeRowDelta,
-	encodeSyncPush,
-	encodeSyncPull,
-	encodeSyncResponse,
+	decodeSyncPull,
+	decodeSyncPush,
+	decodeSyncResponse,
 	encodeRowDelta,
+	encodeSyncPull,
+	encodeSyncPush,
+	encodeSyncResponse,
 } from "../codec";
-import type {
-	SyncPushPayload,
-	SyncPullPayload,
-	SyncResponsePayload,
-} from "../codec";
+import type { SyncPullPayload, SyncPushPayload, SyncResponsePayload } from "../codec";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -135,8 +131,8 @@ describe("codec", () => {
 		expect(decoded.value.hasMore).toBe(true);
 		expect(decoded.value.serverHlc).toBe(response.serverHlc);
 		expect(decoded.value.deltas).toHaveLength(2);
-		expect(decoded.value.deltas[0]!.deltaId).toBe("resp-1");
-		expect(decoded.value.deltas[1]!.deltaId).toBe("resp-2");
+		expect(decoded.value.deltas[0]?.deltaId).toBe("resp-1");
+		expect(decoded.value.deltas[1]?.deltaId).toBe("resp-2");
 	});
 
 	it("HLC preserved through fixed64 (bigint exact equality)", () => {

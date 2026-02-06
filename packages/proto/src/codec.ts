@@ -2,21 +2,21 @@ import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import type {
 	ColumnDelta as CoreColumnDelta,
 	DeltaOp as CoreDeltaOp,
-	HLCTimestamp,
 	RowDelta as CoreRowDelta,
+	HLCTimestamp,
 } from "@lakesync/core";
-import { type Err, type Ok, type Result } from "@lakesync/core";
+import type { Err, Ok, Result } from "@lakesync/core";
 import {
-	type ColumnDelta as ProtoColumnDelta,
 	ColumnDeltaSchema,
+	type ColumnDelta as ProtoColumnDelta,
 	DeltaOp as ProtoDeltaOp,
 	type RowDelta as ProtoRowDelta,
-	RowDeltaSchema,
 	type SyncPull as ProtoSyncPull,
-	SyncPullSchema,
 	type SyncPush as ProtoSyncPush,
-	SyncPushSchema,
 	type SyncResponse as ProtoSyncResponse,
+	RowDeltaSchema,
+	SyncPullSchema,
+	SyncPushSchema,
 	SyncResponseSchema,
 } from "./gen/lakesync_pb.js";
 
@@ -345,9 +345,7 @@ export function decodeSyncPull(bytes: Uint8Array): Result<SyncPullPayload, Codec
  * @param response - The SyncResponse payload containing deltas, server HLC, and has_more flag.
  * @returns A `Result` containing the binary bytes, or a `CodecError` on failure.
  */
-export function encodeSyncResponse(
-	response: SyncResponsePayload,
-): Result<Uint8Array, CodecError> {
+export function encodeSyncResponse(response: SyncResponsePayload): Result<Uint8Array, CodecError> {
 	try {
 		const proto = create(SyncResponseSchema, {
 			deltas: response.deltas.map(coreRowToProto),
@@ -372,9 +370,7 @@ export function encodeSyncResponse(
  * @param bytes - The protobuf binary to deserialise.
  * @returns A `Result` containing the SyncResponse payload, or a `CodecError` on failure.
  */
-export function decodeSyncResponse(
-	bytes: Uint8Array,
-): Result<SyncResponsePayload, CodecError> {
+export function decodeSyncResponse(bytes: Uint8Array): Result<SyncResponsePayload, CodecError> {
 	try {
 		const proto = fromBinary(SyncResponseSchema, bytes);
 		return {

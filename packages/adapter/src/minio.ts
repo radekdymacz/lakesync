@@ -108,9 +108,7 @@ export class MinIOAdapter implements LakeAdapter {
 	}
 
 	/** List objects matching a given prefix */
-	async listObjects(
-		prefix: string,
-	): Promise<Result<ObjectInfo[], AdapterError>> {
+	async listObjects(prefix: string): Promise<Result<ObjectInfo[], AdapterError>> {
 		try {
 			const response = await this.client.send(
 				new ListObjectsV2Command({

@@ -1,13 +1,13 @@
-import { openDB, type IDBPDatabase } from 'idb';
-import type { RowDelta } from '@lakesync/core';
-import type { HLCTimestamp } from '@lakesync/core';
-import { Ok, Err, LakeSyncError } from '@lakesync/core';
-import type { Result } from '@lakesync/core';
-import type { SyncQueue, QueueEntry, QueueEntryStatus } from './types';
+import type { RowDelta } from "@lakesync/core";
+import type { HLCTimestamp } from "@lakesync/core";
+import { Err, LakeSyncError, Ok } from "@lakesync/core";
+import type { Result } from "@lakesync/core";
+import { type IDBPDatabase, openDB } from "idb";
+import type { QueueEntry, QueueEntryStatus, SyncQueue } from "./types";
 
-const DB_NAME = 'lakesync-queue';
+const DB_NAME = "lakesync-queue";
 const DB_VERSION = 1;
-const STORE_NAME = 'entries';
+const STORE_NAME = "entries";
 
 /**
  * Serialised form of a RowDelta where the HLC bigint is stored as a string.
@@ -15,11 +15,11 @@ const STORE_NAME = 'entries';
  * so we convert to/from string representation for storage.
  */
 interface SerialisedRowDelta {
-	op: RowDelta['op'];
+	op: RowDelta["op"];
 	table: string;
 	rowId: string;
 	clientId: string;
-	columns: RowDelta['columns'];
+	columns: RowDelta["columns"];
 	hlc: string;
 	deltaId: string;
 }
@@ -101,9 +101,9 @@ export class IDBQueue implements SyncQueue {
 	constructor(dbName: string = DB_NAME) {
 		this.dbPromise = openDB(dbName, DB_VERSION, {
 			upgrade(db) {
-				const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-				store.createIndex('status', 'status');
-				store.createIndex('createdAt', 'createdAt');
+				const store = db.createObjectStore(STORE_NAME, { keyPath: "id" });
+				store.createIndex("status", "status");
+				store.createIndex("createdAt", "createdAt");
 			},
 		});
 	}
@@ -115,7 +115,7 @@ export class IDBQueue implements SyncQueue {
 			const entry: QueueEntry = {
 				id: `idb-${Date.now()}-${++this.counter}`,
 				delta,
-				status: 'pending',
+				status: "pending",
 				createdAt: Date.now(),
 				retryCount: 0,
 			};
@@ -125,7 +125,7 @@ export class IDBQueue implements SyncQueue {
 			return Err(
 				new LakeSyncError(
 					`Failed to push to queue: ${error instanceof Error ? error.message : String(error)}`,
-					'QUEUE_ERROR',
+					"QUEUE_ERROR",
 				),
 			);
 		}
@@ -135,14 +135,14 @@ export class IDBQueue implements SyncQueue {
 	async peek(limit: number): Promise<Result<QueueEntry[], LakeSyncError>> {
 		try {
 			const db = await this.dbPromise;
-			const tx = db.transaction(STORE_NAME, 'readonly');
-			const index = tx.objectStore(STORE_NAME).index('createdAt');
+			const tx = db.transaction(STORE_NAME, "readonly");
+			const index = tx.objectStore(STORE_NAME).index("createdAt");
 			const results: QueueEntry[] = [];
 
 			let cursor = await index.openCursor();
 			while (cursor && results.length < limit) {
 				const serialised = cursor.value as SerialisedQueueEntry;
-				if (serialised.status === 'pending') {
+				if (serialised.status === "pending") {
 					results.push(deserialiseEntry(serialised));
 				}
 				cursor = await cursor.continue();
@@ -153,7 +153,7 @@ export class IDBQueue implements SyncQueue {
 			return Err(
 				new LakeSyncError(
 					`Failed to peek queue: ${error instanceof Error ? error.message : String(error)}`,
-					'QUEUE_ERROR',
+					"QUEUE_ERROR",
 				),
 			);
 		}
@@ -163,13 +163,13 @@ export class IDBQueue implements SyncQueue {
 	async markSending(ids: string[]): Promise<Result<void, LakeSyncError>> {
 		try {
 			const db = await this.dbPromise;
-			const tx = db.transaction(STORE_NAME, 'readwrite');
+			const tx = db.transaction(STORE_NAME, "readwrite");
 			const store = tx.objectStore(STORE_NAME);
 
 			for (const id of ids) {
 				const serialised = (await store.get(id)) as SerialisedQueueEntry | undefined;
-				if (serialised && serialised.status === 'pending') {
-					serialised.status = 'sending';
+				if (serialised && serialised.status === "pending") {
+					serialised.status = "sending";
 					await store.put(serialised);
 				}
 			}
@@ -180,7 +180,7 @@ export class IDBQueue implements SyncQueue {
 			return Err(
 				new LakeSyncError(
 					`Failed to mark sending: ${error instanceof Error ? error.message : String(error)}`,
-					'QUEUE_ERROR',
+					"QUEUE_ERROR",
 				),
 			);
 		}
@@ -190,7 +190,7 @@ export class IDBQueue implements SyncQueue {
 	async ack(ids: string[]): Promise<Result<void, LakeSyncError>> {
 		try {
 			const db = await this.dbPromise;
-			const tx = db.transaction(STORE_NAME, 'readwrite');
+			const tx = db.transaction(STORE_NAME, "readwrite");
 			for (const id of ids) {
 				await tx.objectStore(STORE_NAME).delete(id);
 			}
@@ -200,7 +200,7 @@ export class IDBQueue implements SyncQueue {
 			return Err(
 				new LakeSyncError(
 					`Failed to ack: ${error instanceof Error ? error.message : String(error)}`,
-					'QUEUE_ERROR',
+					"QUEUE_ERROR",
 				),
 			);
 		}
@@ -210,13 +210,13 @@ export class IDBQueue implements SyncQueue {
 	async nack(ids: string[]): Promise<Result<void, LakeSyncError>> {
 		try {
 			const db = await this.dbPromise;
-			const tx = db.transaction(STORE_NAME, 'readwrite');
+			const tx = db.transaction(STORE_NAME, "readwrite");
 			const store = tx.objectStore(STORE_NAME);
 
 			for (const id of ids) {
 				const serialised = (await store.get(id)) as SerialisedQueueEntry | undefined;
 				if (serialised) {
-					serialised.status = 'pending';
+					serialised.status = "pending";
 					serialised.retryCount++;
 					await store.put(serialised);
 				}
@@ -228,7 +228,7 @@ export class IDBQueue implements SyncQueue {
 			return Err(
 				new LakeSyncError(
 					`Failed to nack: ${error instanceof Error ? error.message : String(error)}`,
-					'QUEUE_ERROR',
+					"QUEUE_ERROR",
 				),
 			);
 		}
@@ -239,13 +239,13 @@ export class IDBQueue implements SyncQueue {
 		try {
 			const db = await this.dbPromise;
 			const all = await db.getAll(STORE_NAME);
-			const count = (all as SerialisedQueueEntry[]).filter((e) => e.status !== 'acked').length;
+			const count = (all as SerialisedQueueEntry[]).filter((e) => e.status !== "acked").length;
 			return Ok(count);
 		} catch (error) {
 			return Err(
 				new LakeSyncError(
 					`Failed to get depth: ${error instanceof Error ? error.message : String(error)}`,
-					'QUEUE_ERROR',
+					"QUEUE_ERROR",
 				),
 			);
 		}
@@ -261,7 +261,7 @@ export class IDBQueue implements SyncQueue {
 			return Err(
 				new LakeSyncError(
 					`Failed to clear queue: ${error instanceof Error ? error.message : String(error)}`,
-					'QUEUE_ERROR',
+					"QUEUE_ERROR",
 				),
 			);
 		}

@@ -1,4 +1,4 @@
-import type { RowDelta } from './types';
+import type { RowDelta } from "./types";
 
 /**
  * Apply a delta to an existing row, returning the merged result.
@@ -15,7 +15,7 @@ export function applyDelta(
 	row: Record<string, unknown> | null,
 	delta: RowDelta,
 ): Record<string, unknown> | null {
-	if (delta.op === 'DELETE') return null;
+	if (delta.op === "DELETE") return null;
 
 	const base: Record<string, unknown> = row ? { ...row } : {};
 	for (const col of delta.columns) {

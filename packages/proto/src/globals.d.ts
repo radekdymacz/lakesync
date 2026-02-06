@@ -13,7 +13,7 @@ declare class TextDecoder {
 	decode(input?: BufferSource): string;
 }
 
-declare var crypto: {
+declare let crypto: {
 	subtle: {
 		digest(algorithm: string, data: BufferSource): Promise<ArrayBuffer>;
 	};

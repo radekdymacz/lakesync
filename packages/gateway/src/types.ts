@@ -1,4 +1,4 @@
-import type { HLCTimestamp, RowDelta } from '@lakesync/core';
+import type { HLCTimestamp, RowDelta } from "@lakesync/core";
 
 /** Configuration for the sync gateway */
 export interface GatewayConfig {

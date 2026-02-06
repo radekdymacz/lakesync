@@ -1,6 +1,6 @@
-import type { HLCTimestamp } from "./types";
-import { type Result, Ok, Err } from "../result";
+import { Err, Ok, type Result } from "../result";
 import { ClockDriftError } from "../result";
+import type { HLCTimestamp } from "./types";
 
 /**
  * Hybrid Logical Clock implementation.
@@ -12,8 +12,8 @@ import { ClockDriftError } from "../result";
  */
 export class HLC {
 	private wallClock: () => number;
-	private counter: number = 0;
-	private lastWall: number = 0;
+	private counter = 0;
+	private lastWall = 0;
 
 	/** Maximum tolerated drift between local and remote physical clocks (ms). */
 	static readonly MAX_DRIFT_MS = 5_000;

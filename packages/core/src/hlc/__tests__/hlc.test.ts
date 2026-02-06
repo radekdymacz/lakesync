@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { ClockDriftError } from "../../result";
 import { HLC } from "../hlc";
 import type { HLCTimestamp } from "../types";
-import { ClockDriftError } from "../../result";
 
 describe("HLC", () => {
 	it("now() returns monotonically increasing timestamps", () => {

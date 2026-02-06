@@ -1,43 +1,43 @@
-import { describe, expect, it, beforeEach } from 'vitest';
-import { HLC } from '@lakesync/core';
-import type { RowDelta } from '@lakesync/core';
-import { MemoryQueue } from '../memory-queue';
+import { HLC } from "@lakesync/core";
+import type { RowDelta } from "@lakesync/core";
+import { beforeEach, describe, expect, it } from "vitest";
+import { MemoryQueue } from "../memory-queue";
 
 function makeDelta(id: string): RowDelta {
 	return {
-		op: 'UPDATE',
-		table: 'todos',
+		op: "UPDATE",
+		table: "todos",
 		rowId: id,
-		clientId: 'test-client',
-		columns: [{ column: 'title', value: 'Test' }],
+		clientId: "test-client",
+		columns: [{ column: "title", value: "Test" }],
 		hlc: HLC.encode(Date.now(), 0),
 		deltaId: `delta-${id}`,
 	};
 }
 
-describe('MemoryQueue', () => {
+describe("MemoryQueue", () => {
 	let queue: MemoryQueue;
 
 	beforeEach(() => {
 		queue = new MemoryQueue();
 	});
 
-	it('push creates entry with status pending', async () => {
-		const result = await queue.push(makeDelta('1'));
+	it("push creates entry with status pending", async () => {
+		const result = await queue.push(makeDelta("1"));
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
-		expect(result.value.status).toBe('pending');
+		expect(result.value.status).toBe("pending");
 		expect(result.value.id).toMatch(/^mem-/);
 		expect(result.value.retryCount).toBe(0);
-		expect(result.value.delta.rowId).toBe('1');
+		expect(result.value.delta.rowId).toBe("1");
 	});
 
-	it('peek returns entries ordered by createdAt', async () => {
+	it("peek returns entries ordered by createdAt", async () => {
 		// Push with slight time gaps to ensure ordering
-		await queue.push(makeDelta('1'));
-		await queue.push(makeDelta('2'));
-		await queue.push(makeDelta('3'));
+		await queue.push(makeDelta("1"));
+		await queue.push(makeDelta("2"));
+		await queue.push(makeDelta("3"));
 
 		const result = await queue.peek(10);
 
@@ -53,10 +53,10 @@ describe('MemoryQueue', () => {
 		}
 	});
 
-	it('peek respects limit', async () => {
-		await queue.push(makeDelta('1'));
-		await queue.push(makeDelta('2'));
-		await queue.push(makeDelta('3'));
+	it("peek respects limit", async () => {
+		await queue.push(makeDelta("1"));
+		await queue.push(makeDelta("2"));
+		await queue.push(makeDelta("3"));
 
 		const result = await queue.peek(2);
 
@@ -65,10 +65,10 @@ describe('MemoryQueue', () => {
 		expect(result.value).toHaveLength(2);
 	});
 
-	it('peek only returns pending entries', async () => {
-		await queue.push(makeDelta('1'));
-		await queue.push(makeDelta('2'));
-		await queue.push(makeDelta('3'));
+	it("peek only returns pending entries", async () => {
+		await queue.push(makeDelta("1"));
+		await queue.push(makeDelta("2"));
+		await queue.push(makeDelta("3"));
 
 		// Mark first entry as sending
 		const peekResult = await queue.peek(1);
@@ -84,12 +84,12 @@ describe('MemoryQueue', () => {
 		if (!result.ok) return;
 		expect(result.value).toHaveLength(2);
 		for (const entry of result.value) {
-			expect(entry.status).toBe('pending');
+			expect(entry.status).toBe("pending");
 		}
 	});
 
-	it('markSending transitions status from pending to sending', async () => {
-		const pushResult = await queue.push(makeDelta('1'));
+	it("markSending transitions status from pending to sending", async () => {
+		const pushResult = await queue.push(makeDelta("1"));
 		if (!pushResult.ok) return;
 
 		const markResult = await queue.markSending([pushResult.value.id]);
@@ -102,9 +102,9 @@ describe('MemoryQueue', () => {
 		expect(peekResult.value).toHaveLength(0);
 	});
 
-	it('ack removes entries from the queue', async () => {
-		const r1 = await queue.push(makeDelta('1'));
-		const r2 = await queue.push(makeDelta('2'));
+	it("ack removes entries from the queue", async () => {
+		const r1 = await queue.push(makeDelta("1"));
+		const r2 = await queue.push(makeDelta("2"));
 		if (!r1.ok || !r2.ok) return;
 
 		await queue.ack([r1.value.id]);
@@ -115,8 +115,8 @@ describe('MemoryQueue', () => {
 		expect(depthResult.value).toBe(1);
 	});
 
-	it('nack resets to pending and increments retryCount', async () => {
-		const pushResult = await queue.push(makeDelta('1'));
+	it("nack resets to pending and increments retryCount", async () => {
+		const pushResult = await queue.push(makeDelta("1"));
 		if (!pushResult.ok) return;
 
 		await queue.markSending([pushResult.value.id]);
@@ -128,14 +128,14 @@ describe('MemoryQueue', () => {
 		expect(peekResult.value).toHaveLength(1);
 
 		const entry = peekResult.value[0];
-		expect(entry?.status).toBe('pending');
+		expect(entry?.status).toBe("pending");
 		expect(entry?.retryCount).toBe(1);
 	});
 
-	it('depth returns correct count of pending + sending entries', async () => {
-		await queue.push(makeDelta('1'));
-		await queue.push(makeDelta('2'));
-		await queue.push(makeDelta('3'));
+	it("depth returns correct count of pending + sending entries", async () => {
+		await queue.push(makeDelta("1"));
+		await queue.push(makeDelta("2"));
+		await queue.push(makeDelta("3"));
 
 		const peekResult = await queue.peek(1);
 		if (!peekResult.ok) return;
@@ -151,9 +151,9 @@ describe('MemoryQueue', () => {
 		expect(depthResult.value).toBe(3);
 	});
 
-	it('clear empties the queue', async () => {
-		await queue.push(makeDelta('1'));
-		await queue.push(makeDelta('2'));
+	it("clear empties the queue", async () => {
+		await queue.push(makeDelta("1"));
+		await queue.push(makeDelta("2"));
 
 		await queue.clear();
 
@@ -163,11 +163,11 @@ describe('MemoryQueue', () => {
 		expect(depthResult.value).toBe(0);
 	});
 
-	it('concurrent peek + markSending prevents double-processing', async () => {
+	it("concurrent peek + markSending prevents double-processing", async () => {
 		// Push 3 entries
-		await queue.push(makeDelta('1'));
-		await queue.push(makeDelta('2'));
-		await queue.push(makeDelta('3'));
+		await queue.push(makeDelta("1"));
+		await queue.push(makeDelta("2"));
+		await queue.push(makeDelta("3"));
 
 		// First consumer peeks 2, then marks them as sending
 		const firstPeek = await queue.peek(2);

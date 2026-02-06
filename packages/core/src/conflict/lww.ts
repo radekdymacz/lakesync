@@ -1,10 +1,10 @@
-import type { RowDelta, ColumnDelta, DeltaOp } from '../delta/types';
-import type { HLCTimestamp } from '../hlc/types';
-import { HLC } from '../hlc/hlc';
-import { Ok, Err } from '../result/result';
-import type { Result } from '../result/result';
-import { ConflictError } from '../result/errors';
-import type { ConflictResolver } from './resolver';
+import type { ColumnDelta, DeltaOp, RowDelta } from "../delta/types";
+import { HLC } from "../hlc/hlc";
+import type { HLCTimestamp } from "../hlc/types";
+import { ConflictError } from "../result/errors";
+import { Err, Ok } from "../result/result";
+import type { Result } from "../result/result";
+import type { ConflictResolver } from "./resolver";
 
 /**
  * Column-level Last-Write-Wins conflict resolver.
@@ -34,8 +34,7 @@ export class LWWResolver implements ConflictResolver {
 		if (local.table !== remote.table || local.rowId !== remote.rowId) {
 			return Err(
 				new ConflictError(
-					`Cannot resolve conflict: mismatched table/rowId ` +
-						`(${local.table}:${local.rowId} vs ${remote.table}:${remote.rowId})`,
+					`Cannot resolve conflict: mismatched table/rowId (${local.table}:${local.rowId} vs ${remote.table}:${remote.rowId})`,
 				),
 			);
 		}
@@ -44,14 +43,14 @@ export class LWWResolver implements ConflictResolver {
 		const winner = pickWinner(local, remote);
 
 		// Both DELETE — winner takes all (no columns to merge)
-		if (local.op === 'DELETE' && remote.op === 'DELETE') {
+		if (local.op === "DELETE" && remote.op === "DELETE") {
 			return Ok({ ...winner, columns: [] });
 		}
 
 		// One is DELETE
-		if (local.op === 'DELETE' || remote.op === 'DELETE') {
-			const deleteDelta = local.op === 'DELETE' ? local : remote;
-			const otherDelta = local.op === 'DELETE' ? remote : local;
+		if (local.op === "DELETE" || remote.op === "DELETE") {
+			const deleteDelta = local.op === "DELETE" ? local : remote;
+			const otherDelta = local.op === "DELETE" ? remote : local;
 
 			// If the DELETE has higher/equal priority, tombstone wins
 			if (deleteDelta === winner) {
@@ -65,8 +64,7 @@ export class LWWResolver implements ConflictResolver {
 		const mergedColumns = mergeColumns(local, remote);
 
 		// Determine the resulting op: INSERT only if both are INSERT, otherwise UPDATE
-		const op: DeltaOp =
-			local.op === 'INSERT' && remote.op === 'INSERT' ? 'INSERT' : 'UPDATE';
+		const op: DeltaOp = local.op === "INSERT" && remote.op === "INSERT" ? "INSERT" : "UPDATE";
 
 		return Ok({
 			op,
@@ -130,9 +128,7 @@ function mergeColumns(local: RowDelta, remote: RowDelta): ColumnDelta[] {
 				merged.push(remoteCol);
 			} else {
 				// Equal HLC — lexicographically higher clientId wins
-				merged.push(
-					local.clientId > remote.clientId ? localCol : remoteCol,
-				);
+				merged.push(local.clientId > remote.clientId ? localCol : remoteCol);
 			}
 		}
 	}
@@ -149,10 +145,7 @@ function mergeColumns(local: RowDelta, remote: RowDelta): ColumnDelta[] {
  * @returns A `Result` containing the resolved `RowDelta`, or a
  *          `ConflictError` if the deltas refer to different tables/rows.
  */
-export function resolveLWW(
-	local: RowDelta,
-	remote: RowDelta,
-): Result<RowDelta, ConflictError> {
+export function resolveLWW(local: RowDelta, remote: RowDelta): Result<RowDelta, ConflictError> {
 	const resolver = new LWWResolver();
 	return resolver.resolve(local, remote);
 }

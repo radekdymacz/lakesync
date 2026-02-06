@@ -1,8 +1,8 @@
-import type { RowDelta } from '@lakesync/core';
-import type { Result, LakeSyncError } from '@lakesync/core';
+import type { RowDelta } from "@lakesync/core";
+import type { LakeSyncError, Result } from "@lakesync/core";
 
 /** Status of a queue entry */
-export type QueueEntryStatus = 'pending' | 'sending' | 'acked';
+export type QueueEntryStatus = "pending" | "sending" | "acked";
 
 /** A single entry in the sync queue */
 export interface QueueEntry {

@@ -1,34 +1,20 @@
-import { describe, it, expect } from 'vitest';
-import { SyncGateway } from '../gateway';
-import type { GatewayConfig } from '../types';
-import {
-	HLC,
-	Ok,
-	Err,
-	AdapterError,
-	rowKey,
-} from '@lakesync/core';
-import type {
-	HLCTimestamp,
-	RowDelta,
-	DeltaOp,
-	Result,
-} from '@lakesync/core';
-import type { LakeAdapter } from '@lakesync/adapter';
+import type { LakeAdapter } from "@lakesync/adapter";
+import { AdapterError, Err, HLC, Ok, rowKey } from "@lakesync/core";
+import type { DeltaOp, HLCTimestamp, Result, RowDelta } from "@lakesync/core";
+import { describe, expect, it } from "vitest";
+import { SyncGateway } from "../gateway";
+import type { GatewayConfig } from "../types";
 
 /** Helper to build a RowDelta with sensible defaults */
-function makeDelta(
-	opts: Partial<RowDelta> & { hlc: HLCTimestamp },
-): RowDelta {
+function makeDelta(opts: Partial<RowDelta> & { hlc: HLCTimestamp }): RowDelta {
 	return {
-		op: (opts.op ?? 'UPDATE') as DeltaOp,
-		table: opts.table ?? 'todos',
-		rowId: opts.rowId ?? 'row-1',
-		clientId: opts.clientId ?? 'client-a',
-		columns: opts.columns ?? [{ column: 'title', value: 'Test' }],
+		op: (opts.op ?? "UPDATE") as DeltaOp,
+		table: opts.table ?? "todos",
+		rowId: opts.rowId ?? "row-1",
+		clientId: opts.clientId ?? "client-a",
+		columns: opts.columns ?? [{ column: "title", value: "Test" }],
 		hlc: opts.hlc,
-		deltaId:
-			opts.deltaId ?? `delta-${Math.random().toString(36).slice(2)}`,
+		deltaId: opts.deltaId ?? `delta-${Math.random().toString(36).slice(2)}`,
 	};
 }
 
@@ -39,37 +25,25 @@ function createMockAdapter(): LakeAdapter & {
 	const stored = new Map<string, Uint8Array>();
 	return {
 		stored,
-		async putObject(
-			path: string,
-			data: Uint8Array,
-		): Promise<Result<void, AdapterError>> {
+		async putObject(path: string, data: Uint8Array): Promise<Result<void, AdapterError>> {
 			stored.set(path, data);
 			return Ok(undefined);
 		},
-		async getObject(
-			path: string,
-		): Promise<Result<Uint8Array, AdapterError>> {
+		async getObject(path: string): Promise<Result<Uint8Array, AdapterError>> {
 			const data = stored.get(path);
-			return data ? Ok(data) : Err(new AdapterError('Not found'));
+			return data ? Ok(data) : Err(new AdapterError("Not found"));
 		},
 		async headObject(
 			path: string,
-		): Promise<
-			Result<{ size: number; lastModified: Date }, AdapterError>
-		> {
+		): Promise<Result<{ size: number; lastModified: Date }, AdapterError>> {
 			const data = stored.get(path);
 			return data
 				? Ok({ size: data.length, lastModified: new Date() })
-				: Err(new AdapterError('Not found'));
+				: Err(new AdapterError("Not found"));
 		},
 		async listObjects(
 			prefix: string,
-		): Promise<
-			Result<
-				Array<{ key: string; size: number; lastModified: Date }>,
-				AdapterError
-			>
-		> {
+		): Promise<Result<Array<{ key: string; size: number; lastModified: Date }>, AdapterError>> {
 			const results = [...stored.entries()]
 				.filter(([k]) => k.startsWith(prefix))
 				.map(([key, data]) => ({
@@ -79,15 +53,11 @@ function createMockAdapter(): LakeAdapter & {
 				}));
 			return Ok(results);
 		},
-		async deleteObject(
-			path: string,
-		): Promise<Result<void, AdapterError>> {
+		async deleteObject(path: string): Promise<Result<void, AdapterError>> {
 			stored.delete(path);
 			return Ok(undefined);
 		},
-		async deleteObjects(
-			paths: string[],
-		): Promise<Result<void, AdapterError>> {
+		async deleteObjects(paths: string[]): Promise<Result<void, AdapterError>> {
 			for (const p of paths) stored.delete(p);
 			return Ok(undefined);
 		},
@@ -98,21 +68,16 @@ function createMockAdapter(): LakeAdapter & {
 function createFailingAdapter(): LakeAdapter {
 	return {
 		async putObject(): Promise<Result<void, AdapterError>> {
-			return Err(new AdapterError('Simulated write failure'));
+			return Err(new AdapterError("Simulated write failure"));
 		},
 		async getObject(): Promise<Result<Uint8Array, AdapterError>> {
-			return Err(new AdapterError('Not implemented'));
+			return Err(new AdapterError("Not implemented"));
 		},
-		async headObject(): Promise<
-			Result<{ size: number; lastModified: Date }, AdapterError>
-		> {
-			return Err(new AdapterError('Not implemented'));
+		async headObject(): Promise<Result<{ size: number; lastModified: Date }, AdapterError>> {
+			return Err(new AdapterError("Not implemented"));
 		},
 		async listObjects(): Promise<
-			Result<
-				Array<{ key: string; size: number; lastModified: Date }>,
-				AdapterError
-			>
+			Result<Array<{ key: string; size: number; lastModified: Date }>, AdapterError>
 		> {
 			return Ok([]);
 		},
@@ -126,22 +91,22 @@ function createFailingAdapter(): LakeAdapter {
 }
 
 const defaultConfig: GatewayConfig = {
-	gatewayId: 'gw-test-1',
+	gatewayId: "gw-test-1",
 	maxBufferBytes: 1_048_576, // 1 MiB
 	maxBufferAgeMs: 30_000, // 30 seconds
 };
 
-describe('SyncGateway', () => {
+describe("SyncGateway", () => {
 	const hlcLow = HLC.encode(1_000_000, 0);
 	const hlcMid = HLC.encode(2_000_000, 0);
 	const hlcHigh = HLC.encode(3_000_000, 0);
 
-	it('push single delta stores it in buffer log and index', () => {
+	it("push single delta stores it in buffer log and index", () => {
 		const gw = new SyncGateway(defaultConfig);
 		const delta = makeDelta({ hlc: hlcLow });
 
 		const result = gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [delta],
 			lastSeenHlc: hlcLow,
 		});
@@ -155,12 +120,12 @@ describe('SyncGateway', () => {
 		expect(gw.bufferStats.indexSize).toBe(1);
 	});
 
-	it('push + pull returns the delta from the log', () => {
+	it("push + pull returns the delta from the log", () => {
 		const gw = new SyncGateway(defaultConfig);
 		const delta = makeDelta({ hlc: hlcLow });
 
 		gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [delta],
 			lastSeenHlc: hlcLow,
 		});
@@ -168,7 +133,7 @@ describe('SyncGateway', () => {
 		// Pull since HLC 0 (before all deltas)
 		const zeroHlc = HLC.encode(0, 0);
 		const pullResult = gw.handlePull({
-			clientId: 'client-b',
+			clientId: "client-b",
 			sinceHlc: zeroHlc,
 			maxDeltas: 100,
 		});
@@ -176,39 +141,39 @@ describe('SyncGateway', () => {
 		expect(pullResult.ok).toBe(true);
 		if (pullResult.ok) {
 			expect(pullResult.value.deltas).toHaveLength(1);
-			expect(pullResult.value.deltas[0]!.deltaId).toBe(delta.deltaId);
+			expect(pullResult.value.deltas[0]?.deltaId).toBe(delta.deltaId);
 			expect(pullResult.value.hasMore).toBe(false);
 		}
 	});
 
-	it('pull sinceHlc filters correctly', () => {
+	it("pull sinceHlc filters correctly", () => {
 		const gw = new SyncGateway(defaultConfig);
 
 		const d1 = makeDelta({
 			hlc: hlcLow,
-			rowId: 'row-1',
-			deltaId: 'delta-1',
+			rowId: "row-1",
+			deltaId: "delta-1",
 		});
 		const d2 = makeDelta({
 			hlc: hlcMid,
-			rowId: 'row-2',
-			deltaId: 'delta-2',
+			rowId: "row-2",
+			deltaId: "delta-2",
 		});
 		const d3 = makeDelta({
 			hlc: hlcHigh,
-			rowId: 'row-3',
-			deltaId: 'delta-3',
+			rowId: "row-3",
+			deltaId: "delta-3",
 		});
 
 		gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [d1, d2, d3],
 			lastSeenHlc: hlcLow,
 		});
 
 		// Pull since hlcMid should only return d3
 		const pullResult = gw.handlePull({
-			clientId: 'client-b',
+			clientId: "client-b",
 			sinceHlc: hlcMid,
 			maxDeltas: 100,
 		});
@@ -216,11 +181,11 @@ describe('SyncGateway', () => {
 		expect(pullResult.ok).toBe(true);
 		if (pullResult.ok) {
 			expect(pullResult.value.deltas).toHaveLength(1);
-			expect(pullResult.value.deltas[0]!.deltaId).toBe('delta-3');
+			expect(pullResult.value.deltas[0]?.deltaId).toBe("delta-3");
 		}
 	});
 
-	it('pull pagination returns hasMore when limit exceeded', () => {
+	it("pull pagination returns hasMore when limit exceeded", () => {
 		const gw = new SyncGateway(defaultConfig);
 
 		const deltas: RowDelta[] = [];
@@ -235,14 +200,14 @@ describe('SyncGateway', () => {
 		}
 
 		gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas,
 			lastSeenHlc: hlcLow,
 		});
 
 		const zeroHlc = HLC.encode(0, 0);
 		const pullResult = gw.handlePull({
-			clientId: 'client-b',
+			clientId: "client-b",
 			sinceHlc: zeroHlc,
 			maxDeltas: 3,
 		});
@@ -254,7 +219,7 @@ describe('SyncGateway', () => {
 		}
 	});
 
-	it('push with future drift returns Err(ClockDriftError)', () => {
+	it("push with future drift returns Err(ClockDriftError)", () => {
 		const gw = new SyncGateway(defaultConfig);
 
 		// Create a delta with HLC 10 seconds in the future
@@ -263,45 +228,45 @@ describe('SyncGateway', () => {
 		const delta = makeDelta({ hlc: futureHlc });
 
 		const result = gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [delta],
 			lastSeenHlc: futureHlc,
 		});
 
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error.code).toBe('CLOCK_DRIFT');
+			expect(result.error.code).toBe("CLOCK_DRIFT");
 		}
 	});
 
-	it('concurrent updates to same row: index reflects LWW-resolved state', () => {
+	it("concurrent updates to same row: index reflects LWW-resolved state", () => {
 		const gw = new SyncGateway(defaultConfig);
 
 		const d1 = makeDelta({
 			hlc: hlcLow,
-			rowId: 'row-1',
-			clientId: 'client-a',
-			deltaId: 'delta-old',
-			columns: [{ column: 'title', value: 'Old Title' }],
+			rowId: "row-1",
+			clientId: "client-a",
+			deltaId: "delta-old",
+			columns: [{ column: "title", value: "Old Title" }],
 		});
 		const d2 = makeDelta({
 			hlc: hlcHigh,
-			rowId: 'row-1',
-			clientId: 'client-b',
-			deltaId: 'delta-new',
-			columns: [{ column: 'title', value: 'New Title' }],
+			rowId: "row-1",
+			clientId: "client-b",
+			deltaId: "delta-new",
+			columns: [{ column: "title", value: "New Title" }],
 		});
 
 		// Push the first delta
 		gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [d1],
 			lastSeenHlc: hlcLow,
 		});
 
 		// Push the second (conflicting) delta
 		gw.handlePush({
-			clientId: 'client-b',
+			clientId: "client-b",
 			deltas: [d2],
 			lastSeenHlc: hlcHigh,
 		});
@@ -310,31 +275,31 @@ describe('SyncGateway', () => {
 		expect(gw.bufferStats.indexSize).toBe(1);
 	});
 
-	it('concurrent updates to same row: log contains both events', () => {
+	it("concurrent updates to same row: log contains both events", () => {
 		const gw = new SyncGateway(defaultConfig);
 
 		const d1 = makeDelta({
 			hlc: hlcLow,
-			rowId: 'row-1',
-			clientId: 'client-a',
-			deltaId: 'delta-first',
-			columns: [{ column: 'title', value: 'First' }],
+			rowId: "row-1",
+			clientId: "client-a",
+			deltaId: "delta-first",
+			columns: [{ column: "title", value: "First" }],
 		});
 		const d2 = makeDelta({
 			hlc: hlcHigh,
-			rowId: 'row-1',
-			clientId: 'client-b',
-			deltaId: 'delta-second',
-			columns: [{ column: 'title', value: 'Second' }],
+			rowId: "row-1",
+			clientId: "client-b",
+			deltaId: "delta-second",
+			columns: [{ column: "title", value: "Second" }],
 		});
 
 		gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [d1],
 			lastSeenHlc: hlcLow,
 		});
 		gw.handlePush({
-			clientId: 'client-b',
+			clientId: "client-b",
 			deltas: [d2],
 			lastSeenHlc: hlcHigh,
 		});
@@ -343,7 +308,7 @@ describe('SyncGateway', () => {
 		expect(gw.bufferStats.logSize).toBe(2);
 	});
 
-	it('shouldFlush triggers at byte threshold', () => {
+	it("shouldFlush triggers at byte threshold", () => {
 		const config: GatewayConfig = {
 			...defaultConfig,
 			maxBufferBytes: 50, // Very low threshold
@@ -355,14 +320,14 @@ describe('SyncGateway', () => {
 			hlc: hlcLow,
 			columns: [
 				{
-					column: 'description',
-					value: 'A reasonably long value that exceeds the threshold',
+					column: "description",
+					value: "A reasonably long value that exceeds the threshold",
 				},
 			],
 		});
 
 		gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [delta],
 			lastSeenHlc: hlcLow,
 		});
@@ -370,7 +335,7 @@ describe('SyncGateway', () => {
 		expect(gw.shouldFlush()).toBe(true);
 	});
 
-	it('shouldFlush triggers at age threshold', () => {
+	it("shouldFlush triggers at age threshold", () => {
 		const config: GatewayConfig = {
 			...defaultConfig,
 			maxBufferBytes: 999_999,
@@ -381,7 +346,7 @@ describe('SyncGateway', () => {
 		const delta = makeDelta({ hlc: hlcLow });
 
 		gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [delta],
 			lastSeenHlc: hlcLow,
 		});
@@ -389,22 +354,22 @@ describe('SyncGateway', () => {
 		expect(gw.shouldFlush()).toBe(true);
 	});
 
-	it('buffer drain returns log entries and clears both structures', () => {
+	it("buffer drain returns log entries and clears both structures", () => {
 		const gw = new SyncGateway(defaultConfig);
 
 		const d1 = makeDelta({
 			hlc: hlcLow,
-			rowId: 'row-1',
-			deltaId: 'delta-1',
+			rowId: "row-1",
+			deltaId: "delta-1",
 		});
 		const d2 = makeDelta({
 			hlc: hlcMid,
-			rowId: 'row-2',
-			deltaId: 'delta-2',
+			rowId: "row-2",
+			deltaId: "delta-2",
 		});
 
 		gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [d1, d2],
 			lastSeenHlc: hlcLow,
 		});
@@ -417,7 +382,7 @@ describe('SyncGateway', () => {
 		// Instead, let's verify via push/pull cycle
 		const zeroHlc = HLC.encode(0, 0);
 		const pullBefore = gw.handlePull({
-			clientId: 'client-b',
+			clientId: "client-b",
 			sinceHlc: zeroHlc,
 			maxDeltas: 100,
 		});
@@ -427,14 +392,14 @@ describe('SyncGateway', () => {
 		}
 	});
 
-	it('flush writes FlushEnvelope to mock adapter with correct key pattern', async () => {
+	it("flush writes FlushEnvelope to mock adapter with correct key pattern", async () => {
 		const adapter = createMockAdapter();
 		const gw = new SyncGateway(defaultConfig, adapter);
 
-		const delta = makeDelta({ hlc: hlcLow, deltaId: 'delta-flush' });
+		const delta = makeDelta({ hlc: hlcLow, deltaId: "delta-flush" });
 
 		gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [delta],
 			lastSeenHlc: hlcLow,
 		});
@@ -448,9 +413,7 @@ describe('SyncGateway', () => {
 
 		// Verify the key pattern: deltas/YYYY-MM-DD/gatewayId/...
 		const key = [...adapter.stored.keys()][0]!;
-		expect(key).toMatch(
-			/^deltas\/\d{4}-\d{2}-\d{2}\/gw-test-1\/.+\.json$/,
-		);
+		expect(key).toMatch(/^deltas\/\d{4}-\d{2}-\d{2}\/gw-test-1\/.+\.json$/);
 
 		// Verify the envelope content
 		const raw = adapter.stored.get(key)!;
@@ -461,7 +424,7 @@ describe('SyncGateway', () => {
 			deltas: RowDelta[];
 		};
 		expect(envelope.version).toBe(1);
-		expect(envelope.gatewayId).toBe('gw-test-1');
+		expect(envelope.gatewayId).toBe("gw-test-1");
 		expect(envelope.deltaCount).toBe(1);
 		expect(envelope.deltas).toHaveLength(1);
 
@@ -469,14 +432,14 @@ describe('SyncGateway', () => {
 		expect(gw.bufferStats.logSize).toBe(0);
 	});
 
-	it('flush failure retains buffer entries', async () => {
+	it("flush failure retains buffer entries", async () => {
 		const adapter = createFailingAdapter();
 		const gw = new SyncGateway(defaultConfig, adapter);
 
 		const delta = makeDelta({ hlc: hlcLow });
 
 		gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [delta],
 			lastSeenHlc: hlcLow,
 		});
@@ -487,26 +450,26 @@ describe('SyncGateway', () => {
 
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error.code).toBe('FLUSH_FAILED');
+			expect(result.error.code).toBe("FLUSH_FAILED");
 		}
 
 		// Buffer should still have the entries after failed flush
 		expect(gw.bufferStats.logSize).toBe(1);
 	});
 
-	it('gateway HLC advances on each push', () => {
+	it("gateway HLC advances on each push", () => {
 		const gw = new SyncGateway(defaultConfig);
 
-		const d1 = makeDelta({ hlc: hlcLow, deltaId: 'delta-1' });
+		const d1 = makeDelta({ hlc: hlcLow, deltaId: "delta-1" });
 		const result1 = gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [d1],
 			lastSeenHlc: hlcLow,
 		});
 
-		const d2 = makeDelta({ hlc: hlcMid, deltaId: 'delta-2' });
+		const d2 = makeDelta({ hlc: hlcMid, deltaId: "delta-2" });
 		const result2 = gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [d2],
 			lastSeenHlc: hlcMid,
 		});
@@ -514,20 +477,18 @@ describe('SyncGateway', () => {
 		expect(result1.ok).toBe(true);
 		expect(result2.ok).toBe(true);
 		if (result1.ok && result2.ok) {
-			expect(
-				HLC.compare(result2.value.serverHlc, result1.value.serverHlc),
-			).toBe(1);
+			expect(HLC.compare(result2.value.serverHlc, result1.value.serverHlc)).toBe(1);
 		}
 	});
 
-	it('re-push same deltaId is idempotent', () => {
+	it("re-push same deltaId is idempotent", () => {
 		const gw = new SyncGateway(defaultConfig);
 
-		const delta = makeDelta({ hlc: hlcLow, deltaId: 'idempotent-id' });
+		const delta = makeDelta({ hlc: hlcLow, deltaId: "idempotent-id" });
 
 		// First push
 		const result1 = gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [delta],
 			lastSeenHlc: hlcLow,
 		});
@@ -540,7 +501,7 @@ describe('SyncGateway', () => {
 
 		// Second push with same deltaId
 		const result2 = gw.handlePush({
-			clientId: 'client-a',
+			clientId: "client-a",
 			deltas: [delta],
 			lastSeenHlc: hlcLow,
 		});

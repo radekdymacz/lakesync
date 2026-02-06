@@ -1,7 +1,7 @@
-import type { RowDelta } from '@lakesync/core';
-import { Ok } from '@lakesync/core';
-import type { Result, LakeSyncError } from '@lakesync/core';
-import type { SyncQueue, QueueEntry } from './types';
+import type { RowDelta } from "@lakesync/core";
+import { Ok } from "@lakesync/core";
+import type { LakeSyncError, Result } from "@lakesync/core";
+import type { QueueEntry, SyncQueue } from "./types";
 
 /**
  * In-memory sync queue implementation.
@@ -16,7 +16,7 @@ export class MemoryQueue implements SyncQueue {
 		const entry: QueueEntry = {
 			id: `mem-${++this.counter}`,
 			delta,
-			status: 'pending',
+			status: "pending",
 			createdAt: Date.now(),
 			retryCount: 0,
 		};
@@ -27,7 +27,7 @@ export class MemoryQueue implements SyncQueue {
 	/** Peek at pending entries (ordered by createdAt) */
 	async peek(limit: number): Promise<Result<QueueEntry[], LakeSyncError>> {
 		const pending = [...this.entries.values()]
-			.filter((e) => e.status === 'pending')
+			.filter((e) => e.status === "pending")
 			.sort((a, b) => a.createdAt - b.createdAt)
 			.slice(0, limit);
 		return Ok(pending);
@@ -37,8 +37,8 @@ export class MemoryQueue implements SyncQueue {
 	async markSending(ids: string[]): Promise<Result<void, LakeSyncError>> {
 		for (const id of ids) {
 			const entry = this.entries.get(id);
-			if (entry && entry.status === 'pending') {
-				entry.status = 'sending';
+			if (entry && entry.status === "pending") {
+				entry.status = "sending";
 			}
 		}
 		return Ok(undefined);
@@ -57,7 +57,7 @@ export class MemoryQueue implements SyncQueue {
 		for (const id of ids) {
 			const entry = this.entries.get(id);
 			if (entry) {
-				entry.status = 'pending';
+				entry.status = "pending";
 				entry.retryCount++;
 			}
 		}
@@ -66,7 +66,7 @@ export class MemoryQueue implements SyncQueue {
 
 	/** Get the number of pending + sending entries */
 	async depth(): Promise<Result<number, LakeSyncError>> {
-		const count = [...this.entries.values()].filter((e) => e.status !== 'acked').length;
+		const count = [...this.entries.values()].filter((e) => e.status !== "acked").length;
 		return Ok(count);
 	}
 
