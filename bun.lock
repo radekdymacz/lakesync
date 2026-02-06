@@ -76,6 +76,10 @@
     "packages/gateway": {
       "name": "@lakesync/gateway",
       "version": "0.0.1",
+      "dependencies": {
+        "@lakesync/adapter": "workspace:*",
+        "@lakesync/core": "workspace:*",
+      },
       "devDependencies": {
         "typescript": "^5.7.0",
         "vitest": "^3.0.0",
