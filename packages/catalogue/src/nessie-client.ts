@@ -10,6 +10,12 @@ import {
 	type TableMetadata,
 } from "./types";
 
+/** Response shape returned by the Iceberg REST `/v1/config` endpoint. */
+interface CatalogueConfigResponse {
+	defaults?: Record<string, string>;
+	overrides?: Record<string, string>;
+}
+
 /**
  * Encode a namespace array into a URL path segment.
  * For multi-level namespaces, parts are joined with the ASCII unit separator (%1F).
@@ -23,14 +29,75 @@ function encodeNamespace(namespace: string[]): string {
  *
  * Wraps standard Iceberg REST endpoints exposed by the Nessie server,
  * returning `Result<T, CatalogueError>` from every public method.
+ *
+ * On first use, the client fetches `/v1/config` from the server to discover
+ * the catalogue prefix (typically the Nessie branch name, e.g. `"main"`).
+ * All subsequent requests include this prefix in the URL path as required
+ * by the Iceberg REST specification: `/v1/{prefix}/namespaces/...`.
  */
 export class NessieCatalogueClient {
 	private readonly baseUri: string;
 	private readonly warehouseUri: string;
+	private prefixPromise: Promise<string> | null = null;
 
 	constructor(config: CatalogueConfig) {
 		this.baseUri = config.nessieUri.replace(/\/$/, "");
 		this.warehouseUri = config.warehouseUri;
+	}
+
+	/**
+	 * Resolve the catalogue prefix by calling the `/v1/config` endpoint.
+	 *
+	 * The Iceberg REST specification requires a prefix segment in all
+	 * API paths (e.g. `/v1/{prefix}/namespaces`). Nessie returns this
+	 * value in the `defaults.prefix` field of the config response.
+	 *
+	 * The result is cached so the config endpoint is only called once
+	 * per client instance.
+	 *
+	 * @returns The resolved prefix string (e.g. `"main"`)
+	 */
+	private resolvePrefix(): Promise<string> {
+		if (this.prefixPromise) {
+			return this.prefixPromise;
+		}
+
+		this.prefixPromise = (async () => {
+			try {
+				const url = `${this.baseUri}/v1/config`;
+				const response = await fetch(url, {
+					method: "GET",
+					headers: { Accept: "application/json" },
+				});
+
+				if (!response.ok) {
+					// Fall back to empty prefix if config endpoint is unavailable
+					return "";
+				}
+
+				const data = (await response.json()) as CatalogueConfigResponse;
+				return data.defaults?.prefix ?? "";
+			} catch {
+				// Fall back to empty prefix on network errors
+				return "";
+			}
+		})();
+
+		return this.prefixPromise;
+	}
+
+	/**
+	 * Build the base API path including the resolved prefix.
+	 *
+	 * @returns URL prefix such as `http://host/iceberg/v1/main` or
+	 *          `http://host/iceberg/v1` when no prefix is configured
+	 */
+	private async apiBase(): Promise<string> {
+		const prefix = await this.resolvePrefix();
+		if (prefix) {
+			return `${this.baseUri}/v1/${encodeURIComponent(prefix)}`;
+		}
+		return `${this.baseUri}/v1`;
 	}
 
 	/**
@@ -40,7 +107,8 @@ export class NessieCatalogueClient {
 	 * @returns `Ok(void)` on success or if namespace already exists
 	 */
 	async createNamespace(namespace: string[]): Promise<Result<void, CatalogueError>> {
-		const url = `${this.baseUri}/v1/namespaces`;
+		const base = await this.apiBase();
+		const url = `${base}/namespaces`;
 		const body = {
 			namespace,
 			properties: {},
@@ -86,7 +154,8 @@ export class NessieCatalogueClient {
 	 * @returns Array of namespace arrays, e.g. `[["lakesync"], ["other"]]`
 	 */
 	async listNamespaces(): Promise<Result<string[][], CatalogueError>> {
-		const url = `${this.baseUri}/v1/namespaces`;
+		const base = await this.apiBase();
+		const url = `${base}/namespaces`;
 
 		try {
 			const response = await fetch(url, {
@@ -132,7 +201,8 @@ export class NessieCatalogueClient {
 		partitionSpec: PartitionSpec,
 	): Promise<Result<void, CatalogueError>> {
 		const ns = encodeNamespace(namespace);
-		const url = `${this.baseUri}/v1/namespaces/${ns}/tables`;
+		const base = await this.apiBase();
+		const url = `${base}/namespaces/${ns}/tables`;
 		const location = `${this.warehouseUri}/${namespace.join("/")}/${name}`;
 		const body = {
 			name,
@@ -183,7 +253,8 @@ export class NessieCatalogueClient {
 		name: string,
 	): Promise<Result<TableMetadata, CatalogueError>> {
 		const ns = encodeNamespace(namespace);
-		const url = `${this.baseUri}/v1/namespaces/${ns}/tables/${encodeURIComponent(name)}`;
+		const base = await this.apiBase();
+		const url = `${base}/namespaces/${ns}/tables/${encodeURIComponent(name)}`;
 
 		try {
 			const response = await fetch(url, {
@@ -240,7 +311,8 @@ export class NessieCatalogueClient {
 		const currentSchemaId = metadata.metadata["current-schema-id"];
 
 		const ns = encodeNamespace(namespace);
-		const url = `${this.baseUri}/v1/namespaces/${ns}/tables/${encodeURIComponent(table)}`;
+		const base = await this.apiBase();
+		const url = `${base}/namespaces/${ns}/tables/${encodeURIComponent(table)}`;
 
 		const commitBody = {
 			requirements: [

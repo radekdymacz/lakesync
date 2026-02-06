@@ -22,6 +22,14 @@ const TEST_PARTITION_SPEC: PartitionSpec = {
 	fields: [],
 };
 
+/** Create a fresh mock `/v1/config` response (Response can only be consumed once). */
+function mockConfigResponse(): Response {
+	return new Response(JSON.stringify({ defaults: {}, overrides: {} }), {
+		status: 200,
+		headers: { "Content-Type": "application/json" },
+	});
+}
+
 const TABLE_METADATA_RESPONSE: TableMetadata = {
 	"metadata-location": "s3://lakesync-test/lakesync/test-table/metadata/v1.metadata.json",
 	metadata: {
@@ -67,6 +75,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	// -----------------------------------------------------------------------
 
 	it("createNamespace sends correct POST request", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify({ namespace: ["lakesync"], properties: {} }), {
 				status: 200,
@@ -77,9 +86,13 @@ describe("NessieCatalogueClient (unit)", () => {
 		const result = await client.createNamespace(["lakesync"]);
 
 		expect(result.ok).toBe(true);
-		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
 
-		const [url, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		// First call is /v1/config, second is the actual request
+		const [configUrl] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		expect(configUrl).toBe("http://localhost:19120/iceberg/v1/config");
+
+		const [url, options] = fetchSpy.mock.calls[1] as [string, RequestInit];
 		expect(url).toBe("http://localhost:19120/iceberg/v1/namespaces");
 		expect(options.method).toBe("POST");
 		expect(options.headers).toEqual({ "Content-Type": "application/json" });
@@ -90,6 +103,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	});
 
 	it("createNamespace handles 409 conflict gracefully (idempotent)", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response("Namespace already exists", {
 				status: 409,
@@ -103,6 +117,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	});
 
 	it("createNamespace returns CatalogueError on server error", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response("Internal Server Error", {
 				status: 500,
@@ -124,6 +139,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	// -----------------------------------------------------------------------
 
 	it("listNamespaces parses response correctly", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify({ namespaces: [["lakesync"], ["other", "nested"]] }), {
 				status: 200,
@@ -138,12 +154,14 @@ describe("NessieCatalogueClient (unit)", () => {
 			expect(result.value).toEqual([["lakesync"], ["other", "nested"]]);
 		}
 
-		const [url, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		// calls[0] is /v1/config, calls[1] is the actual request
+		const [url, options] = fetchSpy.mock.calls[1] as [string, RequestInit];
 		expect(url).toBe("http://localhost:19120/iceberg/v1/namespaces");
 		expect(options.method).toBe("GET");
 	});
 
 	it("listNamespaces returns CatalogueError on failure", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response("Forbidden", { status: 403, statusText: "Forbidden" }),
 		);
@@ -162,6 +180,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	// -----------------------------------------------------------------------
 
 	it("createTable sends correct POST with schema and partition spec", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify(TABLE_METADATA_RESPONSE), {
 				status: 200,
@@ -178,7 +197,8 @@ describe("NessieCatalogueClient (unit)", () => {
 
 		expect(result.ok).toBe(true);
 
-		const [url, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		// calls[0] is /v1/config, calls[1] is the actual request
+		const [url, options] = fetchSpy.mock.calls[1] as [string, RequestInit];
 		expect(url).toBe("http://localhost:19120/iceberg/v1/namespaces/lakesync/tables");
 		expect(options.method).toBe("POST");
 		const body = JSON.parse(options.body as string);
@@ -193,6 +213,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	// -----------------------------------------------------------------------
 
 	it("loadTable returns table metadata on success", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify(TABLE_METADATA_RESPONSE), {
 				status: 200,
@@ -208,11 +229,13 @@ describe("NessieCatalogueClient (unit)", () => {
 			expect(result.value.metadata["format-version"]).toBe(2);
 		}
 
-		const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		// calls[0] is /v1/config, calls[1] is the actual request
+		const [url] = fetchSpy.mock.calls[1] as [string, RequestInit];
 		expect(url).toBe("http://localhost:19120/iceberg/v1/namespaces/lakesync/tables/test-table");
 	});
 
 	it("loadTable returns CatalogueError on 404", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response("Table not found", {
 				status: 404,
@@ -235,14 +258,16 @@ describe("NessieCatalogueClient (unit)", () => {
 	// -----------------------------------------------------------------------
 
 	it("appendFiles loads metadata then commits files", async () => {
-		// First call: loadTable to get current metadata
+		// First call: /v1/config
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
+		// Second call: loadTable to get current metadata
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify(TABLE_METADATA_RESPONSE), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			}),
 		);
-		// Second call: commit the append
+		// Third call: commit the append
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify({}), {
 				status: 200,
@@ -263,10 +288,10 @@ describe("NessieCatalogueClient (unit)", () => {
 		const result = await client.appendFiles(["lakesync"], "events", files);
 
 		expect(result.ok).toBe(true);
-		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		expect(fetchSpy).toHaveBeenCalledTimes(3);
 
-		// Verify the commit request
-		const [commitUrl, commitOptions] = fetchSpy.mock.calls[1] as [string, RequestInit];
+		// calls[0] is /v1/config, calls[1] is loadTable, calls[2] is the commit
+		const [commitUrl, commitOptions] = fetchSpy.mock.calls[2] as [string, RequestInit];
 		expect(commitUrl).toBe("http://localhost:19120/iceberg/v1/namespaces/lakesync/tables/events");
 		expect(commitOptions.method).toBe("POST");
 
@@ -279,6 +304,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	});
 
 	it("appendFiles propagates loadTable error", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response("Table not found", {
 				status: 404,
@@ -300,6 +326,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	// -----------------------------------------------------------------------
 
 	it("currentSnapshot returns the current snapshot", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify(TABLE_METADATA_RESPONSE), {
 				status: 200,
@@ -329,6 +356,7 @@ describe("NessieCatalogueClient (unit)", () => {
 			},
 		};
 
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify(noSnapshotMetadata), {
 				status: 200,
@@ -349,6 +377,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	// -----------------------------------------------------------------------
 
 	it("HTTP error produces CatalogueError with correct status code", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response("Bad Gateway", {
 				status: 502,
@@ -368,6 +397,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	});
 
 	it("network error produces CatalogueError with status code 0", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockRejectedValueOnce(new TypeError("fetch failed"));
 
 		const result = await client.createNamespace(["lakesync"]);
@@ -382,6 +412,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	});
 
 	it("network error on listNamespaces produces CatalogueError", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockRejectedValueOnce(new Error("DNS resolution failed"));
 
 		const result = await client.listNamespaces();
@@ -399,6 +430,7 @@ describe("NessieCatalogueClient (unit)", () => {
 	// -----------------------------------------------------------------------
 
 	it("encodes multi-level namespaces correctly in URL", async () => {
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify(TABLE_METADATA_RESPONSE), {
 				status: 200,
@@ -408,7 +440,8 @@ describe("NessieCatalogueClient (unit)", () => {
 
 		await client.loadTable(["org", "team"], "events");
 
-		const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		// calls[0] is /v1/config, calls[1] is the actual request
+		const [url] = fetchSpy.mock.calls[1] as [string, RequestInit];
 		expect(url).toBe("http://localhost:19120/iceberg/v1/namespaces/org%1Fteam/tables/events");
 	});
 
@@ -422,6 +455,7 @@ describe("NessieCatalogueClient (unit)", () => {
 			warehouseUri: "s3://lakesync-test",
 		});
 
+		fetchSpy.mockResolvedValueOnce(mockConfigResponse());
 		fetchSpy.mockResolvedValueOnce(
 			new Response(JSON.stringify({ namespaces: [] }), {
 				status: 200,
@@ -431,7 +465,85 @@ describe("NessieCatalogueClient (unit)", () => {
 
 		await clientWithSlash.listNamespaces();
 
-		const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		// calls[0] is /v1/config, calls[1] is the actual request
+		const [url] = fetchSpy.mock.calls[1] as [string, RequestInit];
+		expect(url).toBe("http://localhost:19120/iceberg/v1/namespaces");
+	});
+
+	// -----------------------------------------------------------------------
+	// Prefix resolution from /v1/config
+	// -----------------------------------------------------------------------
+
+	it("includes prefix from /v1/config in API URLs", async () => {
+		// Config returns prefix "main"
+		fetchSpy.mockResolvedValueOnce(
+			new Response(JSON.stringify({ defaults: { prefix: "main" }, overrides: {} }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		fetchSpy.mockResolvedValueOnce(
+			new Response(JSON.stringify({ namespaces: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+
+		const result = await client.listNamespaces();
+		expect(result.ok).toBe(true);
+
+		// The actual request should include the prefix in the path
+		const [url] = fetchSpy.mock.calls[1] as [string, RequestInit];
+		expect(url).toBe("http://localhost:19120/iceberg/v1/main/namespaces");
+	});
+
+	it("caches prefix across multiple calls", async () => {
+		// Config returns prefix "main" (only called once)
+		fetchSpy.mockResolvedValueOnce(
+			new Response(JSON.stringify({ defaults: { prefix: "main" }, overrides: {} }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		// First API call
+		fetchSpy.mockResolvedValueOnce(
+			new Response(JSON.stringify({ namespaces: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		// Second API call (no config fetch needed)
+		fetchSpy.mockResolvedValueOnce(
+			new Response(JSON.stringify({ namespaces: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+
+		await client.listNamespaces();
+		await client.listNamespaces();
+
+		// Config endpoint called once, API endpoint called twice
+		expect(fetchSpy).toHaveBeenCalledTimes(3);
+		const [configUrl] = fetchSpy.mock.calls[0] as [string, RequestInit];
+		expect(configUrl).toBe("http://localhost:19120/iceberg/v1/config");
+	});
+
+	it("falls back to no prefix when config endpoint fails", async () => {
+		// Config returns 500
+		fetchSpy.mockResolvedValueOnce(new Response("Internal Server Error", { status: 500 }));
+		fetchSpy.mockResolvedValueOnce(
+			new Response(JSON.stringify({ namespaces: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+
+		const result = await client.listNamespaces();
+		expect(result.ok).toBe(true);
+
+		// Falls back to URL without prefix
+		const [url] = fetchSpy.mock.calls[1] as [string, RequestInit];
 		expect(url).toBe("http://localhost:19120/iceberg/v1/namespaces");
 	});
 
