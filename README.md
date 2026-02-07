@@ -241,7 +241,11 @@ Once data is flushed, it is standard Parquet + Iceberg — queryable by any engi
 ### Install
 
 ```bash
+# Individual packages (recommended for production — minimise bundle size)
 npm install @lakesync/client @lakesync/core
+
+# Or install everything via the unified package
+npm install lakesync
 ```
 
 ### Sync in 10 Lines
@@ -292,7 +296,7 @@ See the [Todo App](apps/examples/todo-app/) for a complete working example, or t
 | Package | Description |
 |---------|-------------|
 | [`@lakesync/core`](packages/core) | HLC timestamps, delta types, LWW conflict resolution, Result type |
-| [`@lakesync/client`](packages/client) | Client SDK: SyncCoordinator, SyncTracker, HTTP + local transports, IDB queue & persistence |
+| [`@lakesync/client`](packages/client) | Client SDK: SyncCoordinator, SyncTracker, LocalDB, HTTP + local transports, IDB queue & persistence |
 | [`@lakesync/gateway`](packages/gateway) | Sync gateway with delta buffer, conflict resolution, Parquet/JSON flush |
 | [`@lakesync/adapter`](packages/adapter) | Storage adapter interface + MinIO/S3 implementation |
 | [`@lakesync/proto`](packages/proto) | Protobuf codec for the wire protocol |
@@ -300,6 +304,7 @@ See the [Todo App](apps/examples/todo-app/) for a complete working example, or t
 | [`@lakesync/catalogue`](packages/catalogue) | Iceberg REST catalogue client (Nessie-compatible) |
 | [`@lakesync/compactor`](packages/compactor) | Parquet compaction + equality delete files |
 | [`@lakesync/analyst`](packages/analyst) | Time-travel queries + analytics via DuckDB-WASM |
+| [`lakesync`](packages/lakesync) | Unified package with subpath exports for all of the above |
 
 | App | Description |
 |-----|-------------|

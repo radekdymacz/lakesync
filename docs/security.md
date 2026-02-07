@@ -32,8 +32,8 @@ All sync routes (`/sync/:gatewayId/push`, `/sync/:gatewayId/pull`) require a val
 | Route | Auth | Purpose |
 |-------|------|---------|
 | `GET /health` | None | Health check / liveness probe |
-| `POST /admin/schema/:gatewayId` | JWT required | Register table schema |
-| `POST /admin/flush/:gatewayId` | JWT required | Trigger manual flush |
+| `POST /admin/schema/:gatewayId` | JWT | Register table schema |
+| `POST /admin/flush/:gatewayId` | JWT | Trigger manual flush |
 
 > **Note**: The admin routes currently share the same JWT auth as sync routes. In production, consider using a separate admin secret or role-based claim.
 

@@ -79,7 +79,7 @@ turbo test            # via TurboRepo
 
 ## Architecture
 
-See [plan.md](plan.md) for the full implementation plan and [adrs/](adrs/) for Architecture Decision Records explaining key design choices.
+See [plans/PLAN.md](plans/PLAN.md) for the full implementation plan and [adrs/](adrs/) for Architecture Decision Records explaining key design choices.
 
 ## Reporting Issues
 

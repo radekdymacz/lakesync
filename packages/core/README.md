@@ -45,6 +45,8 @@ import { HLC } from "@lakesync/core";
 const clock = new HLC();
 
 // Extract a delta between two row states
+const schema = { table: "users", columns: [{ name: "name", type: "string" }, { name: "age", type: "number" }] };
+
 const before = { name: "Alice", age: 30 };
 const after = { name: "Alice", age: 31 };
 
@@ -53,6 +55,7 @@ const delta = await extractDelta(before, after, {
   rowId: "u1",
   clientId: "client-1",
   hlc: clock.now(),
+  schema,
 });
 
 if (delta) {
@@ -70,6 +73,7 @@ const insertDelta = await extractDelta(null, { name: "Bob" }, {
   rowId: "u2",
   clientId: "client-1",
   hlc: clock.now(),
+  schema,
 });
 
 // DELETE: after is null
@@ -78,6 +82,7 @@ const deleteDelta = await extractDelta({ name: "Bob" }, null, {
   rowId: "u2",
   clientId: "client-1",
   hlc: clock.now(),
+  schema,
 });
 ```
 

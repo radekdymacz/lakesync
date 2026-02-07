@@ -35,6 +35,7 @@ import { tableSchemaToIceberg, buildPartitionSpec } from "@lakesync/catalogue";
 import type { TableSchema } from "@lakesync/core";
 
 const schema: TableSchema = {
+  table: "todos",
   columns: [
     { name: "title", type: "string" },
     { name: "done", type: "boolean" },

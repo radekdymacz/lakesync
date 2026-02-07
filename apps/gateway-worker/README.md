@@ -22,8 +22,8 @@ Cloudflare Workers deployment for the LakeSync sync gateway. Uses Durable Object
 |--------|------|------|-------------|
 | POST | `/sync/:gatewayId/push` | JWT | Push client deltas to gateway |
 | GET | `/sync/:gatewayId/pull` | JWT | Pull remote deltas since cursor |
-| POST | `/sync/:gatewayId/flush` | JWT | Trigger manual flush |
-| POST | `/admin/schema/:gatewayId` | None | Register table schema |
+| POST | `/admin/flush/:gatewayId` | JWT | Trigger manual flush |
+| POST | `/admin/schema/:gatewayId` | JWT | Register table schema |
 | GET | `/health` | None | Health check |
 
 ## Local Development

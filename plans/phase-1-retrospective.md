@@ -6,16 +6,20 @@ Phase 1 delivered the core synchronisation primitives: a complete column-level d
 
 ## Package Inventory
 
-| Package | Purpose | LOC (approx) | Key Exports |
-|---------|---------|--------------|-------------|
-| `@lakesync/core` | Delta types, HLC, Result, Conflict resolution | ~800 | `RowDelta`, `HLC`, `Ok`/`Err`, `LWWResolver`, `extractDelta`, `applyDelta` |
-| `@lakesync/client` | Client-side sync queue | ~400 | `SyncQueue`, `MemoryQueue`, `IDBQueue` |
-| `@lakesync/gateway` | Server-side buffer + flush | ~500 | `SyncGateway`, `DeltaBuffer`, `FlushEnvelope` |
-| `@lakesync/adapter` | S3-compatible object storage | ~300 | `LakeAdapter`, `MinIOAdapter` |
-| `@lakesync/proto` | Protobuf wire protocol | ~600 | `encode*`/`decode*` for RowDelta, SyncPush, SyncPull, SyncResponse |
-| `@lakesync/todo-app` | Example Vite app | ~250 | TodoDB (in-memory), SyncManager, UI |
-
-**Total:** ~2,850 lines of implementation + ~1,700 lines of tests across 5 packages.
+| Package | Purpose | Key Exports |
+|---------|---------|-------------|
+| `@lakesync/core` | Delta types, HLC, Result, Conflict resolution, Parquet schema mapping | `RowDelta`, `HLC`, `Ok`/`Err`, `LWWResolver`, `extractDelta`, `applyDelta`, `TableSchema` |
+| `@lakesync/client` | Client SDK: local DB, sync coordination, transports, queues | `LocalDB`, `SyncCoordinator`, `SyncTracker`, `HttpTransport`, `LocalTransport`, `MemoryQueue`, `IDBQueue`, `registerSchema` |
+| `@lakesync/gateway` | Server-side buffer + flush (JSON/Parquet) + schema management | `SyncGateway`, `DeltaBuffer`, `SchemaManager`, `FlushEnvelope` |
+| `@lakesync/adapter` | S3-compatible object storage | `LakeAdapter`, `MinIOAdapter` |
+| `@lakesync/proto` | Protobuf wire protocol | `encode*`/`decode*` for RowDelta, SyncPush, SyncPull, SyncResponse |
+| `@lakesync/parquet` | Parquet read/write via parquet-wasm | `writeDeltasToParquet`, `readParquetToDeltas` |
+| `@lakesync/catalogue` | Iceberg REST catalogue (Nessie) | `NessieCatalogueClient`, `tableSchemaToIceberg` |
+| `@lakesync/compactor` | Parquet compaction + equality deletes + maintenance | `Compactor`, `MaintenanceRunner`, `CompactionScheduler` |
+| `@lakesync/analyst` | DuckDB-WASM analytics + time-travel queries | `DuckDBClient`, `UnionReader`, `TimeTraveller` |
+| `lakesync` | Unified npm package with subpath exports | Re-exports all packages |
+| `todo-app` | Example Vite app | `LocalDB` + `SyncCoordinator` with local/remote transport |
+| `gateway-worker` | Cloudflare Workers deployment | `SyncGatewayDO`, `R2Adapter`, JWT auth |
 
 ## Architecture Decisions (ADRs)
 
@@ -45,13 +49,15 @@ Phase 1 delivered the core synchronisation primitives: a complete column-level d
 - Integration tests: multi-client sync, conflict resolution, end-to-end flush
 - CI: lint + typecheck + unit tests + integration tests (Docker MinIO + Nessie)
 
-## What Phase 2 Must Address
+## Post-Phase-1 Status
 
-1. **Flush format** — JSON envelopes are readable but inefficient; Parquet needed for Iceberg compatibility
-2. **No catalogue** — flushed files are orphaned blobs; need Iceberg table registration via Nessie
-3. **No local persistence** — client uses in-memory or IndexedDB queue only; need SQLite WASM for proper local state
-4. **No change tracking** — todo-app manually calls `extractDelta()`; need automatic change interception
-5. **No production runtime** — need Cloudflare Workers (Durable Objects) for serverless gateway
-6. **No compaction** — delta files accumulate without bound; need MOR compaction
-7. **No schema evolution** — column additions require manual coordination
-8. **No query layer** — no way to read historical or aggregated data from the lake
+All phases through 4A have been completed. The items originally listed as "Phase 2 must address" have all been implemented:
+
+1. **Flush format** — Parquet flush fully supported via `@lakesync/parquet` (Phase 2A)
+2. **Iceberg catalogue** — `NessieCatalogueClient` with snapshot commits (Phase 2B)
+3. **Local persistence** — `LocalDB` (sql.js + IndexedDB snapshots) with schema registry (Phase 2C)
+4. **Change tracking** — `SyncTracker` with automatic delta extraction on insert/update/delete (Phase 2C)
+5. **Production runtime** — Cloudflare Workers with Durable Objects, R2, JWT auth (Phase 2D)
+6. **Compaction** — `Compactor` + `MaintenanceRunner` + `CompactionScheduler` with equality deletes (Phase 3A)
+7. **Schema evolution** — `SchemaSynchroniser` for client-side + `SchemaManager` for server-side (Phase 3B)
+8. **Query layer** — `DuckDBClient` + `UnionReader` + `TimeTraveller` for analytics and time-travel (Phase 4A)

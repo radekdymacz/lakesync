@@ -19,7 +19,12 @@ import { writeDeltasToParquet } from "@lakesync/parquet";
 import type { RowDelta, TableSchema } from "@lakesync/core";
 
 const schema: TableSchema = {
-  columns: { name: "string", age: "number", active: "boolean" },
+  table: "users",
+  columns: [
+    { name: "name", type: "string" },
+    { name: "age", type: "number" },
+    { name: "active", type: "boolean" },
+  ],
 };
 
 const deltas: RowDelta[] = [

@@ -17,7 +17,7 @@ import { Compactor, DEFAULT_COMPACTION_CONFIG } from "@lakesync/compactor";
 import type { LakeAdapter } from "@lakesync/adapter";
 import type { TableSchema } from "@lakesync/core";
 
-const schema: TableSchema = { columns: [{ name: "title", type: "string" }] };
+const schema: TableSchema = { table: "todos", columns: [{ name: "title", type: "string" }] };
 const compactor = new Compactor(adapter, DEFAULT_COMPACTION_CONFIG, schema);
 
 const result = await compactor.compact(deltaFileKeys, "tables/todos/base");
