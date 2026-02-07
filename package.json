@@ -14,10 +14,12 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --fix .",
 		"test:integration": "vitest run --config vitest.integration.config.ts",
-		"publish:npm": "cd packages/lakesync && bun run build && bun publish --access public"
+		"publish:npm": "cd packages/lakesync && bun run build && bun publish --access public",
+		"prepare": "husky"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.14",
+		"husky": "^9.1.7",
 		"tsup": "^8.5.1",
 		"turbo": "^2.3.0",
 		"typescript": "^5.7.0",
