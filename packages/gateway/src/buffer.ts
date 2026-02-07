@@ -1,6 +1,5 @@
 import type { HLCTimestamp, RowDelta, RowKey } from "@lakesync/core";
 import { HLC, rowKey } from "@lakesync/core";
-import { bigintReplacer } from "./json";
 
 /**
  * Dual-structure delta buffer.
@@ -11,6 +10,7 @@ import { bigintReplacer } from "./json";
 export class DeltaBuffer {
 	private log: RowDelta[] = [];
 	private index: Map<RowKey, RowDelta> = new Map();
+	private deltaIds = new Set<string>();
 	private estimatedBytes = 0;
 	private createdAt: number = Date.now();
 
@@ -19,7 +19,8 @@ export class DeltaBuffer {
 		this.log.push(delta);
 		const key = rowKey(delta.table, delta.rowId);
 		this.index.set(key, delta);
-		this.estimatedBytes += JSON.stringify(delta, bigintReplacer).length;
+		this.deltaIds.add(delta.deltaId);
+		this.estimatedBytes += delta.columns.length * 50 + 200;
 	}
 
 	/** Get the current merged state for a row (for conflict resolution). */
@@ -29,14 +30,23 @@ export class DeltaBuffer {
 
 	/** Check if a delta with this ID already exists in the log (for idempotency). */
 	hasDelta(deltaId: string): boolean {
-		return this.log.some((d) => d.deltaId === deltaId);
+		return this.deltaIds.has(deltaId);
 	}
 
 	/** Return change events from the log since a given HLC. */
 	getEventsSince(hlc: HLCTimestamp, limit: number): { deltas: RowDelta[]; hasMore: boolean } {
-		const filtered = this.log.filter((d) => HLC.compare(d.hlc, hlc) > 0);
-		const hasMore = filtered.length > limit;
-		return { deltas: filtered.slice(0, limit), hasMore };
+		let lo = 0;
+		let hi = this.log.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >>> 1;
+			if (HLC.compare(this.log[mid]!.hlc, hlc) <= 0) {
+				lo = mid + 1;
+			} else {
+				hi = mid;
+			}
+		}
+		const hasMore = this.log.length - lo > limit;
+		return { deltas: this.log.slice(lo, lo + limit), hasMore };
 	}
 
 	/** Check if the buffer should be flushed based on size or age thresholds. */
@@ -50,6 +60,7 @@ export class DeltaBuffer {
 		const entries = [...this.log];
 		this.log = [];
 		this.index.clear();
+		this.deltaIds.clear();
 		this.estimatedBytes = 0;
 		this.createdAt = Date.now();
 		return entries;

@@ -40,6 +40,7 @@ export class SyncCoordinator {
 	private _lastSyncTime: Date | null = null;
 	private syncIntervalId: ReturnType<typeof setInterval> | null = null;
 	private visibilityHandler: (() => void) | null = null;
+	private syncing = false;
 
 	constructor(db: LocalDB, transport: SyncTransport, config?: SyncCoordinatorConfig) {
 		this.db = db;
@@ -130,14 +131,30 @@ export class SyncCoordinator {
 	 */
 	startAutoSync(): void {
 		this.syncIntervalId = setInterval(() => {
-			void this.pushToGateway();
-			void this.pullFromGateway();
+			if (this.syncing) return;
+			this.syncing = true;
+			void (async () => {
+				try {
+					await this.pullFromGateway();
+					await this.pushToGateway();
+				} finally {
+					this.syncing = false;
+				}
+			})();
 		}, AUTO_SYNC_INTERVAL_MS);
 
 		this.visibilityHandler = () => {
 			if (typeof document !== "undefined" && document.visibilityState === "visible") {
-				void this.pushToGateway();
-				void this.pullFromGateway();
+				if (this.syncing) return;
+				this.syncing = true;
+				void (async () => {
+					try {
+						await this.pullFromGateway();
+						await this.pushToGateway();
+					} finally {
+						this.syncing = false;
+					}
+				})();
 			}
 		};
 

@@ -1,5 +1,12 @@
-import type { HLC, Result } from "@lakesync/core";
-import { Err, extractDelta, LakeSyncError, Ok } from "@lakesync/core";
+import type { HLC, Result, TableSchema } from "@lakesync/core";
+import {
+	assertValidIdentifier,
+	Err,
+	extractDelta,
+	LakeSyncError,
+	Ok,
+	quoteIdentifier,
+} from "@lakesync/core";
 import type { LocalDB } from "../db/local-db";
 import { getSchema } from "../db/schema-registry";
 import type { DbError } from "../db/types";
@@ -26,12 +33,27 @@ function rowWithoutId(row: Record<string, unknown>): Record<string, unknown> {
  * 3. Pushes the delta to the sync queue for eventual upstream delivery
  */
 export class SyncTracker {
+	private schemaCache = new Map<string, TableSchema | null>();
+
 	constructor(
 		private readonly db: LocalDB,
 		private readonly queue: SyncQueue,
 		private readonly hlc: HLC,
 		private readonly clientId: string,
 	) {}
+
+	private async getCachedSchema(table: string): Promise<Result<TableSchema | undefined, DbError>> {
+		if (this.schemaCache.has(table)) {
+			const cached = this.schemaCache.get(table);
+			return Ok(cached ?? undefined);
+		}
+		const result = await getSchema(this.db, table);
+		if (result.ok) {
+			this.schemaCache.set(table, result.value);
+			return Ok(result.value ?? undefined);
+		}
+		return result;
+	}
 
 	/**
 	 * Insert a new row into the specified table.
@@ -48,19 +70,26 @@ export class SyncTracker {
 		rowId: string,
 		data: Record<string, unknown>,
 	): Promise<Result<void, LakeSyncError>> {
+		const tableCheck = assertValidIdentifier(table);
+		if (!tableCheck.ok) return tableCheck;
+		for (const col of Object.keys(data)) {
+			const colCheck = assertValidIdentifier(col);
+			if (!colCheck.ok) return colCheck;
+		}
+
 		// Fetch schema for delta extraction filtering
-		const schemaResult = await getSchema(this.db, table);
+		const schemaResult = await this.getCachedSchema(table);
 		if (!schemaResult.ok) return schemaResult;
-		const schema = schemaResult.value ?? undefined;
+		const schema = schemaResult.value;
 
 		// Build the INSERT SQL from data keys
 		const columns = Object.keys(data);
-		const allColumns = ["_rowId", ...columns];
+		const allColumns = ["_rowId", ...columns.map((c) => quoteIdentifier(c))];
 		const placeholders = allColumns.map(() => "?").join(", ");
 		const columnList = allColumns.join(", ");
 		const values = [rowId, ...columns.map((col) => data[col])];
 
-		const sql = `INSERT INTO ${table} (${columnList}) VALUES (${placeholders})`;
+		const sql = `INSERT INTO ${quoteIdentifier(table)} (${columnList}) VALUES (${placeholders})`;
 		const execResult = await this.db.exec(sql, values);
 		if (!execResult.ok) return execResult;
 
@@ -98,14 +127,21 @@ export class SyncTracker {
 		rowId: string,
 		data: Record<string, unknown>,
 	): Promise<Result<void, LakeSyncError>> {
+		const tableCheck = assertValidIdentifier(table);
+		if (!tableCheck.ok) return tableCheck;
+		for (const col of Object.keys(data)) {
+			const colCheck = assertValidIdentifier(col);
+			if (!colCheck.ok) return colCheck;
+		}
+
 		// Fetch schema for delta extraction filtering
-		const schemaResult = await getSchema(this.db, table);
+		const schemaResult = await this.getCachedSchema(table);
 		if (!schemaResult.ok) return schemaResult;
-		const schema = schemaResult.value ?? undefined;
+		const schema = schemaResult.value;
 
 		// Read current row
 		const queryResult = await this.db.query<Record<string, unknown>>(
-			`SELECT * FROM ${table} WHERE _rowId = ?`,
+			`SELECT * FROM ${quoteIdentifier(table)} WHERE _rowId = ?`,
 			[rowId],
 		);
 		if (!queryResult.ok) return queryResult;
@@ -121,10 +157,10 @@ export class SyncTracker {
 
 		// Build SET clause from data keys
 		const columns = Object.keys(data);
-		const setClauses = columns.map((col) => `${col} = ?`).join(", ");
+		const setClauses = columns.map((col) => `${quoteIdentifier(col)} = ?`).join(", ");
 		const values = [...columns.map((col) => data[col]), rowId];
 
-		const sql = `UPDATE ${table} SET ${setClauses} WHERE _rowId = ?`;
+		const sql = `UPDATE ${quoteIdentifier(table)} SET ${setClauses} WHERE _rowId = ?`;
 		const execResult = await this.db.exec(sql, values);
 		if (!execResult.ok) return execResult;
 
@@ -160,14 +196,17 @@ export class SyncTracker {
 	 * @returns Ok on success, Err if the row is not found or on failure
 	 */
 	async delete(table: string, rowId: string): Promise<Result<void, LakeSyncError>> {
+		const tableCheck = assertValidIdentifier(table);
+		if (!tableCheck.ok) return tableCheck;
+
 		// Fetch schema for delta extraction filtering
-		const schemaResult = await getSchema(this.db, table);
+		const schemaResult = await this.getCachedSchema(table);
 		if (!schemaResult.ok) return schemaResult;
-		const schema = schemaResult.value ?? undefined;
+		const schema = schemaResult.value;
 
 		// Read current row for delta extraction
 		const queryResult = await this.db.query<Record<string, unknown>>(
-			`SELECT * FROM ${table} WHERE _rowId = ?`,
+			`SELECT * FROM ${quoteIdentifier(table)} WHERE _rowId = ?`,
 			[rowId],
 		);
 		if (!queryResult.ok) return queryResult;
@@ -182,7 +221,10 @@ export class SyncTracker {
 		const before = rowWithoutId(rows[0]);
 
 		// Delete the row
-		const execResult = await this.db.exec(`DELETE FROM ${table} WHERE _rowId = ?`, [rowId]);
+		const execResult = await this.db.exec(
+			`DELETE FROM ${quoteIdentifier(table)} WHERE _rowId = ?`,
+			[rowId],
+		);
 		if (!execResult.ok) return execResult;
 
 		// Extract delta: data -> null means DELETE

@@ -173,6 +173,11 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			return errorResponse("Method not allowed", 405);
 		}
 
+		const contentLength = Number(request.headers.get("Content-Length") ?? "0");
+		if (contentLength > 1_048_576) {
+			return errorResponse("Payload too large (max 1 MiB)", 413);
+		}
+
 		let body: SyncPush;
 		try {
 			const raw = await request.text();
@@ -183,6 +188,18 @@ export class SyncGatewayDO extends DurableObject<Env> {
 
 		if (!body.clientId || !Array.isArray(body.deltas)) {
 			return errorResponse("Missing required fields: clientId, deltas", 400);
+		}
+
+		const headerClientId = request.headers.get("X-Client-Id");
+		if (headerClientId && body.clientId !== headerClientId) {
+			return errorResponse(
+				"Client ID mismatch: push clientId does not match authenticated identity",
+				403,
+			);
+		}
+
+		if (body.deltas.length > 10_000) {
+			return errorResponse("Too many deltas in a single push (max 10,000)", 400);
 		}
 
 		const gateway = await this.getGateway();

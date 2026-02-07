@@ -8,7 +8,7 @@ import {
 	type Result,
 	type RowDelta,
 } from "@lakesync/core";
-import { tableFromIPC } from "apache-arrow";
+import { tableFromIPC, type Vector } from "apache-arrow";
 import { readParquet } from "parquet-wasm/esm";
 import { ensureWasmInitialised } from "./wasm";
 
@@ -76,6 +76,14 @@ export async function readParquetToDeltas(
 			boolColumnsRaw ? (JSON.parse(boolColumnsRaw) as string[]) : [],
 		);
 
+		const userColumnVectors = new Map<string, Vector>();
+		for (const colName of userColumnNames) {
+			const vec = arrowTable.getChild(colName);
+			if (vec) {
+				userColumnVectors.set(colName, vec);
+			}
+		}
+
 		// Reconstruct RowDelta objects from each row
 		for (let i = 0; i < numRows; i++) {
 			const op = opCol.get(i) as DeltaOp;
@@ -87,10 +95,7 @@ export async function readParquetToDeltas(
 
 			// Build column deltas from user columns
 			const columns: ColumnDelta[] = [];
-			for (const colName of userColumnNames) {
-				const col = arrowTable.getChild(colName);
-				if (!col) continue;
-
+			for (const [colName, col] of userColumnVectors) {
 				const rawValue: unknown = col.get(i);
 
 				// Skip null values — they represent missing columns for this delta

@@ -127,6 +127,8 @@ function mergeColumns(local: RowDelta, remote: RowDelta): ColumnDelta[] {
 	return merged;
 }
 
+const _singleton = new LWWResolver();
+
 /**
  * Convenience function — resolves two conflicting deltas using the
  * column-level Last-Write-Wins strategy.
@@ -137,6 +139,5 @@ function mergeColumns(local: RowDelta, remote: RowDelta): ColumnDelta[] {
  *          `ConflictError` if the deltas refer to different tables/rows.
  */
 export function resolveLWW(local: RowDelta, remote: RowDelta): Result<RowDelta, ConflictError> {
-	const resolver = new LWWResolver();
-	return resolver.resolve(local, remote);
+	return _singleton.resolve(local, remote);
 }

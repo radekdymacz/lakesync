@@ -1,7 +1,14 @@
 import type { ConflictResolver, HLCTimestamp, Result, RowDelta } from "@lakesync/core";
-import { Err, HLC, LakeSyncError, Ok } from "@lakesync/core";
+import {
+	assertValidIdentifier,
+	Err,
+	HLC,
+	LakeSyncError,
+	Ok,
+	quoteIdentifier,
+} from "@lakesync/core";
 import type { LocalDB } from "../db/local-db";
-import type { SyncQueue } from "../queue/types";
+import type { QueueEntry, SyncQueue } from "../queue/types";
 
 /**
  * Apply remote deltas to the local SQLite database.
@@ -62,12 +69,28 @@ export async function applyRemoteDeltas(
 		);
 	}
 
+	const peekResult = await pendingQueue.peek(Number.MAX_SAFE_INTEGER);
+	if (!peekResult.ok) {
+		await db.exec("ROLLBACK");
+		return Err(
+			new LakeSyncError(
+				"Failed to peek pending queue for conflict detection",
+				"APPLY_ERROR",
+				peekResult.error,
+			),
+		);
+	}
+	const pendingMap = new Map<string, QueueEntry>();
+	for (const entry of peekResult.value) {
+		pendingMap.set(`${entry.delta.table}:${entry.delta.rowId}`, entry);
+	}
+
 	let appliedCount = 0;
 	/** Track the maximum HLC per table for cursor advancement */
 	const maxHlcPerTable = new Map<string, HLCTimestamp>();
 
 	for (const remoteDelta of deltas) {
-		const result = await applyOneDelta(db, remoteDelta, resolver, pendingQueue);
+		const result = await applyOneDelta(db, remoteDelta, resolver, pendingQueue, pendingMap);
 		if (!result.ok) {
 			// Rollback on any failure
 			await db.exec("ROLLBACK");
@@ -133,17 +156,9 @@ async function applyOneDelta(
 	remoteDelta: RowDelta,
 	resolver: ConflictResolver,
 	pendingQueue: SyncQueue,
+	pendingMap: Map<string, QueueEntry>,
 ): Promise<Result<boolean, LakeSyncError>> {
-	// Peek all pending entries to find conflicts
-	const peekResult = await pendingQueue.peek(Number.MAX_SAFE_INTEGER);
-	if (!peekResult.ok) {
-		return peekResult;
-	}
-
-	// Find a local pending entry that conflicts (same table + rowId)
-	const conflictingEntry = peekResult.value.find(
-		(entry) => entry.delta.table === remoteDelta.table && entry.delta.rowId === remoteDelta.rowId,
-	);
+	const conflictingEntry = pendingMap.get(`${remoteDelta.table}:${remoteDelta.rowId}`);
 
 	if (conflictingEntry) {
 		const localDelta = conflictingEntry.delta;
@@ -213,13 +228,26 @@ async function applySqlDelta(
 	db: LocalDB,
 	delta: RowDelta,
 ): Promise<Result<boolean, LakeSyncError>> {
+	const tableCheck = assertValidIdentifier(delta.table);
+	if (!tableCheck.ok) {
+		return Err(new LakeSyncError(tableCheck.error.message, "APPLY_ERROR"));
+	}
+	for (const col of delta.columns) {
+		const colCheck = assertValidIdentifier(col.column);
+		if (!colCheck.ok) {
+			return Err(new LakeSyncError(colCheck.error.message, "APPLY_ERROR"));
+		}
+	}
+
+	const quotedTable = quoteIdentifier(delta.table);
+
 	switch (delta.op) {
 		case "INSERT": {
-			const colNames = delta.columns.map((c) => c.column);
+			const colNames = delta.columns.map((c) => quoteIdentifier(c.column));
 			const allColumns = ["_rowId", ...colNames];
 			const placeholders = allColumns.map(() => "?").join(", ");
 			const values = [delta.rowId, ...delta.columns.map((c) => c.value)];
-			const sql = `INSERT INTO ${delta.table} (${allColumns.join(", ")}) VALUES (${placeholders})`;
+			const sql = `INSERT INTO ${quotedTable} (${allColumns.join(", ")}) VALUES (${placeholders})`;
 
 			const result = await db.exec(sql, values);
 			if (!result.ok) {
@@ -240,9 +268,9 @@ async function applySqlDelta(
 				return Ok(true);
 			}
 
-			const setClauses = delta.columns.map((c) => `${c.column} = ?`).join(", ");
+			const setClauses = delta.columns.map((c) => `${quoteIdentifier(c.column)} = ?`).join(", ");
 			const values = [...delta.columns.map((c) => c.value), delta.rowId];
-			const sql = `UPDATE ${delta.table} SET ${setClauses} WHERE _rowId = ?`;
+			const sql = `UPDATE ${quotedTable} SET ${setClauses} WHERE _rowId = ?`;
 
 			const result = await db.exec(sql, values);
 			if (!result.ok) {
@@ -258,7 +286,7 @@ async function applySqlDelta(
 		}
 
 		case "DELETE": {
-			const sql = `DELETE FROM ${delta.table} WHERE _rowId = ?`;
+			const sql = `DELETE FROM ${quotedTable} WHERE _rowId = ?`;
 			const result = await db.exec(sql, [delta.rowId]);
 			if (!result.ok) {
 				return Err(

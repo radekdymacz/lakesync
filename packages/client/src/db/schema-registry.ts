@@ -1,4 +1,13 @@
-import { Err, Ok, type Result, SchemaError, type TableSchema, unwrapOrThrow } from "@lakesync/core";
+import {
+	assertValidIdentifier,
+	Err,
+	Ok,
+	quoteIdentifier,
+	type Result,
+	SchemaError,
+	type TableSchema,
+	unwrapOrThrow,
+} from "@lakesync/core";
 import type { LocalDB } from "./local-db";
 import { DbError } from "./types";
 
@@ -49,7 +58,14 @@ async function ensureMetaTable(db: LocalDB): Promise<Result<void, DbError>> {
 export async function registerSchema(
 	db: LocalDB,
 	schema: TableSchema,
-): Promise<Result<void, DbError>> {
+): Promise<Result<void, DbError | SchemaError>> {
+	const tableCheck = assertValidIdentifier(schema.table);
+	if (!tableCheck.ok) return tableCheck;
+	for (const col of schema.columns) {
+		const colCheck = assertValidIdentifier(col.name);
+		if (!colCheck.ok) return colCheck;
+	}
+
 	const metaResult = await ensureMetaTable(db);
 	if (!metaResult.ok) return metaResult;
 
@@ -70,13 +86,14 @@ export async function registerSchema(
 		);
 
 		// Build the CREATE TABLE statement with _rowId as primary key
+		const quotedTable = quoteIdentifier(schema.table);
 		const columnDefs = schema.columns
-			.map((col) => `${col.name} ${COLUMN_TYPE_MAP[col.type]}`)
+			.map((col) => `${quoteIdentifier(col.name)} ${COLUMN_TYPE_MAP[col.type]}`)
 			.join(", ");
 
 		const createSql = columnDefs
-			? `CREATE TABLE IF NOT EXISTS ${schema.table} (_rowId TEXT PRIMARY KEY, ${columnDefs})`
-			: `CREATE TABLE IF NOT EXISTS ${schema.table} (_rowId TEXT PRIMARY KEY)`;
+			? `CREATE TABLE IF NOT EXISTS ${quotedTable} (_rowId TEXT PRIMARY KEY, ${columnDefs})`
+			: `CREATE TABLE IF NOT EXISTS ${quotedTable} (_rowId TEXT PRIMARY KEY)`;
 
 		unwrapOrThrow(tx.exec(createSql));
 	});
@@ -159,6 +176,13 @@ export async function migrateSchema(
 
 	const tableName = newSchema.table;
 
+	const tableCheck = assertValidIdentifier(tableName);
+	if (!tableCheck.ok) return tableCheck;
+	for (const col of newSchema.columns) {
+		const colCheck = assertValidIdentifier(col.name);
+		if (!colCheck.ok) return colCheck;
+	}
+
 	// Build lookup maps for comparison
 	const oldColumnMap = new Map<string, string>();
 	for (const col of oldSchema.columns) {
@@ -201,9 +225,12 @@ export async function migrateSchema(
 
 	return db.transaction((tx) => {
 		// Add new columns via ALTER TABLE
+		const quotedTable = quoteIdentifier(tableName);
 		for (const col of addedColumns) {
 			unwrapOrThrow(
-				tx.exec(`ALTER TABLE ${tableName} ADD COLUMN ${col.name} ${COLUMN_TYPE_MAP[col.type]}`),
+				tx.exec(
+					`ALTER TABLE ${quotedTable} ADD COLUMN ${quoteIdentifier(col.name)} ${COLUMN_TYPE_MAP[col.type]}`,
+				),
 			);
 		}
 
