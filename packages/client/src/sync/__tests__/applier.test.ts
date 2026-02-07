@@ -414,7 +414,9 @@ describe("applyRemoteDeltas", () => {
 			// Insert a row locally with a HIGH HLC
 			const hlc = new HLC(() => 10_000_000);
 			const tracker = new SyncTracker(db, queue, hlc, "local-client");
-			unwrapOrThrow(await tracker.insert("todos", "row-1", { title: "Local High HLC", completed: 1 }));
+			unwrapOrThrow(
+				await tracker.insert("todos", "row-1", { title: "Local High HLC", completed: 1 }),
+			);
 
 			// Apply a remote UPDATE with a LOW HLC (local wins, remote skipped)
 			const remoteHlc = HLC.encode(2_000_000, 0);

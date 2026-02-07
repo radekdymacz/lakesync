@@ -55,9 +55,9 @@ vi.mock("../r2-adapter", () => {
 	return { R2Adapter: MockR2Adapter };
 });
 
+import { decodeSyncPull, decodeSyncPush, encodeSyncResponse } from "@lakesync/proto";
 // Import after all mocks are set up
 import { SyncGatewayDO } from "../sync-gateway-do";
-import { decodeSyncPush, decodeSyncPull, encodeSyncResponse } from "@lakesync/proto";
 
 /**
  * Create a mock DurableObject context with storage alarm support.
@@ -581,10 +581,7 @@ describe("SyncGatewayDO", () => {
 		} {
 			const ctx = createMockCtx();
 			const env = createMockEnv();
-			const DO = new SyncGatewayDO(
-				ctx as unknown as DurableObjectState,
-				env as unknown as never,
-			);
+			const DO = new SyncGatewayDO(ctx as unknown as DurableObjectState, env as unknown as never);
 			return { DO, ctx };
 		}
 

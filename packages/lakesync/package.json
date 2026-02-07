@@ -4,7 +4,9 @@
 	"type": "module",
 	"description": "Offline-first sync engine that writes column-level deltas to an Apache Iceberg data lake",
 	"license": "Apache-2.0",
-	"files": ["dist"],
+	"files": [
+		"dist"
+	],
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"exports": {
@@ -64,12 +66,26 @@
 		"@duckdb/duckdb-wasm": "^1.33.0"
 	},
 	"peerDependenciesMeta": {
-		"sql.js": { "optional": true },
-		"idb": { "optional": true },
-		"@aws-sdk/client-s3": { "optional": true },
-		"@bufbuild/protobuf": { "optional": true },
-		"parquet-wasm": { "optional": true },
-		"apache-arrow": { "optional": true },
-		"@duckdb/duckdb-wasm": { "optional": true }
+		"sql.js": {
+			"optional": true
+		},
+		"idb": {
+			"optional": true
+		},
+		"@aws-sdk/client-s3": {
+			"optional": true
+		},
+		"@bufbuild/protobuf": {
+			"optional": true
+		},
+		"parquet-wasm": {
+			"optional": true
+		},
+		"apache-arrow": {
+			"optional": true
+		},
+		"@duckdb/duckdb-wasm": {
+			"optional": true
+		}
 	}
 }

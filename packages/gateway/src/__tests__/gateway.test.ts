@@ -558,10 +558,7 @@ describe("SyncGateway", () => {
 		// Create a slow adapter whose putObject resolves after a delay
 		const slowAdapter: LakeAdapter = {
 			...createMockAdapter(),
-			async putObject(
-				path: string,
-				data: Uint8Array,
-			): Promise<Result<void, AdapterError>> {
+			async putObject(_path: string, _data: Uint8Array): Promise<Result<void, AdapterError>> {
 				await new Promise((resolve) => setTimeout(resolve, 100));
 				return Ok(undefined);
 			},
@@ -641,9 +638,7 @@ describe("SyncGateway", () => {
 			// Log contains both deltas
 			expect(pullResult.value.deltas).toHaveLength(2);
 			// The higher-HLC delta from client-b should be present
-			const hasBDelta = pullResult.value.deltas.some(
-				(d) => d.deltaId === "delta-b-high",
-			);
+			const hasBDelta = pullResult.value.deltas.some((d) => d.deltaId === "delta-b-high");
 			expect(hasBDelta).toBe(true);
 		}
 	});

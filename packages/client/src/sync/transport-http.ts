@@ -6,7 +6,14 @@ import type {
 	SyncPush,
 	SyncResponse,
 } from "@lakesync/core";
-import { bigintReplacer, bigintReviver, Err, LakeSyncError as LSError, Ok, toError } from "@lakesync/core";
+import {
+	bigintReplacer,
+	bigintReviver,
+	Err,
+	LakeSyncError as LSError,
+	Ok,
+	toError,
+} from "@lakesync/core";
 import type { SyncTransport } from "./transport";
 
 /** Configuration for the HTTP sync transport */
@@ -73,9 +80,7 @@ export class HttpTransport implements SyncTransport {
 			return Ok(data);
 		} catch (error) {
 			const cause = toError(error);
-			return Err(
-				new LSError(`Push request failed: ${cause.message}`, "TRANSPORT_ERROR", cause),
-			);
+			return Err(new LSError(`Push request failed: ${cause.message}`, "TRANSPORT_ERROR", cause));
 		}
 	}
 
@@ -110,9 +115,7 @@ export class HttpTransport implements SyncTransport {
 			return Ok(data);
 		} catch (error) {
 			const cause = toError(error);
-			return Err(
-				new LSError(`Pull request failed: ${cause.message}`, "TRANSPORT_ERROR", cause),
-			);
+			return Err(new LSError(`Pull request failed: ${cause.message}`, "TRANSPORT_ERROR", cause));
 		}
 	}
 }

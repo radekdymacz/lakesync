@@ -1,12 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import { bigintReplacer, bigintReviver } from "@lakesync/core";
 import type { HLCTimestamp, TableSchema } from "@lakesync/core";
-import {
-	SyncGateway,
-	type SyncPull,
-	type SyncPush,
-	type SyncResponse,
-} from "@lakesync/gateway";
+import { bigintReplacer, bigintReviver } from "@lakesync/core";
+import { SyncGateway, type SyncPull, type SyncPush, type SyncResponse } from "@lakesync/gateway";
 import {
 	type CodecError,
 	decodeSyncPull,

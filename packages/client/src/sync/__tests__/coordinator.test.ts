@@ -1,6 +1,5 @@
-import type { HLCTimestamp, LakeSyncError, Result, RowDelta, SyncResponse } from "@lakesync/core";
-import { Err, HLC, Ok } from "@lakesync/core";
-import { LakeSyncError as LakeSyncErrorClass } from "@lakesync/core";
+import type { RowDelta } from "@lakesync/core";
+import { Err, HLC, LakeSyncError as LakeSyncErrorClass, Ok } from "@lakesync/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalDB } from "../../db/local-db";
 import type { QueueEntry, SyncQueue } from "../../queue/types";
@@ -52,12 +51,12 @@ function mockQueue(): SyncQueue {
 /** Build a fully-mocked SyncTransport using vi.fn() */
 function mockTransport(): SyncTransport {
 	return {
-		push: vi.fn<SyncTransport["push"]>().mockResolvedValue(
-			Ok({ serverHlc: HLC.encode(2_000_000, 0), accepted: 1 }),
-		),
-		pull: vi.fn<SyncTransport["pull"]>().mockResolvedValue(
-			Ok({ deltas: [], serverHlc: HLC.encode(2_000_000, 0), hasMore: false }),
-		),
+		push: vi
+			.fn<SyncTransport["push"]>()
+			.mockResolvedValue(Ok({ serverHlc: HLC.encode(2_000_000, 0), accepted: 1 })),
+		pull: vi
+			.fn<SyncTransport["pull"]>()
+			.mockResolvedValue(Ok({ deltas: [], serverHlc: HLC.encode(2_000_000, 0), hasMore: false })),
 	};
 }
 
@@ -160,7 +159,11 @@ describe("SyncCoordinator", () => {
 
 		it("dead-letters entries that have reached maxRetries", async () => {
 			const good = makeEntry("e-1", makeDelta({ deltaId: "d-good" }), 0);
-			const deadLettered = makeEntry("e-2", makeDelta({ deltaId: "d-dead", rowId: "row-2" }), MAX_RETRIES);
+			const deadLettered = makeEntry(
+				"e-2",
+				makeDelta({ deltaId: "d-dead", rowId: "row-2" }),
+				MAX_RETRIES,
+			);
 
 			(queue.peek as ReturnType<typeof vi.fn>).mockResolvedValue(Ok([good, deadLettered]));
 
@@ -365,7 +368,9 @@ describe("SyncCoordinator", () => {
 
 			// Advance another tick — should NOT fire again
 			await vi.advanceTimersByTimeAsync(10_000);
-			expect((transport.push as ReturnType<typeof vi.fn>).mock.calls.length).toBe(pushCountAfterFirst);
+			expect((transport.push as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+				pushCountAfterFirst,
+			);
 		});
 
 		it("multiple ticks accumulate calls", async () => {

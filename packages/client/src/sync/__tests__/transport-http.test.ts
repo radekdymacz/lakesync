@@ -259,10 +259,7 @@ describe("HttpTransport", () => {
 			const mockFetch = vi.fn().mockResolvedValue({
 				ok: true,
 				status: 200,
-				text: () =>
-					Promise.resolve(
-						JSON.stringify({ serverHlc: "not-a-number", accepted: 1 }),
-					),
+				text: () => Promise.resolve(JSON.stringify({ serverHlc: "not-a-number", accepted: 1 })),
 			});
 			const transport = createTransport(mockFetch);
 

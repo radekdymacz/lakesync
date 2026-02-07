@@ -2,11 +2,11 @@ import {
 	LocalDB,
 	LocalTransport,
 	MemoryQueue,
-	SyncCoordinator,
 	registerSchema,
+	SyncCoordinator,
 } from "@lakesync/client";
-import { HLC, unwrapOrThrow } from "@lakesync/core";
 import type { TableSchema } from "@lakesync/core";
+import { HLC, unwrapOrThrow } from "@lakesync/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestGateway } from "./helpers";
 

@@ -25,7 +25,8 @@ export class DeltaBuffer {
 		const key = rowKey(delta.table, delta.rowId);
 		this.index.set(key, delta);
 		this.deltaIds.add(delta.deltaId);
-		this.estimatedBytes += delta.columns.length * ESTIMATED_BYTES_PER_COLUMN + ESTIMATED_BASE_BYTES_PER_DELTA;
+		this.estimatedBytes +=
+			delta.columns.length * ESTIMATED_BYTES_PER_COLUMN + ESTIMATED_BASE_BYTES_PER_DELTA;
 	}
 
 	/** Get the current merged state for a row (for conflict resolution). */

@@ -1,8 +1,8 @@
 import type { SyncPull, SyncPush, SyncResponse } from "@lakesync/core";
 import { Err, HLC, LakeSyncError, Ok } from "@lakesync/core";
 import { describe, expect, it, vi } from "vitest";
-import { LocalTransport } from "../transport-local";
 import type { LocalGateway } from "../transport-local";
+import { LocalTransport } from "../transport-local";
 
 const TEST_HLC = HLC.encode(1_700_000_000_000, 1);
 const SERVER_HLC = HLC.encode(1_700_000_000_000, 5);
