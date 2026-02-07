@@ -143,78 +143,85 @@ export class SyncGateway {
 		const byteSize = this.buffer.byteSize;
 		const entries = this.buffer.drain();
 
-		// Find HLC range across all entries
-		let min = entries[0]!.hlc;
-		let max = entries[0]!.hlc;
-		for (let i = 1; i < entries.length; i++) {
-			const hlc = entries[i]!.hlc;
-			if (HLC.compare(hlc, min) < 0) min = hlc;
-			if (HLC.compare(hlc, max) > 0) max = hlc;
-		}
+		try {
+			// Find HLC range across all entries
+			let min = entries[0]!.hlc;
+			let max = entries[0]!.hlc;
+			for (let i = 1; i < entries.length; i++) {
+				const hlc = entries[i]!.hlc;
+				if (HLC.compare(hlc, min) < 0) min = hlc;
+				if (HLC.compare(hlc, max) > 0) max = hlc;
+			}
 
-		const date = new Date().toISOString().split("T")[0];
-		let objectKey: string;
-		let data: Uint8Array;
-		let contentType: string;
+			const date = new Date().toISOString().split("T")[0];
+			let objectKey: string;
+			let data: Uint8Array;
+			let contentType: string;
 
-		if (this.config.flushFormat === "json") {
-			// Explicit JSON flush path
-			const envelope: FlushEnvelope = {
-				version: 1,
-				gatewayId: this.config.gatewayId,
-				createdAt: new Date().toISOString(),
-				hlcRange: { min, max },
-				deltaCount: entries.length,
-				byteSize,
-				deltas: entries,
-			};
+			if (this.config.flushFormat === "json") {
+				// Explicit JSON flush path
+				const envelope: FlushEnvelope = {
+					version: 1,
+					gatewayId: this.config.gatewayId,
+					createdAt: new Date().toISOString(),
+					hlcRange: { min, max },
+					deltaCount: entries.length,
+					byteSize,
+					deltas: entries,
+				};
 
-			objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.json`;
-			const jsonStr = JSON.stringify(envelope, bigintReplacer);
-			data = new TextEncoder().encode(jsonStr);
-			contentType = "application/json";
-		} else {
-			// Default: Parquet flush path
-			if (!this.config.tableSchema) {
+				objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.json`;
+				const jsonStr = JSON.stringify(envelope, bigintReplacer);
+				data = new TextEncoder().encode(jsonStr);
+				contentType = "application/json";
+			} else {
+				// Default: Parquet flush path
+				if (!this.config.tableSchema) {
+					for (const entry of entries) {
+						this.buffer.append(entry);
+					}
+					return Err(new FlushError("tableSchema required for Parquet flush"));
+				}
+
+				const parquetResult = await writeDeltasToParquet(entries, this.config.tableSchema);
+				if (!parquetResult.ok) {
+					for (const entry of entries) {
+						this.buffer.append(entry);
+					}
+					return Err(parquetResult.error);
+				}
+
+				objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.parquet`;
+				data = parquetResult.value;
+				contentType = "application/vnd.apache.parquet";
+			}
+
+			const result = await this.adapter.putObject(objectKey, data, contentType);
+
+			if (!result.ok) {
+				// Flush failed — restore buffer entries so they can be retried
 				for (const entry of entries) {
 					this.buffer.append(entry);
 				}
-				this.flushing = false;
-				return Err(new FlushError("tableSchema required for Parquet flush"));
+				return Err(new FlushError(`Failed to write flush envelope: ${result.error.message}`));
 			}
 
-			const parquetResult = await writeDeltasToParquet(entries, this.config.tableSchema);
-			if (!parquetResult.ok) {
-				for (const entry of entries) {
-					this.buffer.append(entry);
-				}
-				this.flushing = false;
-				return Err(parquetResult.error);
+			// After successful adapter write, commit to catalogue (best-effort)
+			if (this.config.catalogue && this.config.tableSchema) {
+				await this.commitToCatalogue(objectKey, data.byteLength, entries.length);
 			}
 
-			objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.parquet`;
-			data = parquetResult.value;
-			contentType = "application/vnd.apache.parquet";
-		}
-
-		const result = await this.adapter.putObject(objectKey, data, contentType);
-
-		if (!result.ok) {
-			// Flush failed — restore buffer entries so they can be retried
+			return Ok(undefined);
+		} catch (error: unknown) {
+			// Unexpected throw (e.g. adapter threw instead of returning Err) — restore buffer
 			for (const entry of entries) {
 				this.buffer.append(entry);
 			}
+			const message = error instanceof Error ? error.message : String(error);
+			return Err(new FlushError(`Unexpected flush failure: ${message}`));
+		} finally {
 			this.flushing = false;
-			return Err(new FlushError(`Failed to write flush envelope: ${result.error.message}`));
 		}
-
-		// After successful adapter write, commit to catalogue (best-effort)
-		if (this.config.catalogue && this.config.tableSchema) {
-			await this.commitToCatalogue(objectKey, data.byteLength, entries.length);
-		}
-
-		this.flushing = false;
-		return Ok(undefined);
 	}
 
 	/**

@@ -281,6 +281,185 @@ describe("applyRemoteDeltas", () => {
 		expect(result.value).toBe(0);
 	});
 
+	describe("conflict edge cases", () => {
+		it("multiple conflicting deltas in a single batch — both applied in order", async () => {
+			// Insert row-1 locally via SyncTracker (creates INSERT delta in queue)
+			const hlc = new HLC(() => 1_000_000);
+			const tracker = new SyncTracker(db, queue, hlc, "local-client");
+			unwrapOrThrow(await tracker.insert("todos", "row-1", { title: "Local Row 1", completed: 0 }));
+
+			// Verify local delta is in the queue
+			const depthBefore = unwrapOrThrow(await queue.depth());
+			expect(depthBefore).toBe(1);
+
+			// Apply a batch of 2 remote deltas:
+			// 1) UPDATE for row-1 with HIGH HLC (remote wins over local INSERT)
+			// 2) UPDATE for row-2 (no conflict — row-2 doesn't exist locally, but we INSERT it first)
+			unwrapOrThrow(
+				await db.exec("INSERT INTO todos (_rowId, title, completed) VALUES (?, ?, ?)", [
+					"row-2",
+					"Original Row 2",
+					0,
+				]),
+			);
+
+			const remoteDelta1: RowDelta = {
+				op: "UPDATE",
+				table: "todos",
+				rowId: "row-1",
+				clientId: "remote-client",
+				columns: [
+					{ column: "title", value: "Remote Row 1" },
+					{ column: "completed", value: 1 },
+				],
+				hlc: HLC.encode(5_000_000, 0),
+				deltaId: "remote-delta-batch-1",
+			};
+
+			const remoteDelta2: RowDelta = {
+				op: "UPDATE",
+				table: "todos",
+				rowId: "row-2",
+				clientId: "remote-client",
+				columns: [{ column: "title", value: "Remote Row 2" }],
+				hlc: HLC.encode(6_000_000, 0),
+				deltaId: "remote-delta-batch-2",
+			};
+
+			const result = await applyRemoteDeltas(db, [remoteDelta1, remoteDelta2], resolver, queue);
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.value).toBe(2);
+
+			// Verify row-1 has remote values
+			const row1Result = await db.query<{ _rowId: string; title: string; completed: number }>(
+				"SELECT * FROM todos WHERE _rowId = ?",
+				["row-1"],
+			);
+			expect(row1Result.ok).toBe(true);
+			if (!row1Result.ok) return;
+			expect(row1Result.value).toHaveLength(1);
+			expect(row1Result.value[0]?.title).toBe("Remote Row 1");
+			expect(row1Result.value[0]?.completed).toBe(1);
+
+			// Verify row-2 has remote values
+			const row2Result = await db.query<{ _rowId: string; title: string; completed: number }>(
+				"SELECT * FROM todos WHERE _rowId = ?",
+				["row-2"],
+			);
+			expect(row2Result.ok).toBe(true);
+			if (!row2Result.ok) return;
+			expect(row2Result.value).toHaveLength(1);
+			expect(row2Result.value[0]?.title).toBe("Remote Row 2");
+
+			// Verify local queue entry for row-1 was ack'd
+			const depthAfter = unwrapOrThrow(await queue.depth());
+			expect(depthAfter).toBe(0);
+		});
+
+		it("conflict with pending DELETE — remote INSERT wins over local DELETE", async () => {
+			// Insert a row directly into SQLite (bypassing tracker, no queue entry)
+			unwrapOrThrow(
+				await db.exec("INSERT INTO todos (_rowId, title, completed) VALUES (?, ?, ?)", [
+					"row-1",
+					"Existing Row",
+					0,
+				]),
+			);
+
+			// Delete it locally via SyncTracker (pushes a DELETE delta to the queue)
+			const hlc = new HLC(() => 1_000_000);
+			const tracker = new SyncTracker(db, queue, hlc, "local-client");
+			unwrapOrThrow(await tracker.delete("todos", "row-1"));
+
+			// Verify queue has exactly one DELETE delta
+			const depthBefore = unwrapOrThrow(await queue.depth());
+			expect(depthBefore).toBe(1);
+
+			// Verify the row is gone from SQLite
+			const rowGone = await db.query<Record<string, unknown>>(
+				"SELECT * FROM todos WHERE _rowId = ?",
+				["row-1"],
+			);
+			expect(rowGone.ok).toBe(true);
+			if (!rowGone.ok) return;
+			expect(rowGone.value).toHaveLength(0);
+
+			// Apply a remote UPDATE with a HIGHER HLC for the same row (remote wins)
+			const remoteDelta: RowDelta = {
+				op: "UPDATE",
+				table: "todos",
+				rowId: "row-1",
+				clientId: "remote-client",
+				columns: [
+					{ column: "title", value: "Remote Resurrects" },
+					{ column: "completed", value: 1 },
+				],
+				hlc: HLC.encode(5_000_000, 0),
+				deltaId: "remote-delta-vs-delete",
+			};
+
+			const result = await applyRemoteDeltas(db, [remoteDelta], resolver, queue);
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			// Remote wins — the resolved delta was applied
+			expect(result.value).toBe(1);
+
+			// The local DELETE queue entry should have been removed
+			const depthAfter = unwrapOrThrow(await queue.depth());
+			expect(depthAfter).toBe(0);
+		});
+
+		it("cursor advances even when local wins (delta skipped)", async () => {
+			// Insert a row locally with a HIGH HLC
+			const hlc = new HLC(() => 10_000_000);
+			const tracker = new SyncTracker(db, queue, hlc, "local-client");
+			unwrapOrThrow(await tracker.insert("todos", "row-1", { title: "Local High HLC", completed: 1 }));
+
+			// Apply a remote UPDATE with a LOW HLC (local wins, remote skipped)
+			const remoteHlc = HLC.encode(2_000_000, 0);
+			const remoteDelta: RowDelta = {
+				op: "UPDATE",
+				table: "todos",
+				rowId: "row-1",
+				clientId: "remote-client",
+				columns: [
+					{ column: "title", value: "Remote Low HLC" },
+					{ column: "completed", value: 0 },
+				],
+				hlc: remoteHlc,
+				deltaId: "remote-delta-low",
+			};
+
+			const result = await applyRemoteDeltas(db, [remoteDelta], resolver, queue);
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			// Local wins — nothing applied
+			expect(result.value).toBe(0);
+
+			// Verify the row still has local values
+			const rowResult = await db.query<{ _rowId: string; title: string; completed: number }>(
+				"SELECT * FROM todos WHERE _rowId = ?",
+				["row-1"],
+			);
+			expect(rowResult.ok).toBe(true);
+			if (!rowResult.ok) return;
+			expect(rowResult.value).toHaveLength(1);
+			expect(rowResult.value[0]?.title).toBe("Local High HLC");
+			expect(rowResult.value[0]?.completed).toBe(1);
+
+			// Verify the _sync_cursor was still updated to the remote delta's HLC
+			const cursorResult = await db.query<{ table_name: string; last_synced_hlc: string }>(
+				"SELECT * FROM _sync_cursor WHERE table_name = ?",
+				["todos"],
+			);
+			expect(cursorResult.ok).toBe(true);
+			if (!cursorResult.ok) return;
+			expect(cursorResult.value).toHaveLength(1);
+			expect(cursorResult.value[0]?.last_synced_hlc).toBe(remoteHlc.toString());
+		});
+	});
+
 	it("multiple deltas across different tables", async () => {
 		// Register a second table
 		const notesSchema: TableSchema = {

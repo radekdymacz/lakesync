@@ -1,8 +1,9 @@
 import type { LakeAdapter } from "@lakesync/adapter";
-import type { DeltaOp, HLCTimestamp, Result, RowDelta } from "@lakesync/core";
+import type { DeltaOp, HLCTimestamp, Result, RowDelta, TableSchema } from "@lakesync/core";
 import { AdapterError, Err, HLC, Ok } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
 import { SyncGateway } from "../gateway";
+import { SchemaManager } from "../schema-manager";
 import type { GatewayConfig } from "../types";
 
 /** Helper to build a RowDelta with sensible defaults */
@@ -514,5 +515,185 @@ describe("SyncGateway", () => {
 
 		// Log should still have only 1 entry (not duplicated)
 		expect(gw.bufferStats.logSize).toBe(1);
+	});
+
+	it("flush resets flushing flag when adapter throws", async () => {
+		// Create an adapter whose putObject THROWS (not returns Err)
+		const throwingAdapter: LakeAdapter = {
+			...createMockAdapter(),
+			async putObject(): Promise<Result<void, AdapterError>> {
+				throw new Error("Unexpected adapter explosion");
+			},
+		};
+		const gw = new SyncGateway(defaultConfig, throwingAdapter);
+
+		const delta = makeDelta({ hlc: hlcLow, deltaId: "delta-throw" });
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta],
+			lastSeenHlc: hlcLow,
+		});
+
+		// First flush should catch the throw and return Err
+		const result1 = await gw.flush();
+		expect(result1.ok).toBe(false);
+
+		// Push another delta and flush again — must NOT be stuck on "already in progress"
+		const delta2 = makeDelta({ hlc: hlcMid, deltaId: "delta-after-throw" });
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta2],
+			lastSeenHlc: hlcMid,
+		});
+
+		const result2 = await gw.flush();
+		// The second flush should attempt the adapter again, not return "already in progress"
+		expect(result2.ok).toBe(false);
+		if (!result2.ok) {
+			expect(result2.error.message).not.toContain("already in progress");
+		}
+	});
+
+	it("concurrent flush returns already-in-progress", async () => {
+		// Create a slow adapter whose putObject resolves after a delay
+		const slowAdapter: LakeAdapter = {
+			...createMockAdapter(),
+			async putObject(
+				path: string,
+				data: Uint8Array,
+			): Promise<Result<void, AdapterError>> {
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				return Ok(undefined);
+			},
+		};
+		const gw = new SyncGateway(defaultConfig, slowAdapter);
+
+		const delta = makeDelta({ hlc: hlcLow, deltaId: "delta-slow" });
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta],
+			lastSeenHlc: hlcLow,
+		});
+
+		// Start flush (will be delayed by 100ms)
+		const flush1 = gw.flush();
+
+		// Immediately call flush again while first is in progress
+		const flush2 = await gw.flush();
+
+		expect(flush2.ok).toBe(false);
+		if (!flush2.ok) {
+			expect(flush2.error.message).toContain("already in progress");
+		}
+
+		// Wait for the first flush to complete
+		const result1 = await flush1;
+		expect(result1.ok).toBe(true);
+	});
+
+	it("concurrent pushes to same row resolve via LWW", () => {
+		const gw = new SyncGateway(defaultConfig);
+
+		// Client-a pushes with a low HLC
+		const deltaA = makeDelta({
+			hlc: hlcLow,
+			rowId: "row-1",
+			clientId: "client-a",
+			deltaId: "delta-a-low",
+			columns: [{ column: "title", value: "Value from A" }],
+		});
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [deltaA],
+			lastSeenHlc: hlcLow,
+		});
+
+		// Client-b pushes with a high HLC to the same row
+		const deltaB = makeDelta({
+			hlc: hlcHigh,
+			rowId: "row-1",
+			clientId: "client-b",
+			deltaId: "delta-b-high",
+			columns: [{ column: "title", value: "Value from B" }],
+		});
+		gw.handlePush({
+			clientId: "client-b",
+			deltas: [deltaB],
+			lastSeenHlc: hlcHigh,
+		});
+
+		// Both deltas should be in the log
+		expect(gw.bufferStats.logSize).toBe(2);
+
+		// Index should reflect a single row (LWW-resolved)
+		expect(gw.bufferStats.indexSize).toBe(1);
+
+		// Pull from a third client — the latest delta (hlcHigh) should be present
+		const zeroHlc = HLC.encode(0, 0);
+		const pullResult = gw.handlePull({
+			clientId: "client-c",
+			sinceHlc: zeroHlc,
+			maxDeltas: 100,
+		});
+
+		expect(pullResult.ok).toBe(true);
+		if (pullResult.ok) {
+			// Log contains both deltas
+			expect(pullResult.value.deltas).toHaveLength(2);
+			// The higher-HLC delta from client-b should be present
+			const hasBDelta = pullResult.value.deltas.some(
+				(d) => d.deltaId === "delta-b-high",
+			);
+			expect(hasBDelta).toBe(true);
+		}
+	});
+
+	it("handlePush returns schema error mid-batch but earlier deltas remain in buffer", () => {
+		const schema: TableSchema = {
+			table: "todos",
+			columns: [{ name: "title", type: "string" }],
+		};
+		const schemaManager = new SchemaManager(schema);
+
+		const config: GatewayConfig = {
+			...defaultConfig,
+			schemaManager,
+		};
+		const gw = new SyncGateway(config);
+
+		// Three deltas: first two have valid "title" column, third has unknown "invalid_col"
+		const d1 = makeDelta({
+			hlc: hlcLow,
+			rowId: "row-1",
+			deltaId: "delta-valid-1",
+			columns: [{ column: "title", value: "Valid 1" }],
+		});
+		const d2 = makeDelta({
+			hlc: hlcMid,
+			rowId: "row-2",
+			deltaId: "delta-valid-2",
+			columns: [{ column: "title", value: "Valid 2" }],
+		});
+		const d3 = makeDelta({
+			hlc: hlcHigh,
+			rowId: "row-3",
+			deltaId: "delta-bad",
+			columns: [{ column: "invalid_col", value: "Boom" }],
+		});
+
+		const result = gw.handlePush({
+			clientId: "client-a",
+			deltas: [d1, d2, d3],
+			lastSeenHlc: hlcLow,
+		});
+
+		// Push should return Err with a SchemaError
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.code).toBe("SCHEMA_MISMATCH");
+		}
+
+		// The first two valid deltas should still be in the buffer
+		expect(gw.bufferStats.logSize).toBe(2);
 	});
 });

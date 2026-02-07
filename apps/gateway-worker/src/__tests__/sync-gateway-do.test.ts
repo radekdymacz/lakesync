@@ -57,6 +57,7 @@ vi.mock("../r2-adapter", () => {
 
 // Import after all mocks are set up
 import { SyncGatewayDO } from "../sync-gateway-do";
+import { decodeSyncPush, decodeSyncPull, encodeSyncResponse } from "@lakesync/proto";
 
 /**
  * Create a mock DurableObject context with storage alarm support.
@@ -459,6 +460,273 @@ describe("SyncGatewayDO", () => {
 					delete g.WebSocketPair;
 				}
 			}
+		});
+	});
+
+	describe("webSocketMessage", () => {
+		it("text frame closes with 1003", async () => {
+			resetGatewayMocks();
+			const DO = createDO();
+			const mockWs = { close: vi.fn(), send: vi.fn() } as unknown as WebSocket;
+
+			await DO.webSocketMessage(mockWs, "hello text");
+
+			expect(mockWs.close).toHaveBeenCalledWith(1003, "Binary frames only");
+		});
+
+		it("short message closes with 1002", async () => {
+			resetGatewayMocks();
+			const DO = createDO();
+			const mockWs = { close: vi.fn(), send: vi.fn() } as unknown as WebSocket;
+
+			await DO.webSocketMessage(mockWs, new Uint8Array([0x01]).buffer);
+
+			expect(mockWs.close).toHaveBeenCalledWith(1002, "Message too short");
+		});
+
+		it("unknown tag closes with 1002", async () => {
+			resetGatewayMocks();
+			const DO = createDO();
+			const mockWs = { close: vi.fn(), send: vi.fn() } as unknown as WebSocket;
+
+			await DO.webSocketMessage(mockWs, new Uint8Array([0xff, 0x00]).buffer);
+
+			expect(mockWs.close).toHaveBeenCalledWith(
+				1002,
+				expect.stringContaining("Unknown message tag"),
+			);
+		});
+
+		it("tag 0x01 delegates to decodeSyncPush and handlePush", async () => {
+			resetGatewayMocks();
+			const DO = createDO();
+			const mockWs = { close: vi.fn(), send: vi.fn() } as unknown as WebSocket;
+
+			const mockedDecodeSyncPush = vi.mocked(decodeSyncPush);
+			mockedDecodeSyncPush.mockReturnValue({
+				ok: true,
+				value: {
+					clientId: "client-1",
+					deltas: [],
+					lastSeenHlc: BigInt(0) as never,
+				},
+			});
+
+			mockHandlePush.mockReturnValue({
+				ok: true,
+				value: { accepted: 0, serverHlc: BigInt(100) },
+			});
+
+			const mockedEncodeSyncResponse = vi.mocked(encodeSyncResponse);
+			mockedEncodeSyncResponse.mockReturnValue({
+				ok: true,
+				value: new Uint8Array([0xaa, 0xbb]),
+			});
+
+			const payload = new Uint8Array([0x01, 0x10, 0x20]);
+			await DO.webSocketMessage(mockWs, payload.buffer);
+
+			expect(mockedDecodeSyncPush).toHaveBeenCalled();
+			expect(mockHandlePush).toHaveBeenCalled();
+			expect(mockWs.send).toHaveBeenCalled();
+		});
+
+		it("tag 0x02 delegates to decodeSyncPull and handlePull", async () => {
+			resetGatewayMocks();
+			const DO = createDO();
+			const mockWs = { close: vi.fn(), send: vi.fn() } as unknown as WebSocket;
+
+			const mockedDecodeSyncPull = vi.mocked(decodeSyncPull);
+			mockedDecodeSyncPull.mockReturnValue({
+				ok: true,
+				value: {
+					clientId: "client-1",
+					sinceHlc: BigInt(0) as never,
+					maxDeltas: 100,
+				},
+			});
+
+			mockHandlePull.mockReturnValue({
+				ok: true,
+				value: {
+					deltas: [],
+					serverHlc: BigInt(100),
+					hasMore: false,
+				},
+			});
+
+			const mockedEncodeSyncResponse = vi.mocked(encodeSyncResponse);
+			mockedEncodeSyncResponse.mockReturnValue({
+				ok: true,
+				value: new Uint8Array([0xcc, 0xdd]),
+			});
+
+			const payload = new Uint8Array([0x02, 0x10, 0x20]);
+			await DO.webSocketMessage(mockWs, payload.buffer);
+
+			expect(mockedDecodeSyncPull).toHaveBeenCalled();
+			expect(mockHandlePull).toHaveBeenCalled();
+			expect(mockWs.send).toHaveBeenCalled();
+		});
+	});
+
+	describe("alarm flush lifecycle", () => {
+		/**
+		 * Helper: create a DO with an explicit mock context so we can
+		 * inspect setAlarm calls in alarm tests.
+		 */
+		function createDOWithCtx(): {
+			DO: SyncGatewayDO;
+			ctx: ReturnType<typeof createMockCtx>;
+		} {
+			const ctx = createMockCtx();
+			const env = createMockEnv();
+			const DO = new SyncGatewayDO(
+				ctx as unknown as DurableObjectState,
+				env as unknown as never,
+			);
+			return { DO, ctx };
+		}
+
+		it("alarm skips when buffer is empty", async () => {
+			resetGatewayMocks();
+			mockBufferStats.logSize = 0;
+
+			const { DO, ctx } = createDOWithCtx();
+			await DO.alarm();
+
+			expect(mockFlush).not.toHaveBeenCalled();
+			expect(ctx.storage.setAlarm).not.toHaveBeenCalled();
+		});
+
+		it("alarm flushes when buffer has data", async () => {
+			resetGatewayMocks();
+			mockBufferStats.logSize = 5;
+
+			mockFlush.mockImplementation(async () => {
+				mockBufferStats.logSize = 0;
+				return { ok: true, value: undefined };
+			});
+
+			const { DO, ctx } = createDOWithCtx();
+			await DO.alarm();
+
+			expect(mockFlush).toHaveBeenCalledOnce();
+			expect(ctx.storage.setAlarm).not.toHaveBeenCalled();
+		});
+
+		it("alarm reschedules with backoff on flush failure", async () => {
+			resetGatewayMocks();
+			mockBufferStats.logSize = 5;
+
+			mockFlush.mockResolvedValue({
+				ok: false,
+				error: { message: "Adapter error" },
+			});
+
+			const { DO, ctx } = createDOWithCtx();
+			const now = Date.now();
+			await DO.alarm();
+
+			expect(ctx.storage.setAlarm).toHaveBeenCalledOnce();
+			const alarmTime = ctx.storage.setAlarm.mock.calls[0]![0] as number;
+			// First failure: backoff = BASE_RETRY_BACKOFF_MS * 2^0 = 1000ms
+			const delta = alarmTime - now;
+			expect(delta).toBeGreaterThanOrEqual(1000);
+			expect(delta).toBeLessThanOrEqual(1100);
+		});
+
+		it("alarm backoff increases exponentially on repeated failures", async () => {
+			resetGatewayMocks();
+			mockBufferStats.logSize = 5;
+
+			mockFlush.mockResolvedValue({
+				ok: false,
+				error: { message: "Adapter error" },
+			});
+
+			const { DO, ctx } = createDOWithCtx();
+
+			// Call alarm 3 times to accumulate backoff
+			const timestamps: number[] = [];
+			for (let i = 0; i < 3; i++) {
+				const now = Date.now();
+				await DO.alarm();
+				const alarmTime = ctx.storage.setAlarm.mock.calls[i]![0] as number;
+				timestamps.push(alarmTime - now);
+			}
+
+			// Expected backoffs: ~1000ms, ~2000ms, ~4000ms
+			expect(timestamps[0]).toBeGreaterThanOrEqual(1000);
+			expect(timestamps[0]).toBeLessThanOrEqual(1100);
+			expect(timestamps[1]).toBeGreaterThanOrEqual(2000);
+			expect(timestamps[1]).toBeLessThanOrEqual(2100);
+			expect(timestamps[2]).toBeGreaterThanOrEqual(4000);
+			expect(timestamps[2]).toBeLessThanOrEqual(4100);
+		});
+
+		it("alarm resets backoff after success", async () => {
+			resetGatewayMocks();
+			mockBufferStats.logSize = 5;
+
+			mockFlush.mockResolvedValue({
+				ok: false,
+				error: { message: "Adapter error" },
+			});
+
+			const { DO, ctx } = createDOWithCtx();
+
+			// Fail twice to reach 2s backoff
+			await DO.alarm();
+			await DO.alarm();
+
+			// Succeed — this should reset the backoff counter
+			mockFlush.mockImplementation(async () => {
+				mockBufferStats.logSize = 0;
+				return { ok: true, value: undefined };
+			});
+			await DO.alarm();
+
+			// Fail again — backoff should be back to 1s, not 4s
+			mockBufferStats.logSize = 5;
+			mockFlush.mockResolvedValue({
+				ok: false,
+				error: { message: "Adapter error" },
+			});
+			const now = Date.now();
+			await DO.alarm();
+
+			// The last setAlarm call should show ~1000ms backoff (reset)
+			const lastCall = ctx.storage.setAlarm.mock.calls.at(-1)!;
+			const alarmTime = lastCall[0] as number;
+			const delta = alarmTime - now;
+			expect(delta).toBeGreaterThanOrEqual(1000);
+			expect(delta).toBeLessThanOrEqual(1100);
+		});
+
+		it("alarm reschedules immediately when buffer still has data after flush", async () => {
+			resetGatewayMocks();
+			mockBufferStats.logSize = 5;
+
+			mockFlush.mockImplementation(async () => {
+				// Simulate more data arriving during flush
+				mockBufferStats.logSize = 3;
+				return { ok: true, value: undefined };
+			});
+
+			const { DO, ctx } = createDOWithCtx();
+			const now = Date.now();
+			await DO.alarm();
+
+			expect(mockFlush).toHaveBeenCalledOnce();
+			expect(ctx.storage.setAlarm).toHaveBeenCalledOnce();
+
+			// Should reschedule with Date.now() (immediate)
+			const alarmTime = ctx.storage.setAlarm.mock.calls[0]![0] as number;
+			const delta = alarmTime - now;
+			// Date.now() is essentially immediate — allow up to 50ms tolerance
+			expect(delta).toBeGreaterThanOrEqual(0);
+			expect(delta).toBeLessThanOrEqual(50);
 		});
 	});
 

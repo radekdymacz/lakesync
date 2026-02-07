@@ -233,6 +233,98 @@ describe("HttpTransport", () => {
 		});
 	});
 
+	describe("malformed response body", () => {
+		it("returns Err when server returns invalid JSON on 200", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: () => Promise.resolve("not json {{{"),
+			});
+			const transport = createTransport(mockFetch);
+
+			const pushMsg: SyncPush = {
+				clientId: "client-1",
+				deltas: [],
+				lastSeenHlc: TEST_HLC,
+			};
+
+			const result = await transport.push(pushMsg);
+
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.error.code).toBe("TRANSPORT_ERROR");
+		});
+
+		it("returns Err when bigintReviver fails on invalid HLC string", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: () =>
+					Promise.resolve(
+						JSON.stringify({ serverHlc: "not-a-number", accepted: 1 }),
+					),
+			});
+			const transport = createTransport(mockFetch);
+
+			const pushMsg: SyncPush = {
+				clientId: "client-1",
+				deltas: [],
+				lastSeenHlc: TEST_HLC,
+			};
+
+			const result = await transport.push(pushMsg);
+
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.error.code).toBe("TRANSPORT_ERROR");
+		});
+
+		it("returns Err when pull response has invalid JSON on 200", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: () => Promise.resolve("not json {{{"),
+			});
+			const transport = createTransport(mockFetch);
+
+			const pullMsg: SyncPull = {
+				clientId: "client-1",
+				sinceHlc: TEST_HLC,
+				maxDeltas: 100,
+			};
+
+			const result = await transport.pull(pullMsg);
+
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.error.code).toBe("TRANSPORT_ERROR");
+		});
+	});
+
+	describe("response.text() failure", () => {
+		it("returns Err when response.text() rejects on error path", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: false,
+				status: 500,
+				text: () => Promise.reject(new Error("body stream interrupted")),
+			});
+			const transport = createTransport(mockFetch);
+
+			const pushMsg: SyncPush = {
+				clientId: "client-1",
+				deltas: [],
+				lastSeenHlc: TEST_HLC,
+			};
+
+			const result = await transport.push(pushMsg);
+
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.error.code).toBe("TRANSPORT_ERROR");
+			expect(result.error.message).toContain("Unknown error");
+		});
+	});
+
 	describe("BigInt serialisation", () => {
 		it("serialises bigint HLC values as strings in push request body", async () => {
 			const mockFetch = createMockFetch({
