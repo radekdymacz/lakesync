@@ -6,7 +6,6 @@ import type {
 	SyncPush,
 	SyncResponse,
 } from "@lakesync/core";
-import { Err, Ok } from "@lakesync/core";
 import type { SyncTransport } from "./transport";
 
 /**
@@ -35,15 +34,11 @@ export class LocalTransport implements SyncTransport {
 	async push(
 		msg: SyncPush,
 	): Promise<Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>> {
-		const result = this.gateway.handlePush(msg);
-		if (!result.ok) return Err(result.error);
-		return Ok(result.value);
+		return this.gateway.handlePush(msg);
 	}
 
 	/** Pull remote deltas from the in-process gateway */
 	async pull(msg: SyncPull): Promise<Result<SyncResponse, LakeSyncError>> {
-		const result = this.gateway.handlePull(msg);
-		if (!result.ok) return Err(result.error);
-		return Ok(result.value);
+		return this.gateway.handlePull(msg);
 	}
 }

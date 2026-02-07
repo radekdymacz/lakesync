@@ -1,6 +1,6 @@
 import type { Result } from "@lakesync/core";
 import { Err, Ok } from "@lakesync/core";
-import type { Database } from "sql.js";
+import type { Database, QueryExecResult } from "sql.js";
 import initSqlJs from "sql.js";
 import { loadSnapshot, saveSnapshot } from "./idb-persistence";
 import type { DbConfig, Transaction } from "./types";
@@ -8,6 +8,24 @@ import { DbError } from "./types";
 
 /** Resolved storage backend after auto-detection */
 type ResolvedBackend = "idb" | "memory";
+
+/** Map sql.js query results into typed row objects */
+function mapResultRows<T>(results: QueryExecResult[]): T[] {
+	if (results.length === 0 || !results[0]) {
+		return [];
+	}
+	const { columns, values } = results[0];
+	return values.map((row) => {
+		const obj: Record<string, unknown> = {};
+		for (let i = 0; i < columns.length; i++) {
+			const col = columns[i];
+			if (col !== undefined) {
+				obj[col] = row[i];
+			}
+		}
+		return obj as T;
+	});
+}
 
 /**
  * Local SQLite database backed by sql.js (SQLite compiled to WASM).
@@ -97,25 +115,7 @@ export class LocalDB {
 	async query<T>(sql: string, params?: unknown[]): Promise<Result<T[], DbError>> {
 		try {
 			const results = this.#db.exec(sql, params as Parameters<Database["exec"]>[1]);
-			if (results.length === 0) {
-				return Ok([]);
-			}
-			const first = results[0];
-			if (!first) {
-				return Ok([]);
-			}
-			const { columns, values } = first;
-			const rows = values.map((row) => {
-				const obj: Record<string, unknown> = {};
-				for (let i = 0; i < columns.length; i++) {
-					const col = columns[i];
-					if (col !== undefined) {
-						obj[col] = row[i];
-					}
-				}
-				return obj as T;
-			});
-			return Ok(rows);
+			return Ok(mapResultRows<T>(results));
 		} catch (err) {
 			return Err(
 				new DbError(
@@ -217,25 +217,7 @@ export class LocalDB {
 			query<T>(sql: string, params?: unknown[]): Result<T[], DbError> {
 				try {
 					const results = db.exec(sql, params as Parameters<Database["exec"]>[1]);
-					if (results.length === 0) {
-						return Ok([]);
-					}
-					const first = results[0];
-					if (!first) {
-						return Ok([]);
-					}
-					const { columns, values } = first;
-					const rows = values.map((row) => {
-						const obj: Record<string, unknown> = {};
-						for (let i = 0; i < columns.length; i++) {
-							const col = columns[i];
-							if (col !== undefined) {
-								obj[col] = row[i];
-							}
-						}
-						return obj as T;
-					});
-					return Ok(rows);
+					return Ok(mapResultRows<T>(results));
 				} catch (err) {
 					return Err(
 						new DbError(

@@ -22,7 +22,8 @@ const mockFlush = vi.fn();
 const mockShouldFlush = vi.fn();
 const mockBufferStats = { logSize: 0, byteSize: 0, indexSize: 0 };
 
-vi.mock("@lakesync/gateway", () => {
+vi.mock("@lakesync/gateway", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@lakesync/gateway")>();
 	class MockSyncGateway {
 		handlePush = mockHandlePush;
 		handlePull = mockHandlePull;
@@ -32,7 +33,10 @@ vi.mock("@lakesync/gateway", () => {
 			return mockBufferStats;
 		}
 	}
-	return { SyncGateway: MockSyncGateway };
+	return {
+		...actual,
+		SyncGateway: MockSyncGateway,
+	};
 });
 
 // ── Mock @lakesync/proto ──────────────────────────────────────────────

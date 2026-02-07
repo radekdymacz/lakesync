@@ -107,16 +107,12 @@ export async function getSchema(
 
 	if (!queryResult.ok) return queryResult;
 
-	const rows = queryResult.value;
-	if (rows.length === 0) {
+	const firstRow = queryResult.value[0];
+	if (!firstRow) {
 		return Ok(null);
 	}
 
 	try {
-		const firstRow = rows[0];
-		if (!firstRow) {
-			return Ok(null);
-		}
 		const schema = JSON.parse(firstRow.schema_json) as TableSchema;
 		return Ok(schema);
 	} catch (err) {

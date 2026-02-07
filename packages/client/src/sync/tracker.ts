@@ -5,6 +5,17 @@ import { getSchema } from "../db/schema-registry";
 import type { DbError } from "../db/types";
 import type { SyncQueue } from "../queue/types";
 
+/** Extract column values from a row, excluding the internal `_rowId` key. */
+function rowWithoutId(row: Record<string, unknown>): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(row)) {
+		if (key !== "_rowId") {
+			result[key] = value;
+		}
+	}
+	return result;
+}
+
 /**
  * Tracks local mutations (insert, update, delete) and produces
  * column-level deltas that are pushed to a SyncQueue.
@@ -106,15 +117,7 @@ export class SyncTracker {
 			);
 		}
 
-		const currentRow = rows[0];
-
-		// Build the before state excluding _rowId (not a user column)
-		const before: Record<string, unknown> = {};
-		for (const [key, value] of Object.entries(currentRow)) {
-			if (key !== "_rowId") {
-				before[key] = value;
-			}
-		}
+		const before = rowWithoutId(rows[0]);
 
 		// Build SET clause from data keys
 		const columns = Object.keys(data);
@@ -176,15 +179,7 @@ export class SyncTracker {
 			);
 		}
 
-		const currentRow = rows[0];
-
-		// Build the before state excluding _rowId
-		const before: Record<string, unknown> = {};
-		for (const [key, value] of Object.entries(currentRow)) {
-			if (key !== "_rowId") {
-				before[key] = value;
-			}
-		}
+		const before = rowWithoutId(rows[0]);
 
 		// Delete the row
 		const execResult = await this.db.exec(`DELETE FROM ${table} WHERE _rowId = ?`, [rowId]);

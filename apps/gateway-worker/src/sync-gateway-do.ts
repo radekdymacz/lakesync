@@ -1,6 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import type { HLCTimestamp, TableSchema } from "@lakesync/core";
-import { SyncGateway, type SyncPull, type SyncPush, type SyncResponse } from "@lakesync/gateway";
+import {
+	bigintReplacer,
+	bigintReviver,
+	SyncGateway,
+	type SyncPull,
+	type SyncPush,
+	type SyncResponse,
+} from "@lakesync/gateway";
 import {
 	type CodecError,
 	decodeSyncPull,
@@ -9,33 +16,6 @@ import {
 } from "@lakesync/proto";
 import type { Env } from "./env";
 import { R2Adapter } from "./r2-adapter";
-
-// ---------------------------------------------------------------------------
-// JSON helpers
-// ---------------------------------------------------------------------------
-
-/**
- * BigInt-safe JSON replacer.
- *
- * Converts BigInt values to strings so they survive `JSON.stringify`,
- * which otherwise throws on BigInt.
- */
-function bigintReplacer(_key: string, value: unknown): unknown {
-	return typeof value === "bigint" ? value.toString() : value;
-}
-
-/**
- * BigInt-aware JSON reviver.
- *
- * Restores string-encoded HLC timestamps (fields ending in `Hlc` or `hlc`)
- * back to BigInt so they match the branded `HLCTimestamp` type.
- */
-function bigintReviver(key: string, value: unknown): unknown {
-	if (typeof value === "string" && /hlc$/i.test(key)) {
-		return BigInt(value);
-	}
-	return value;
-}
 
 // ---------------------------------------------------------------------------
 // Response factories
@@ -368,13 +348,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				return;
 			}
 
-			const pushMsg: SyncPush = {
-				clientId: decoded.value.clientId,
-				deltas: decoded.value.deltas,
-				lastSeenHlc: decoded.value.lastSeenHlc,
-			};
-
-			const pushResult = gateway.handlePush(pushMsg);
+			const pushResult = gateway.handlePush(decoded.value);
 			if (!pushResult.ok) {
 				this.sendProtoError(ws, pushResult.error);
 				return;
@@ -398,13 +372,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				return;
 			}
 
-			const pullMsg: SyncPull = {
-				clientId: decoded.value.clientId,
-				sinceHlc: decoded.value.sinceHlc,
-				maxDeltas: decoded.value.maxDeltas,
-			};
-
-			const pullResult = gateway.handlePull(pullMsg);
+			const pullResult = gateway.handlePull(decoded.value);
 			if (!pullResult.ok) {
 				this.sendProtoError(ws, pullResult.error);
 				return;
@@ -507,11 +475,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 
 	/** Encode and send a `SyncResponse` over the WebSocket as binary. */
 	private sendSyncResponse(ws: WebSocket, response: SyncResponse): void {
-		const encoded = encodeSyncResponse({
-			deltas: response.deltas,
-			serverHlc: response.serverHlc,
-			hasMore: response.hasMore,
-		});
+		const encoded = encodeSyncResponse(response);
 
 		if (!encoded.ok) {
 			ws.close(1011, "Failed to encode response");

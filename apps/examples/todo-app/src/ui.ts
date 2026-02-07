@@ -1,13 +1,5 @@
 import type { SyncCoordinator } from "@lakesync/client";
-
-/** Todo row shape returned from SQLite queries */
-interface Todo {
-	_rowId: string;
-	title: string;
-	completed: number;
-	created_at: string;
-	updated_at: string;
-}
+import type { Todo } from "./db";
 
 /** Wire up DOM event handlers and rendering */
 export function setupUI(coordinator: SyncCoordinator): void {
