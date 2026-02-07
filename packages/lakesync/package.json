@@ -1,0 +1,75 @@
+{
+	"name": "lakesync",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Offline-first sync engine that writes column-level deltas to an Apache Iceberg data lake",
+	"license": "Apache-2.0",
+	"files": ["dist"],
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./client": {
+			"types": "./dist/client.d.ts",
+			"import": "./dist/client.js"
+		},
+		"./gateway": {
+			"types": "./dist/gateway.d.ts",
+			"import": "./dist/gateway.js"
+		},
+		"./adapter": {
+			"types": "./dist/adapter.d.ts",
+			"import": "./dist/adapter.js"
+		},
+		"./proto": {
+			"types": "./dist/proto.d.ts",
+			"import": "./dist/proto.js"
+		},
+		"./parquet": {
+			"types": "./dist/parquet.d.ts",
+			"import": "./dist/parquet.js"
+		},
+		"./catalogue": {
+			"types": "./dist/catalogue.d.ts",
+			"import": "./dist/catalogue.js"
+		},
+		"./compactor": {
+			"types": "./dist/compactor.d.ts",
+			"import": "./dist/compactor.js"
+		},
+		"./analyst": {
+			"types": "./dist/analyst.d.ts",
+			"import": "./dist/analyst.js"
+		}
+	},
+	"scripts": {
+		"build": "tsup",
+		"typecheck": "tsc --noEmit",
+		"prepublishOnly": "tsup"
+	},
+	"dependencies": {
+		"fast-json-stable-stringify": "^2.1.0",
+		"fast-deep-equal": "^3.1.3"
+	},
+	"peerDependencies": {
+		"sql.js": "^1.11.0",
+		"idb": "^8.0.3",
+		"@aws-sdk/client-s3": "^3.0.0",
+		"@bufbuild/protobuf": "^2.0.0",
+		"parquet-wasm": "^0.7.0",
+		"apache-arrow": "^18.0.0",
+		"@duckdb/duckdb-wasm": "^1.33.0"
+	},
+	"peerDependenciesMeta": {
+		"sql.js": { "optional": true },
+		"idb": { "optional": true },
+		"@aws-sdk/client-s3": { "optional": true },
+		"@bufbuild/protobuf": { "optional": true },
+		"parquet-wasm": { "optional": true },
+		"apache-arrow": { "optional": true },
+		"@duckdb/duckdb-wasm": { "optional": true }
+	}
+}

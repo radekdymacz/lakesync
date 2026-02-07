@@ -1,0 +1,31 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"rootDir": "../..",
+		"outDir": "dist",
+		"lib": ["ES2022", "DOM"],
+		"paths": {
+			"@lakesync/core": ["../core/src/index.ts"],
+			"@lakesync/client": ["../client/src/index.ts"],
+			"@lakesync/gateway": ["../gateway/src/index.ts"],
+			"@lakesync/adapter": ["../adapter/src/index.ts"],
+			"@lakesync/proto": ["../proto/src/index.ts"],
+			"@lakesync/parquet": ["../parquet/src/index.ts"],
+			"@lakesync/catalogue": ["../catalogue/src/index.ts"],
+			"@lakesync/compactor": ["../compactor/src/index.ts"],
+			"@lakesync/analyst": ["../analyst/src/index.ts"]
+		}
+	},
+	"include": [
+		"src",
+		"../core/src",
+		"../client/src",
+		"../gateway/src",
+		"../adapter/src",
+		"../proto/src",
+		"../parquet/src",
+		"../catalogue/src",
+		"../compactor/src",
+		"../analyst/src"
+	]
+}
