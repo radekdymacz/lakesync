@@ -45,3 +45,8 @@ export class AdapterError extends LakeSyncError {
 		super(message, "ADAPTER_ERROR", cause);
 	}
 }
+
+/** Coerce an unknown thrown value into an Error instance. */
+export function toError(err: unknown): Error {
+	return err instanceof Error ? err : new Error(String(err));
+}

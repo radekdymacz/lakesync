@@ -1,8 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
+import { bigintReplacer, bigintReviver } from "@lakesync/core";
 import type { HLCTimestamp, TableSchema } from "@lakesync/core";
 import {
-	bigintReplacer,
-	bigintReviver,
 	SyncGateway,
 	type SyncPull,
 	type SyncPush,
@@ -49,6 +48,21 @@ const MAX_RETRY_BACKOFF_MS = 30_000;
 
 /** Base backoff delay for flush retries (1 second). */
 const BASE_RETRY_BACKOFF_MS = 1_000;
+
+/** Maximum push payload size (1 MiB). */
+const MAX_PUSH_PAYLOAD_BYTES = 1_048_576;
+
+/** Maximum number of deltas allowed in a single push. */
+const MAX_DELTAS_PER_PUSH = 10_000;
+
+/** Maximum number of deltas returned in a single pull. */
+const MAX_PULL_LIMIT = 10_000;
+
+/** Default number of deltas returned in a pull when no limit is specified. */
+const DEFAULT_PULL_LIMIT = 100;
+
+/** Allowed column types for schema validation. */
+const VALID_COLUMN_TYPES = new Set(["string", "number", "boolean", "json", "null"]);
 
 // ---------------------------------------------------------------------------
 // SyncGatewayDO
@@ -174,7 +188,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		}
 
 		const contentLength = Number(request.headers.get("Content-Length") ?? "0");
-		if (contentLength > 1_048_576) {
+		if (contentLength > MAX_PUSH_PAYLOAD_BYTES) {
 			return errorResponse("Payload too large (max 1 MiB)", 413);
 		}
 
@@ -198,7 +212,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			);
 		}
 
-		if (body.deltas.length > 10_000) {
+		if (body.deltas.length > MAX_DELTAS_PER_PUSH) {
 			return errorResponse("Too many deltas in a single push (max 10,000)", 400);
 		}
 
@@ -245,10 +259,11 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			return errorResponse("Invalid 'since' parameter — must be a decimal integer", 400);
 		}
 
-		const maxDeltas = limitParam ? Number.parseInt(limitParam, 10) : 100;
-		if (Number.isNaN(maxDeltas) || maxDeltas < 1) {
+		const rawLimit = limitParam ? Number.parseInt(limitParam, 10) : DEFAULT_PULL_LIMIT;
+		if (Number.isNaN(rawLimit) || rawLimit < 1) {
 			return errorResponse("Invalid 'limit' parameter — must be a positive integer", 400);
 		}
+		const maxDeltas = Math.min(rawLimit, MAX_PULL_LIMIT);
 
 		const msg: SyncPull = { clientId, sinceHlc, maxDeltas };
 		const gateway = await this.getGateway();
@@ -300,6 +315,18 @@ export class SyncGatewayDO extends DurableObject<Env> {
 
 		if (!schema.table || !Array.isArray(schema.columns)) {
 			return errorResponse("Missing required fields: table, columns", 400);
+		}
+
+		for (const col of schema.columns) {
+			if (typeof col.name !== "string" || col.name.length === 0) {
+				return errorResponse("Each column must have a non-empty 'name' string", 400);
+			}
+			if (!VALID_COLUMN_TYPES.has(col.type)) {
+				return errorResponse(
+					`Invalid column type "${col.type}" for column "${col.name}". Allowed: string, number, boolean, json, null`,
+					400,
+				);
+			}
 		}
 
 		await this.saveTableSchema(schema);
@@ -358,10 +385,20 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		const gateway = await this.getGateway();
 
 		if (tag === 0x01) {
-			// SyncPush
+			// SyncPush — validate payload size before decoding
+			if (payload.byteLength > MAX_PUSH_PAYLOAD_BYTES) {
+				ws.close(1009, "Payload too large (max 1 MiB)");
+				return;
+			}
+
 			const decoded = decodeSyncPush(payload);
 			if (!decoded.ok) {
 				this.sendProtoError(ws, decoded.error);
+				return;
+			}
+
+			if (decoded.value.deltas.length > MAX_DELTAS_PER_PUSH) {
+				ws.close(1008, "Too many deltas in a single push (max 10,000)");
 				return;
 			}
 

@@ -8,4 +8,6 @@ export interface Env {
 	NESSIE_URI: string;
 	/** JWT secret for authentication (set via wrangler secret) */
 	JWT_SECRET: string;
+	/** Optional comma-separated list of allowed CORS origins */
+	ALLOWED_ORIGINS?: string;
 }

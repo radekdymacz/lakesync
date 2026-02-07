@@ -5,6 +5,7 @@ export {
 	FlushError,
 	LakeSyncError,
 	SchemaError,
+	toError,
 } from "./errors";
 export {
 	Err,

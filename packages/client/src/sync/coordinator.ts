@@ -131,35 +131,28 @@ export class SyncCoordinator {
 	 */
 	startAutoSync(): void {
 		this.syncIntervalId = setInterval(() => {
-			if (this.syncing) return;
-			this.syncing = true;
-			void (async () => {
-				try {
-					await this.pullFromGateway();
-					await this.pushToGateway();
-				} finally {
-					this.syncing = false;
-				}
-			})();
+			void this.syncOnce();
 		}, AUTO_SYNC_INTERVAL_MS);
 
 		this.visibilityHandler = () => {
 			if (typeof document !== "undefined" && document.visibilityState === "visible") {
-				if (this.syncing) return;
-				this.syncing = true;
-				void (async () => {
-					try {
-						await this.pullFromGateway();
-						await this.pushToGateway();
-					} finally {
-						this.syncing = false;
-					}
-				})();
+				void this.syncOnce();
 			}
 		};
 
 		if (typeof document !== "undefined") {
 			document.addEventListener("visibilitychange", this.visibilityHandler);
+		}
+	}
+
+	private async syncOnce(): Promise<void> {
+		if (this.syncing) return;
+		this.syncing = true;
+		try {
+			await this.pullFromGateway();
+			await this.pushToGateway();
+		} finally {
+			this.syncing = false;
 		}
 	}
 

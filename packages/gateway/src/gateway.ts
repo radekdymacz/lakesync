@@ -11,6 +11,7 @@ import {
 	FlushError,
 	HLC,
 	type HLCTimestamp,
+	type RowDelta,
 	Ok,
 	type Result,
 	resolveLWW,
@@ -19,6 +20,7 @@ import {
 	type SyncPull,
 	type SyncPush,
 	type SyncResponse,
+	toError,
 } from "@lakesync/core";
 import { writeDeltasToParquet } from "@lakesync/parquet";
 import { DeltaBuffer } from "./buffer";
@@ -44,6 +46,13 @@ export class SyncGateway {
 		this.hlc = new HLC();
 		this.buffer = new DeltaBuffer();
 		this.adapter = adapter ?? null;
+	}
+
+	/** Restore drained entries back to the buffer for retry. */
+	private restoreEntries(entries: RowDelta[]): void {
+		for (const entry of entries) {
+			this.buffer.append(entry);
+		}
 	}
 
 	/**
@@ -177,17 +186,13 @@ export class SyncGateway {
 			} else {
 				// Default: Parquet flush path
 				if (!this.config.tableSchema) {
-					for (const entry of entries) {
-						this.buffer.append(entry);
-					}
+					this.restoreEntries(entries);
 					return Err(new FlushError("tableSchema required for Parquet flush"));
 				}
 
 				const parquetResult = await writeDeltasToParquet(entries, this.config.tableSchema);
 				if (!parquetResult.ok) {
-					for (const entry of entries) {
-						this.buffer.append(entry);
-					}
+					this.restoreEntries(entries);
 					return Err(parquetResult.error);
 				}
 
@@ -200,9 +205,7 @@ export class SyncGateway {
 
 			if (!result.ok) {
 				// Flush failed — restore buffer entries so they can be retried
-				for (const entry of entries) {
-					this.buffer.append(entry);
-				}
+				this.restoreEntries(entries);
 				return Err(new FlushError(`Failed to write flush envelope: ${result.error.message}`));
 			}
 
@@ -214,10 +217,8 @@ export class SyncGateway {
 			return Ok(undefined);
 		} catch (error: unknown) {
 			// Unexpected throw (e.g. adapter threw instead of returning Err) — restore buffer
-			for (const entry of entries) {
-				this.buffer.append(entry);
-			}
-			const message = error instanceof Error ? error.message : String(error);
+			this.restoreEntries(entries);
+			const message = toError(error).message;
 			return Err(new FlushError(`Unexpected flush failure: ${message}`));
 		} finally {
 			this.flushing = false;

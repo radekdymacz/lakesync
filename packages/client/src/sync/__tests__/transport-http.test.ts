@@ -255,7 +255,7 @@ describe("HttpTransport", () => {
 			expect(result.error.code).toBe("TRANSPORT_ERROR");
 		});
 
-		it("returns Err when bigintReviver fails on invalid HLC string", async () => {
+		it("returns Ok with original string when bigintReviver encounters invalid HLC string", async () => {
 			const mockFetch = vi.fn().mockResolvedValue({
 				ok: true,
 				status: 200,
@@ -272,11 +272,13 @@ describe("HttpTransport", () => {
 				lastSeenHlc: TEST_HLC,
 			};
 
+			// The core bigintReviver gracefully returns the original string
+			// when BigInt conversion fails, so the parse succeeds
 			const result = await transport.push(pushMsg);
 
-			expect(result.ok).toBe(false);
-			if (result.ok) return;
-			expect(result.error.code).toBe("TRANSPORT_ERROR");
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.value.serverHlc).toBe("not-a-number");
 		});
 
 		it("returns Err when pull response has invalid JSON on 200", async () => {

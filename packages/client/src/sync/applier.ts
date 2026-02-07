@@ -213,6 +213,21 @@ async function applyOneDelta(
 	return Ok(true);
 }
 
+/** Validate that a delta's table name and all column names are safe identifiers */
+function validateDeltaIdentifiers(delta: RowDelta): Result<void, LakeSyncError> {
+	const tableCheck = assertValidIdentifier(delta.table);
+	if (!tableCheck.ok) {
+		return Err(new LakeSyncError(tableCheck.error.message, "APPLY_ERROR"));
+	}
+	for (const col of delta.columns) {
+		const colCheck = assertValidIdentifier(col.column);
+		if (!colCheck.ok) {
+			return Err(new LakeSyncError(colCheck.error.message, "APPLY_ERROR"));
+		}
+	}
+	return Ok(undefined);
+}
+
 /**
  * Apply a single delta as SQL against the local database.
  *
@@ -228,16 +243,8 @@ async function applySqlDelta(
 	db: LocalDB,
 	delta: RowDelta,
 ): Promise<Result<boolean, LakeSyncError>> {
-	const tableCheck = assertValidIdentifier(delta.table);
-	if (!tableCheck.ok) {
-		return Err(new LakeSyncError(tableCheck.error.message, "APPLY_ERROR"));
-	}
-	for (const col of delta.columns) {
-		const colCheck = assertValidIdentifier(col.column);
-		if (!colCheck.ok) {
-			return Err(new LakeSyncError(colCheck.error.message, "APPLY_ERROR"));
-		}
-	}
+	const identifierCheck = validateDeltaIdentifiers(delta);
+	if (!identifierCheck.ok) return identifierCheck;
 
 	const quotedTable = quoteIdentifier(delta.table);
 

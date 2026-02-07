@@ -140,7 +140,7 @@ describe("Worker fetch handler", () => {
 
 	it("POST /sync/:id/push forwards request to DO stub", async () => {
 		const env = createMockEnv();
-		mockAuthSuccess();
+		mockAuthSuccess("client-1", "gw1");
 
 		// Send without body to avoid `duplex` requirement in non-CF environments.
 		// The handler forwards request.body to the DO stub regardless;
@@ -168,7 +168,7 @@ describe("Worker fetch handler", () => {
 
 	it("GET /sync/:id/pull forwards request to DO stub", async () => {
 		const env = createMockEnv();
-		mockAuthSuccess();
+		mockAuthSuccess("client-1", "gw1");
 
 		const request = new Request("https://api.example.com/sync/gw1/pull?since=0&clientId=client-1", {
 			method: "GET",
@@ -188,7 +188,7 @@ describe("Worker fetch handler", () => {
 
 	it("POST /admin/flush/:id forwards request to DO stub", async () => {
 		const env = createMockEnv();
-		mockAuthSuccess();
+		mockAuthSuccess("client-1", "gw1");
 
 		const request = new Request("https://api.example.com/admin/flush/gw1", {
 			method: "POST",

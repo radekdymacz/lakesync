@@ -1,5 +1,5 @@
 import type { Result } from "@lakesync/core";
-import { Err, Ok } from "@lakesync/core";
+import { Err, Ok, toError } from "@lakesync/core";
 import type { Database, QueryExecResult } from "sql.js";
 import initSqlJs from "sql.js";
 import { loadSnapshot, saveSnapshot } from "./idb-persistence";
@@ -25,6 +25,15 @@ function mapResultRows<T>(results: QueryExecResult[]): T[] {
 		}
 		return obj as T;
 	});
+}
+
+/** Wrap a synchronous operation in a try/catch returning Result<T, DbError> */
+function wrapDbError<T>(label: string, fn: () => T): Result<T, DbError> {
+	try {
+		return Ok(fn());
+	} catch (err) {
+		return Err(new DbError(label, toError(err)));
+	}
 }
 
 /**
@@ -79,12 +88,7 @@ export class LocalDB {
 			const db = data ? new SQL.Database(data) : new SQL.Database();
 			return Ok(new LocalDB(db, config, backend));
 		} catch (err) {
-			return Err(
-				new DbError(
-					`Failed to open database "${config.name}"`,
-					err instanceof Error ? err : new Error(String(err)),
-				),
-			);
+			return Err(new DbError(`Failed to open database "${config.name}"`, toError(err)));
 		}
 	}
 
@@ -94,17 +98,9 @@ export class LocalDB {
 	 * Returns `Ok(void)` on success, or `Err(DbError)` on failure.
 	 */
 	async exec(sql: string, params?: unknown[]): Promise<Result<void, DbError>> {
-		try {
+		return wrapDbError(`Failed to execute SQL: ${sql}`, () => {
 			this.#db.run(sql, params as Parameters<Database["run"]>[1]);
-			return Ok(undefined);
-		} catch (err) {
-			return Err(
-				new DbError(
-					`Failed to execute SQL: ${sql}`,
-					err instanceof Error ? err : new Error(String(err)),
-				),
-			);
-		}
+		});
 	}
 
 	/**
@@ -113,17 +109,10 @@ export class LocalDB {
 	 * Each row is mapped from sql.js column-array format into a keyed object.
 	 */
 	async query<T>(sql: string, params?: unknown[]): Promise<Result<T[], DbError>> {
-		try {
+		return wrapDbError(`Failed to query SQL: ${sql}`, () => {
 			const results = this.#db.exec(sql, params as Parameters<Database["exec"]>[1]);
-			return Ok(mapResultRows<T>(results));
-		} catch (err) {
-			return Err(
-				new DbError(
-					`Failed to query SQL: ${sql}`,
-					err instanceof Error ? err : new Error(String(err)),
-				),
-			);
-		}
+			return mapResultRows<T>(results);
+		});
 	}
 
 	/**
@@ -135,16 +124,10 @@ export class LocalDB {
 	async transaction<T>(fn: (tx: Transaction) => T): Promise<Result<T, DbError>> {
 		const tx = this.#createTransaction();
 
-		try {
+		const beginResult = wrapDbError("Failed to begin transaction", () => {
 			this.#db.run("BEGIN");
-		} catch (err) {
-			return Err(
-				new DbError(
-					"Failed to begin transaction",
-					err instanceof Error ? err : new Error(String(err)),
-				),
-			);
-		}
+		});
+		if (!beginResult.ok) return beginResult;
 
 		try {
 			const result = fn(tx);
@@ -156,9 +139,7 @@ export class LocalDB {
 			} catch (_rollbackErr) {
 				// Rollback failure is secondary; report the original error
 			}
-			return Err(
-				new DbError("Transaction failed", err instanceof Error ? err : new Error(String(err))),
-			);
+			return Err(new DbError("Transaction failed", toError(err)));
 		}
 	}
 
@@ -177,10 +158,7 @@ export class LocalDB {
 			return Ok(undefined);
 		} catch (err) {
 			return Err(
-				new DbError(
-					`Failed to save database "${this.#config.name}" to IndexedDB`,
-					err instanceof Error ? err : new Error(String(err)),
-				),
+				new DbError(`Failed to save database "${this.#config.name}" to IndexedDB`, toError(err)),
 			);
 		}
 	}
@@ -202,30 +180,15 @@ export class LocalDB {
 		const db = this.#db;
 		return {
 			exec(sql: string, params?: unknown[]): Result<void, DbError> {
-				try {
+				return wrapDbError(`Transaction exec failed: ${sql}`, () => {
 					db.run(sql, params as Parameters<Database["run"]>[1]);
-					return Ok(undefined);
-				} catch (err) {
-					return Err(
-						new DbError(
-							`Transaction exec failed: ${sql}`,
-							err instanceof Error ? err : new Error(String(err)),
-						),
-					);
-				}
+				});
 			},
 			query<T>(sql: string, params?: unknown[]): Result<T[], DbError> {
-				try {
+				return wrapDbError(`Transaction query failed: ${sql}`, () => {
 					const results = db.exec(sql, params as Parameters<Database["exec"]>[1]);
-					return Ok(mapResultRows<T>(results));
-				} catch (err) {
-					return Err(
-						new DbError(
-							`Transaction query failed: ${sql}`,
-							err instanceof Error ? err : new Error(String(err)),
-						),
-					);
-				}
+					return mapResultRows<T>(results);
+				});
 			},
 		};
 	}

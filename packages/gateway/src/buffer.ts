@@ -1,6 +1,11 @@
 import type { HLCTimestamp, RowDelta, RowKey } from "@lakesync/core";
 import { HLC, rowKey } from "@lakesync/core";
 
+/** Estimated bytes per column in a delta (for flush threshold estimation). */
+const ESTIMATED_BYTES_PER_COLUMN = 50;
+/** Estimated base bytes per delta entry (for flush threshold estimation). */
+const ESTIMATED_BASE_BYTES_PER_DELTA = 200;
+
 /**
  * Dual-structure delta buffer.
  *
@@ -20,7 +25,7 @@ export class DeltaBuffer {
 		const key = rowKey(delta.table, delta.rowId);
 		this.index.set(key, delta);
 		this.deltaIds.add(delta.deltaId);
-		this.estimatedBytes += delta.columns.length * 50 + 200;
+		this.estimatedBytes += delta.columns.length * ESTIMATED_BYTES_PER_COLUMN + ESTIMATED_BASE_BYTES_PER_DELTA;
 	}
 
 	/** Get the current merged state for a row (for conflict resolution). */
