@@ -1,6 +1,10 @@
 {
 	"name": "@lakesync/analyst",
-	"version": "0.0.1",
+	"version": "0.1.0",
+	"files": [
+		"src/**/*.ts",
+		"!src/**/__tests__/**"
+	],
 	"type": "module",
 	"description": "Analytical query engine powered by DuckDB-WASM for querying LakeSync lakehouse data",
 	"keywords": [

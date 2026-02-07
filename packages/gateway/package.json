@@ -1,6 +1,10 @@
 {
 	"name": "@lakesync/gateway",
-	"version": "0.0.1",
+	"version": "0.1.0",
+	"files": [
+		"src/**/*.ts",
+		"!src/**/__tests__/**"
+	],
 	"type": "module",
 	"description": "Server-side synchronisation gateway that batches and flushes deltas to an Apache Iceberg lakehouse",
 	"keywords": [

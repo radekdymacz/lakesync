@@ -1,6 +1,10 @@
 {
 	"name": "@lakesync/catalogue",
-	"version": "0.0.1",
+	"version": "0.1.0",
+	"files": [
+		"src/**/*.ts",
+		"!src/**/__tests__/**"
+	],
 	"type": "module",
 	"description": "Iceberg REST catalogue client for LakeSync table metadata and commit operations",
 	"keywords": [

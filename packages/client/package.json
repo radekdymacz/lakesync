@@ -1,6 +1,10 @@
 {
 	"name": "@lakesync/client",
-	"version": "0.0.1",
+	"version": "0.1.0",
+	"files": [
+		"src/**/*.ts",
+		"!src/**/__tests__/**"
+	],
 	"type": "module",
 	"description": "Client-side synchronisation engine with IndexedDB and OPFS storage for offline-first applications",
 	"keywords": [

@@ -240,7 +240,6 @@ export class SyncGateway {
 		// Ensure table exists (idempotent — catch 409)
 		const createResult = await catalogue.createTable(namespace, name, icebergSchema, partitionSpec);
 		if (!createResult.ok && createResult.error.statusCode !== 409) {
-			console.warn(`Catalogue: failed to create table: ${createResult.error.message}`);
 			return;
 		}
 
@@ -255,16 +254,9 @@ export class SyncGateway {
 
 		// Append file to table snapshot
 		const appendResult = await catalogue.appendFiles(namespace, name, [dataFile]);
-		if (!appendResult.ok) {
+		if (!appendResult.ok && appendResult.error.statusCode === 409) {
 			// On 409 conflict, retry once with fresh metadata
-			if (appendResult.error.statusCode === 409) {
-				const retryResult = await catalogue.appendFiles(namespace, name, [dataFile]);
-				if (!retryResult.ok) {
-					console.warn(`Catalogue: retry append failed: ${retryResult.error.message}`);
-				}
-			} else {
-				console.warn(`Catalogue: append failed: ${appendResult.error.message}`);
-			}
+			await catalogue.appendFiles(namespace, name, [dataFile]);
 		}
 	}
 

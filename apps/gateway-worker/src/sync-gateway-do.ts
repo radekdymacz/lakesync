@@ -424,22 +424,18 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 */
 	async webSocketClose(
 		_ws: WebSocket,
-		code: number,
-		reason: string,
-		wasClean: boolean,
+		_code: number,
+		_reason: string,
+		_wasClean: boolean,
 	): Promise<void> {
-		console.log(
-			`[SyncGatewayDO] WebSocket closed: code=${code}, reason="${reason}", clean=${wasClean}`,
-		);
+		// WebSocket closed — no per-client state to clean up yet
 	}
 
 	/**
 	 * Handle WebSocket errors — log and clean up.
 	 */
-	async webSocketError(_ws: WebSocket, error: unknown): Promise<void> {
-		console.log(
-			`[SyncGatewayDO] WebSocket error: ${error instanceof Error ? error.message : String(error)}`,
-		);
+	async webSocketError(_ws: WebSocket, _error: unknown): Promise<void> {
+		// WebSocket error — connection will close automatically
 	}
 
 	// -----------------------------------------------------------------------
@@ -463,9 +459,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			return;
 		}
 
-		const start = Date.now();
 		const result = await gateway.flush();
-		const durationMs = Date.now() - start;
 
 		if (!result.ok) {
 			this.flushRetryCount++;
@@ -474,22 +468,12 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				MAX_RETRY_BACKOFF_MS,
 			);
 
-			console.log(
-				`[SyncGatewayDO] Flush failed (attempt ${this.flushRetryCount}): ${result.error.message}. ` +
-					`Retrying in ${backoffMs}ms.`,
-			);
-
 			await this.ctx.storage.setAlarm(Date.now() + backoffMs);
 			return;
 		}
 
 		// Flush succeeded — reset retry counter and log metrics
 		this.flushRetryCount = 0;
-
-		console.log(
-			`[SyncGatewayDO] Flush succeeded: ${stats.logSize} deltas, ` +
-				`${stats.byteSize} bytes, ${durationMs}ms.`,
-		);
 
 		// If the buffer still has data (e.g. pushes arrived during flush),
 		// reschedule immediately to drain it

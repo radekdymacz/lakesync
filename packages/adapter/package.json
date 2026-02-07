@@ -1,6 +1,10 @@
 {
 	"name": "@lakesync/adapter",
-	"version": "0.0.1",
+	"version": "0.1.0",
+	"files": [
+		"src/**/*.ts",
+		"!src/**/__tests__/**"
+	],
 	"type": "module",
 	"description": "Storage adapter abstraction for LakeSync with S3-compatible object store implementations",
 	"keywords": [

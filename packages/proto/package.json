@@ -1,6 +1,10 @@
 {
 	"name": "@lakesync/proto",
-	"version": "0.0.1",
+	"version": "0.1.0",
+	"files": [
+		"src/**/*.ts",
+		"!src/**/__tests__/**"
+	],
 	"type": "module",
 	"description": "Protocol Buffer serialisation for LakeSync sync wire format",
 	"keywords": [

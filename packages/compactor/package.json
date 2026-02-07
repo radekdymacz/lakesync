@@ -1,6 +1,10 @@
 {
 	"name": "@lakesync/compactor",
-	"version": "0.0.1",
+	"version": "0.1.0",
+	"files": [
+		"src/**/*.ts",
+		"!src/**/__tests__/**"
+	],
 	"type": "module",
 	"description": "Background compaction service that merges small Parquet data files into optimised snapshots",
 	"keywords": [
