@@ -46,6 +46,13 @@ export class AdapterError extends LakeSyncError {
 	}
 }
 
+/** Named source adapter not found in gateway configuration */
+export class AdapterNotFoundError extends LakeSyncError {
+	constructor(message: string, cause?: Error) {
+		super(message, "ADAPTER_NOT_FOUND", cause);
+	}
+}
+
 /** Coerce an unknown thrown value into an Error instance. */
 export function toError(err: unknown): Error {
 	return err instanceof Error ? err : new Error(String(err));

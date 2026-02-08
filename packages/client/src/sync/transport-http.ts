@@ -96,6 +96,9 @@ export class HttpTransport implements SyncTransport {
 			clientId: msg.clientId,
 			limit: msg.maxDeltas.toString(),
 		});
+		if (msg.source) {
+			params.set("source", msg.source);
+		}
 		const url = `${this.baseUrl}/sync/${this.gatewayId}/pull?${params}`;
 
 		try {

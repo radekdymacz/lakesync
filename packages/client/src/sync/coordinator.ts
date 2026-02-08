@@ -140,12 +140,24 @@ export class SyncCoordinator {
 		}
 	}
 
+	/**
+	 * Pull deltas from a named adapter source.
+	 *
+	 * Convenience wrapper around {@link pullFromGateway} that passes the
+	 * `source` field through to the gateway, triggering an adapter-sourced
+	 * pull instead of a buffer pull.
+	 */
+	async pullFrom(source: string): Promise<number> {
+		return this.pullFromGateway(source);
+	}
+
 	/** Pull remote deltas from the gateway and apply them */
-	async pullFromGateway(): Promise<number> {
+	async pullFromGateway(source?: string): Promise<number> {
 		const pullResult = await this.transport.pull({
 			clientId: this._clientId,
 			sinceHlc: this.lastSyncedHlc,
 			maxDeltas: 1000,
+			source,
 		});
 
 		if (!pullResult.ok || pullResult.value.deltas.length === 0) return 0;

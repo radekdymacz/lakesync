@@ -19,7 +19,7 @@ export interface LocalGateway {
 	/** Handle an incoming push from a client */
 	handlePush(msg: SyncPush): Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>;
 	/** Handle a pull request from a client */
-	handlePull(msg: SyncPull): Result<SyncResponse, never>;
+	handlePull(msg: SyncPull): Result<SyncResponse, LakeSyncError>;
 }
 
 /**
@@ -40,7 +40,8 @@ export class LocalTransport implements SyncTransport {
 
 	/** Pull remote deltas from the in-process gateway */
 	async pull(msg: SyncPull): Promise<Result<SyncResponse, LakeSyncError>> {
-		return this.gateway.handlePull(msg);
+		const result = this.gateway.handlePull(msg);
+		return result instanceof Promise ? result : result;
 	}
 
 	/** Local transport has no checkpoint — returns null */

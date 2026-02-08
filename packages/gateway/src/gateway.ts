@@ -6,6 +6,8 @@ import {
 	tableSchemaToIceberg,
 } from "@lakesync/catalogue";
 import {
+	type AdapterError,
+	AdapterNotFoundError,
 	type ClockDriftError,
 	Err,
 	FlushError,
@@ -116,16 +118,37 @@ export class SyncGateway {
 	/**
 	 * Handle a pull request from a client.
 	 *
-	 * Returns change events from the log since the given HLC. When a
-	 * {@link SyncRulesContext} is provided, deltas are post-filtered by
-	 * the client's bucket definitions and JWT claims. The method over-fetches
-	 * (3× the requested limit) and retries up to 5 times to fill the page.
+	 * When `msg.source` is set, pulls deltas from the named source adapter
+	 * instead of the in-memory buffer. Otherwise, returns change events
+	 * from the log since the given HLC. When a {@link SyncRulesContext} is
+	 * provided, deltas are post-filtered by the client's bucket definitions
+	 * and JWT claims. The buffer path over-fetches (3x the requested limit)
+	 * and retries up to 5 times to fill the page.
 	 *
 	 * @param msg - The pull message specifying the cursor and limit.
 	 * @param context - Optional sync rules context for row-level filtering.
 	 * @returns A `Result` containing the matching deltas, server HLC, and pagination flag.
 	 */
-	handlePull(msg: SyncPull, context?: SyncRulesContext): Result<SyncResponse, never> {
+	handlePull(
+		msg: SyncPull & { source: string },
+		context?: SyncRulesContext,
+	): Promise<Result<SyncResponse, AdapterNotFoundError | AdapterError>>;
+	handlePull(msg: SyncPull, context?: SyncRulesContext): Result<SyncResponse, never>;
+	handlePull(
+		msg: SyncPull,
+		context?: SyncRulesContext,
+	):
+		| Promise<Result<SyncResponse, AdapterNotFoundError | AdapterError>>
+		| Result<SyncResponse, never> {
+		if (msg.source) {
+			return this.handleAdapterPull(msg, context);
+		}
+
+		return this.handleBufferPull(msg, context);
+	}
+
+	/** Pull from the in-memory buffer (original path). */
+	private handleBufferPull(msg: SyncPull, context?: SyncRulesContext): Result<SyncResponse, never> {
 		if (!context) {
 			const { deltas, hasMore } = this.buffer.getEventsSince(msg.sinceHlc, msg.maxDeltas);
 			const serverHlc = this.hlc.now();
@@ -173,6 +196,36 @@ export class SyncGateway {
 		const hasMore = collected.length >= msg.maxDeltas;
 		const trimmed = collected.slice(0, msg.maxDeltas);
 		return Ok({ deltas: trimmed, serverHlc, hasMore });
+	}
+
+	/** Pull from a named source adapter. */
+	private async handleAdapterPull(
+		msg: SyncPull,
+		context?: SyncRulesContext,
+	): Promise<Result<SyncResponse, AdapterNotFoundError | AdapterError>> {
+		const adapter = this.config.sourceAdapters?.[msg.source!];
+		if (!adapter) {
+			return Err(new AdapterNotFoundError(`Source adapter "${msg.source}" not found`));
+		}
+
+		const queryResult = await adapter.queryDeltasSince(msg.sinceHlc);
+		if (!queryResult.ok) {
+			return Err(queryResult.error);
+		}
+
+		let deltas = queryResult.value;
+
+		// Apply sync rules filtering if context is provided
+		if (context) {
+			deltas = filterDeltas(deltas, context);
+		}
+
+		// Paginate
+		const hasMore = deltas.length > msg.maxDeltas;
+		const sliced = deltas.slice(0, msg.maxDeltas);
+
+		const serverHlc = this.hlc.now();
+		return Ok({ deltas: sliced, serverHlc, hasMore });
 	}
 
 	/**

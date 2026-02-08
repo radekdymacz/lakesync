@@ -123,9 +123,52 @@ The gateway stores deltas in a `DeltaBuffer` — a dual data structure with:
 - **Log** — an append-only array of deltas in insertion order (for pull)
 - **Index** — a map from `table:rowId` to the latest delta per column (for conflict resolution)
 
+## Adapter-Sourced Pull
+
+The gateway can pull data from named source adapters in addition to its in-memory buffer. A consumer declares what it needs (e.g. "give me errors from the last 24h from BigQuery") and the gateway queries the adapter, applies sync rules, and returns filtered deltas.
+
+```ts
+// Client-side: pull from a named source adapter
+const coordinator = new SyncCoordinator(db, transport);
+await coordinator.pullFrom("bigquery");
+```
+
+```mermaid
+sequenceDiagram
+    participant C as Consumer (SQLite)
+    participant GW as Gateway
+    participant BQ as BigQuery Adapter
+    participant PG as Postgres Adapter
+
+    C->>GW: pull (source: "bigquery", rules: errors only)
+    GW->>BQ: queryDeltasSince(hlc)
+    BQ-->>GW: all deltas
+    Note over GW: Apply sync rules filter
+    GW-->>C: filtered error deltas
+    C->>GW: pull (source: "postgres")
+    GW->>PG: queryDeltasSince(hlc)
+    PG-->>GW: all deltas
+    GW-->>C: deltas
+    Note over C: Local SQLite has data from both sources
+```
+
+Source adapters are registered on the gateway via `sourceAdapters` in `GatewayConfig`. The `source` field on `SyncPull` selects which adapter to query. When omitted, the existing in-memory buffer path is used (backwards compatible).
+
 ## Sync Rules
 
-Sync rules define which data each client can see. Rules are organised into **buckets** with `eq` and `in` operators:
+Sync rules define which data each client can see. Rules are organised into **buckets** with filter operators:
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `eq` | Equals (exact match) | `{ "op": "eq", "value": "jwt:sub" }` |
+| `in` | Contained in (multi-value) | `{ "op": "in", "value": "jwt:roles" }` |
+| `neq` | Not equals | `{ "op": "neq", "value": "archived" }` |
+| `gt` | Greater than | `{ "op": "gt", "value": "100" }` |
+| `lt` | Less than | `{ "op": "lt", "value": "50" }` |
+| `gte` | Greater than or equal | `{ "op": "gte", "value": "0" }` |
+| `lte` | Less than or equal | `{ "op": "lte", "value": "1000" }` |
+
+Comparison operators (`gt`, `lt`, `gte`, `lte`) use numeric comparison when both values parse as numbers, falling back to string comparison via `localeCompare()`.
 
 ```json
 {

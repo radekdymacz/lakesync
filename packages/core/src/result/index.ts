@@ -1,5 +1,6 @@
 export {
 	AdapterError,
+	AdapterNotFoundError,
 	ClockDriftError,
 	ConflictError,
 	FlushError,

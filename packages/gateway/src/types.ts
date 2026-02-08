@@ -21,6 +21,8 @@ export interface GatewayConfig {
 	schemaManager?: SchemaManager;
 	/** Optional storage adapter — LakeAdapter (S3/R2) or DatabaseAdapter (Postgres/MySQL). */
 	adapter?: LakeAdapter | DatabaseAdapter;
+	/** Named source adapters for adapter-sourced pulls. */
+	sourceAdapters?: Record<string, DatabaseAdapter>;
 }
 
 /** Gateway runtime state */

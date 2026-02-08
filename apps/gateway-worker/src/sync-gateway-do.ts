@@ -308,11 +308,13 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 * - `since` (required) -- HLC timestamp as a decimal string
 	 * - `limit` (optional) -- maximum number of deltas (default 100)
 	 * - `clientId` (required) -- requesting client identifier
+	 * - `source` (optional) -- named source adapter to pull from
 	 */
 	private async handlePull(url: URL, request: Request): Promise<Response> {
 		const sinceParam = url.searchParams.get("since");
 		const clientId = url.searchParams.get("clientId");
 		const limitParam = url.searchParams.get("limit");
+		const source = url.searchParams.get("source");
 
 		if (!sinceParam || !clientId) {
 			return errorResponse("Missing required query params: since, clientId", 400);
@@ -331,20 +333,26 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		}
 		const maxDeltas = Math.min(rawLimit, MAX_PULL_LIMIT);
 
-		const msg: SyncPull = { clientId, sinceHlc, maxDeltas };
+		const msg: SyncPull = { clientId, sinceHlc, maxDeltas, ...(source ? { source } : {}) };
 		const gateway = await this.getGateway();
 		const context = await this.buildSyncRulesContext(request);
-		const result = gateway.handlePull(msg, context);
+		const result = source
+			? await gateway.handlePull(msg as SyncPull & { source: string }, context)
+			: gateway.handlePull(msg, context);
 
-		// handlePull never fails (Result<SyncResponse, never>), but guard for safety
 		if (!result.ok) {
-			return errorResponse("Internal pull error", 500);
+			const err = result.error;
+			if (err.code === "ADAPTER_NOT_FOUND") {
+				return errorResponse(err.message, 404);
+			}
+			return errorResponse(err.message, 500);
 		}
 
 		logger.info("pull", {
 			clientId,
 			deltaCount: result.value.deltas.length,
 			sinceHlc: sinceHlc.toString(),
+			...(source ? { source } : {}),
 		});
 
 		return jsonResponse(result.value);
@@ -648,6 +656,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			const context: SyncRulesContext | undefined =
 				rules && rules.buckets.length > 0 ? { claims: storedClaims, rules } : undefined;
 
+			// WebSocket pull: source adapters not supported via proto (HTTP only)
 			const pullResult = gateway.handlePull(decoded.value, context);
 			if (!pullResult.ok) {
 				this.sendProtoError(ws, pullResult.error);

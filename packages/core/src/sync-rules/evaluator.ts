@@ -69,6 +69,45 @@ export function deltaMatchesBucket(
 }
 
 /**
+ * Compare two values using a comparison operator.
+ * Attempts numeric comparison first; falls back to string localeCompare.
+ */
+function compareValues(
+	deltaValue: string,
+	filterValue: string,
+	op: "gt" | "lt" | "gte" | "lte",
+): boolean {
+	const numDelta = parseFloat(deltaValue);
+	const numFilter = parseFloat(filterValue);
+	const useNumeric = !Number.isNaN(numDelta) && !Number.isNaN(numFilter);
+
+	if (useNumeric) {
+		switch (op) {
+			case "gt":
+				return numDelta > numFilter;
+			case "lt":
+				return numDelta < numFilter;
+			case "gte":
+				return numDelta >= numFilter;
+			case "lte":
+				return numDelta <= numFilter;
+		}
+	}
+
+	const cmp = deltaValue.localeCompare(filterValue);
+	switch (op) {
+		case "gt":
+			return cmp > 0;
+		case "lt":
+			return cmp < 0;
+		case "gte":
+			return cmp >= 0;
+		case "lte":
+			return cmp <= 0;
+	}
+}
+
+/**
  * Check whether a single filter matches a delta's column values.
  */
 function filterMatchesDelta(
@@ -95,6 +134,13 @@ function filterMatchesDelta(
 			return resolvedValues.includes(deltaValue);
 		case "in":
 			return resolvedValues.includes(deltaValue);
+		case "neq":
+			return !resolvedValues.includes(deltaValue);
+		case "gt":
+		case "lt":
+		case "gte":
+		case "lte":
+			return compareValues(deltaValue, resolvedValues[0]!, filter.op);
 		default:
 			return false;
 	}
@@ -230,9 +276,12 @@ export function validateSyncRules(config: unknown): Result<void, SyncRuleError> 
 				);
 			}
 
-			if (filter.op !== "eq" && filter.op !== "in") {
+			const validOps = ["eq", "in", "neq", "gt", "lt", "gte", "lte"];
+			if (!validOps.includes(filter.op as string)) {
 				return Err(
-					new SyncRuleError(`Bucket "${bucket.name}" filter at index ${j} op must be "eq" or "in"`),
+					new SyncRuleError(
+						`Bucket "${bucket.name}" filter at index ${j} op must be one of: ${validOps.join(", ")}`,
+					),
 				);
 			}
 

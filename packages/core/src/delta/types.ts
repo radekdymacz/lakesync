@@ -64,6 +64,8 @@ export interface SyncPull {
 	sinceHlc: HLCTimestamp;
 	/** Maximum number of deltas to return */
 	maxDeltas: number;
+	/** Optional source adapter name — when set, pull from the named adapter instead of the buffer */
+	source?: string;
 }
 
 /** SyncResponse output — returned by the gateway after push or pull */

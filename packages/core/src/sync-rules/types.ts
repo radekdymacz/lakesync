@@ -1,5 +1,5 @@
 /** Supported comparison operators for sync rule filters */
-export type SyncRuleOp = "eq" | "in";
+export type SyncRuleOp = "eq" | "in" | "neq" | "gt" | "lt" | "gte" | "lte";
 
 /** A single filter condition within a bucket definition */
 export interface SyncRuleFilter {

@@ -26,7 +26,8 @@ Two interfaces abstract all data sources. Adapters are both sources and destinat
 ## Key Features
 
 - **Pluggable adapters** — `DatabaseAdapter` for SQL-like sources, `LakeAdapter` for object storage. Both are bidirectional. Cross-backend flows via sync rules.
-- **Sync rules DSL** — Declarative bucket-based filtering with `eq`/`in` operators and `jwt:` claim references. Pure function evaluation via `filterDeltas()`.
+- **Adapter-sourced pull** — Pull data from named source adapters (BigQuery, Postgres, etc.) directly into local SQLite. The gateway queries the adapter and applies sync rules before returning filtered deltas.
+- **Sync rules DSL** — Declarative bucket-based filtering with `eq`/`in`/`neq`/`gt`/`lt`/`gte`/`lte` operators and `jwt:` claim references. Pure function evaluation via `filterDeltas()`.
 - **Column-level LWW** — Conflicts resolved per-column, not per-row. Concurrent edits to different fields never overwrite each other.
 - **Offline support** — Local SQLite via sql.js WASM. Persistent IndexedDB outbox survives page refreshes and process crashes. Automatic drain on reconnect.
 - **Hybrid Logical Clocks** — Branded `HLCTimestamp` bigint (48-bit wall clock + 16-bit counter). Causal ordering with deterministic `clientId` tiebreaking.
