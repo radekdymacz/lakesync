@@ -1,28 +1,38 @@
 ---
 title: Introduction
-description: LakeSync — the universal sync engine for TypeScript apps.
+description: LakeSync — sync any data source to a local working set.
 ---
 
-LakeSync is an open-source sync engine for TypeScript apps. Right data, right time, doesn't matter where it lives. Your data lives in local SQLite, syncs through a lightweight gateway, and flushes to whichever backend fits your scale. Same client code, any backend. Works for web apps, AI agents, and everything in between.
+LakeSync is an open-source sync engine for TypeScript apps. Your app or agent declares what data it needs, and LakeSync syncs a filtered subset to local SQLite — queryable, offline-capable, and always up to date. If you can read from a data source, it can be a LakeSync adapter.
 
-## Three Backend Tiers
+## How It Works
 
-| Tier | Backend | Use case |
-|------|---------|----------|
-| **Tier 1 — SQL** | Postgres, MySQL, RDS | Small/medium OLTP data, familiar tooling |
-| **Tier 2 — Analytics** | BigQuery | Query-heavy OLAP workloads, managed analytics |
-| **Tier 3 — Data Lake** | S3/R2 via Apache Iceberg | Massive scale, zero ETL, open format |
+1. **Adapters** connect to data sources — Postgres, BigQuery, S3/R2, CloudWatch, or anything you write an adapter for
+2. **Sync rules** define what data flows to each consumer — filtered by JWT claims, columns, or temporal ranges
+3. **The gateway** evaluates rules and routes data between sources and consumers
+4. **Local SQLite** gives each consumer a queryable working set with zero-latency reads
 
-The `LakeAdapter` and `DatabaseAdapter` interfaces abstract storage. Swap backends without changing client code.
+Web apps get offline support. AI agents get a local copy to reason over. Dashboards get exactly the slice they need. Same protocol, any source.
+
+## Adapters
+
+| Adapter | Use case |
+|---------|----------|
+| **Postgres / MySQL** | Operational OLTP data, familiar SQL tooling |
+| **BigQuery** | Analytics-scale queries, managed and serverless |
+| **S3 / R2 (Iceberg)** | Massive scale on object storage, open format |
+| **Anything else** | Implement the adapter interface — CloudWatch, Stripe, custom APIs |
+
+The `DatabaseAdapter` interface (`insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema`) handles SQL-like sources. The `LakeAdapter` interface (`putObject`, `getObject`, `listObjects`, `deleteObject`) handles object storage. Adapters are both sources and destinations, enabling cross-backend flows.
 
 ## Key Features
 
-- **Column-level LWW** — Conflicts are resolved per-column, not per-row, so concurrent edits to different fields never overwrite each other.
-- **Offline-first** — The full dataset lives in local SQLite (via sql.js WASM). Changes are queued and pushed when connectivity returns.
-- **Sync Rules** — Declarative bucket-based filtering with JWT claim references. Each client receives only the data they are authorised to see.
-- **Hybrid Logical Clocks** — Every mutation is timestamped with a branded `HLCTimestamp` (48-bit wall clock + 16-bit counter) for causal ordering.
-- **Result-based error handling** — Public APIs return `Result<T, E>` instead of throwing, making error paths explicit and composable.
-- **Pluggable adapters** — Postgres, MySQL, BigQuery, S3/R2, or anything else. The gateway flushes through adapter interfaces.
+- **Pluggable adapters** — Any data source you can read from becomes a LakeSync source. The adapter interface is the extension point.
+- **Sync rules** — Declarative rules define what data flows where. The DSL is the core primitive for both web apps and AI agents.
+- **Column-level LWW** — Conflicts resolved per-column, not per-row. Concurrent edits to different fields never overwrite each other.
+- **Offline-first** — The full working set lives in local SQLite (via sql.js WASM). Changes queue and push when connectivity returns.
+- **Hybrid Logical Clocks** — Every mutation timestamped with a branded `HLCTimestamp` (48-bit wall clock + 16-bit counter) for causal ordering.
+- **Result-based error handling** — Public APIs return `Result<T, E>` instead of throwing.
 
 ## Packages
 

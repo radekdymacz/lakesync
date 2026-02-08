@@ -2,54 +2,62 @@ import Link from "next/link";
 import { Mermaid } from "@/components/mdx/mermaid";
 
 const CORE_FLOW = `sequenceDiagram
-    participant App as Your App
+    participant Consumer as Web App / Agent
     participant DB as Local SQLite
-    participant GW as Gateway (CF DO)
-    participant Backend as Any Backend
-
-    App->>DB: INSERT / UPDATE / DELETE
-    Note over App,DB: Zero latency — local write
-    DB-->>GW: Push column-level deltas
-    GW-->>DB: ACK + pull remote changes
-    Note over GW: Deltas merge via HLC + LWW
-    GW->>Backend: Batch flush
-    Note over Backend: Postgres? BigQuery? S3?<br/>You choose the adapter.`;
-
-const SMALL_DATA = `sequenceDiagram
-    participant Client as Client (SQLite)
     participant GW as Gateway
-    participant DB as Postgres / MySQL / RDS
+    participant Source as Any Data Source
 
-    Client->>GW: push deltas
-    GW->>DB: flush batch
-    Note over DB: Familiar tooling<br/>Standard SQL queries<br/>Works with your existing stack
-    Client->>GW: pull since last HLC
-    GW-->>Client: new deltas`;
+    Consumer->>DB: read / write
+    Note over Consumer,DB: Zero latency — local working set
+    DB-->>GW: Push local changes
+    GW-->>DB: Pull from source
+    Note over GW: Sync rules decide<br/>what data flows where
+    GW->>Source: Read / write via adapter
+    Note over Source: Postgres? BigQuery?<br/>CloudWatch? S3?<br/>If you can read it, it's a source.`;
 
-const ANALYTICS_DATA = `sequenceDiagram
-    participant Client as Client (SQLite)
+const AGENT_FLOW = `sequenceDiagram
+    participant Agent as AI Agent
+    participant DB as Local SQLite
+    participant GW as Gateway
+    participant CW as CloudWatch Logs
+
+    Agent->>GW: "errors from last 24h"
+    Note over GW: Sync rule evaluates query
+    GW->>CW: query via adapter
+    CW-->>GW: filtered log entries
+    GW-->>DB: sync as deltas
+    Agent->>DB: SELECT * FROM errors
+    Note over Agent,DB: Local working copy<br/>Agent reasons over it`;
+
+const WEBAPP_FLOW = `sequenceDiagram
+    participant App as Web App (offline)
+    participant DB as Local SQLite
+    participant Q as Outbox (IndexedDB)
+    participant GW as Gateway
+    participant PG as Postgres
+
+    App->>DB: Edit 1, Edit 2, Edit 3
+    DB-->>Q: Deltas queued
+    Note over App,Q: Fully functional offline
+    Note over Q,GW: ← Connection restored →
+    Q->>GW: Push all deltas
+    GW->>PG: Flush to database
+    GW-->>App: Pull remote changes
+    Note over App,GW: Caught up ✓`;
+
+const CROSS_BACKEND = `sequenceDiagram
+    participant PG as Postgres
     participant GW as Gateway
     participant BQ as BigQuery
-    participant BI as Dashboards / BI
+    participant ICE as Iceberg (S3/R2)
 
-    Client->>GW: push deltas
-    GW->>BQ: MERGE deltas
-    Note over BQ: Query-heavy OLAP workloads<br/>Managed, serverless
-    BI->>BQ: SELECT * FROM lakesync_deltas
-    Note over BI,BQ: Looker, Metabase,<br/>or any SQL client`;
-
-const LARGE_DATA = `sequenceDiagram
-    participant Client as Client (SQLite)
-    participant GW as Gateway
-    participant Lake as Iceberg (S3/R2)
-    participant BI as Analytics / BI
-
-    Client->>GW: push deltas
-    GW->>Lake: flush → Parquet files
-    Note over Lake: Apache Iceberg table<br/>Open format, infinite scale
-    BI->>Lake: SELECT * FROM events
-    Note over BI,Lake: Query with Spark, DuckDB,<br/>Athena, Trino — no ETL
-    Note over Client,Lake: Operational data IS analytics data`;
+    Note over GW: Sync rules define flows
+    PG->>GW: read operational data
+    GW->>BQ: write for analytics
+    Note over BQ: Dashboards query here
+    PG->>GW: read data older than 90d
+    GW->>ICE: archive to data lake
+    Note over ICE: Long-term storage<br/>Open format`;
 
 const CONFLICT_RESOLUTION = `sequenceDiagram
     participant A as Alice
@@ -66,36 +74,17 @@ const CONFLICT_RESOLUTION = `sequenceDiagram
     GW->>B: pull → title = "Buy oat milk"
     Note over A,B: Both changes preserved ✓`;
 
-const OFFLINE_SYNC = `sequenceDiagram
-    participant App as App (offline)
-    participant DB as Local SQLite
-    participant Q as Outbox (IndexedDB)
-    participant GW as Gateway
-
-    App->>DB: Edit 1
-    DB-->>Q: Delta queued
-    App->>DB: Edit 2
-    DB-->>Q: Delta queued
-    App->>DB: Edit 3
-    DB-->>Q: Delta queued
-    Note over App,Q: Fully functional offline
-    Note over Q,GW: ← Connection restored →
-    Q->>GW: Push all 3 deltas
-    GW-->>Q: ACK
-    GW->>App: Pull remote changes
-    Note over App,GW: Caught up ✓`;
-
 const SYNC_RULES = `sequenceDiagram
     participant A as Alice (team=eng)
     participant GW as Gateway
-    participant B as Bob (team=sales)
+    participant B as Agent (role=ops)
 
-    Note over GW: Sync rule:<br/>filter by jwt:team claim
+    Note over GW: Sync rules:<br/>filter by claims
     A->>GW: pull (JWT: team=eng)
-    GW-->>A: eng todos only
-    B->>GW: pull (JWT: team=sales)
-    GW-->>B: sales todos only
-    Note over A,B: Each client sees only their data`;
+    GW-->>A: eng data only
+    B->>GW: pull (role=ops, ts>24h ago)
+    GW-->>B: ops errors, last 24h
+    Note over A,B: Each consumer gets<br/>exactly what it needs`;
 
 export default function HomePage() {
 	return (
@@ -107,21 +96,17 @@ export default function HomePage() {
 				</div>
 
 				<h1 className="mb-6 max-w-4xl text-center text-5xl font-bold tracking-tight sm:text-6xl lg:text-7xl">
-					The universal{" "}
-					<span className="text-fd-muted-foreground">sync engine.</span>
+					Sync any data source{" "}
+					<span className="text-fd-muted-foreground">
+						to a local working set.
+					</span>
 				</h1>
 
-				<p className="mx-auto mb-4 max-w-2xl text-center text-lg leading-relaxed text-fd-muted-foreground">
-					Right data, right time, doesn&apos;t matter where it lives.
-				</p>
-
-				<p className="mx-auto mb-10 max-w-2xl text-center text-base leading-relaxed text-fd-muted-foreground">
-					LakeSync is an open-source sync engine for TypeScript apps.
-					Your data lives in SQLite on the device, syncs through a lightweight
-					gateway, and flushes to whichever backend fits your scale &mdash;
-					Postgres for small data, BigQuery for analytics, S3/R2 via
-					Apache Iceberg for massive scale. Same client code, any backend.
-					Works for web apps, AI agents, and everything in between.
+				<p className="mx-auto mb-10 max-w-2xl text-center text-lg leading-relaxed text-fd-muted-foreground">
+					Your app or agent declares what it needs. The engine handles the
+					rest. Postgres, BigQuery, S3, CloudWatch &mdash; if you can read
+					from it, it&apos;s a data source. LakeSync syncs a filtered subset
+					to local SQLite so you can query it, display it, or reason over it.
 				</p>
 
 				<div className="flex flex-wrap items-center justify-center gap-4">
@@ -150,102 +135,82 @@ export default function HomePage() {
 			{/* Core architecture */}
 			<DiagramSection
 				label="How it works"
-				title="Client SQLite → Gateway → Any Backend"
-				description="Mutations write to local SQLite with zero latency. Column-level deltas push to a lightweight gateway that merges via hybrid logical clocks, then flushes in batches to whatever backend you choose."
+				title="Any source → Gateway → Local SQLite"
+				description="The gateway connects to data sources via pluggable adapters. Sync rules define what data flows to each consumer. Your app or agent gets a local SQLite working set — queryable, offline-capable, and always up to date."
 				chart={CORE_FLOW}
 				border
 			/>
 
-			{/* The three-tier story */}
+			{/* Agent use case */}
+			<DiagramSection
+				label="For AI agents"
+				title="Give your agents a synced working set"
+				description="An agent says &ldquo;I need the last 24 hours of errors.&rdquo; The gateway evaluates the sync rule, queries CloudWatch via its adapter, and syncs the result to local SQLite. The agent reasons over a local copy — no API calls per question."
+				chart={AGENT_FLOW}
+			/>
+
+			{/* Web app use case */}
+			<DiagramSection
+				label="For web apps"
+				title="Offline-first. Catches up when it reconnects."
+				description="The full working set lives in local SQLite. Edits queue in a persistent IndexedDB outbox that survives page refreshes and browser crashes. When connectivity returns, the outbox drains automatically and remote changes sync down."
+				chart={WEBAPP_FLOW}
+				border
+			/>
+
+			{/* The adapter story */}
 			<section className="w-full px-4 py-24">
 				<div className="mx-auto max-w-5xl">
 					<div className="mb-3 text-center text-xs font-medium uppercase tracking-wider text-fd-muted-foreground">
-						Three tiers, one abstraction
+						Pluggable adapters
 					</div>
 					<h2 className="mb-6 text-center text-3xl font-bold">
-						Pick what fits your scale
+						Any data source. Same interface.
 					</h2>
 					<p className="mx-auto mb-16 max-w-2xl text-center leading-relaxed text-fd-muted-foreground">
-						The gateway speaks a simple adapter interface. Start with a
-						database you already know, add analytics when you need insights,
-						switch to the lakehouse when your data outgrows it all. Client
-						code stays the same.
+						If you can read from it, it can be a LakeSync adapter. The
+						adapter interface abstracts the source &mdash; consumers don&apos;t
+						know or care where the data lives. Adapters are both sources and
+						destinations, enabling cross-backend flows.
 					</p>
 
-					<div className="mx-auto grid max-w-5xl grid-cols-1 gap-8 md:grid-cols-3">
-						<div>
-							<h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-fd-muted-foreground">
-								Tier 1 &mdash; SQL
-							</h3>
-							<div className="space-y-3 rounded-xl border border-fd-border p-5">
-								<div className="font-mono text-sm text-fd-muted-foreground">
-									<strong className="text-fd-foreground">Postgres / MySQL / RDS</strong>
-								</div>
-								<ul className="space-y-1 text-sm text-fd-muted-foreground">
-									<li>Small/medium OLTP data</li>
-									<li>Familiar tooling and SQL queries</li>
-									<li>Works with your existing stack</li>
-								</ul>
-							</div>
-						</div>
-						<div>
-							<h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-fd-muted-foreground">
-								Tier 2 &mdash; Analytics
-							</h3>
-							<div className="space-y-3 rounded-xl border border-fd-border p-5">
-								<div className="font-mono text-sm text-fd-muted-foreground">
-									<strong className="text-fd-foreground">BigQuery</strong>
-								</div>
-								<ul className="space-y-1 text-sm text-fd-muted-foreground">
-									<li>Query-heavy OLAP workloads</li>
-									<li>Managed, serverless analytics</li>
-									<li>Connect BI tools directly</li>
-								</ul>
-							</div>
-						</div>
-						<div>
-							<h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-fd-muted-foreground">
-								Tier 3 &mdash; Data Lake
-							</h3>
-							<div className="space-y-3 rounded-xl border border-fd-primary/50 bg-fd-primary/5 p-5">
-								<div className="font-mono text-sm text-fd-muted-foreground">
-									<strong className="text-fd-foreground">Iceberg (S3/R2)</strong>
-								</div>
-								<ul className="space-y-1 text-sm text-fd-muted-foreground">
-									<li>Massive scale on object storage</li>
-									<li>Query with Spark, DuckDB, Athena, Trino</li>
-									<li>Zero ETL &mdash; no replication pipeline</li>
-								</ul>
-							</div>
-						</div>
+					<div className="mx-auto grid max-w-5xl grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+						<AdapterCard
+							name="Postgres / MySQL"
+							description="Operational OLTP data. Familiar SQL tooling. Low-latency reads and writes."
+						/>
+						<AdapterCard
+							name="BigQuery"
+							description="Analytics-scale queries. Managed, serverless. Connect BI tools directly."
+						/>
+						<AdapterCard
+							name="S3 / R2 (Iceberg)"
+							description="Massive scale on object storage. Open format. Query with any engine."
+						/>
+						<AdapterCard
+							name="Anything else"
+							description="CloudWatch, Stripe, custom APIs. Implement the adapter interface and it's a source."
+							highlight
+						/>
 					</div>
 				</div>
 			</section>
 
-			{/* Tier 1: SQL diagram */}
+			{/* Cross-backend flows */}
 			<DiagramSection
-				label="Tier 1 — SQL"
-				title="Sync to Postgres, MySQL, or any database"
-				description="For apps with manageable data volumes, flush to a traditional database. Standard SQL, familiar tooling, easy to operate. The gateway adapter abstracts the storage — swap backends without touching client code."
-				chart={SMALL_DATA}
+				label="Cross-backend"
+				title="Move data between any two backends"
+				description="Sync rules define directional flows. Archive old operational data from Postgres to Iceberg. Materialise query results from Iceberg into BigQuery. The gateway routes data between adapters based on rules you define."
+				chart={CROSS_BACKEND}
 				border
 			/>
 
-			{/* Tier 2: Analytics diagram */}
+			{/* Sync rules */}
 			<DiagramSection
-				label="Tier 2 — Analytics"
-				title="Sync to BigQuery for query-heavy workloads"
-				description="When you need analytics at scale, flush deltas to BigQuery via idempotent MERGE. Serverless, fully managed, and your BI tools connect directly. Same sync protocol, no pipeline to maintain."
-				chart={ANALYTICS_DATA}
-			/>
-
-			{/* Tier 3: Data Lake diagram */}
-			<DiagramSection
-				label="Tier 3 — Data Lake"
-				title="Sync to the lakehouse. Zero ETL."
-				description="When your data outgrows a single database, flush to Apache Iceberg on S3 or Cloudflare R2. Parquet files, open table format, queryable by any analytics engine. Your operational data and your analytics data are the same thing."
-				chart={LARGE_DATA}
-				border
+				label="Sync rules"
+				title="Declarative rules define what flows where"
+				description="Sync rules are the core primitive. They define which data each consumer sees — filtered by JWT claims, temporal ranges, or any column predicate. A web app gets its team's data. An agent gets the errors it needs to analyse."
+				chart={SYNC_RULES}
 			/>
 
 			{/* Conflict resolution */}
@@ -254,27 +219,11 @@ export default function HomePage() {
 				title="Column-level merge, not row-level overwrite"
 				description="Concurrent edits to different fields of the same record are both preserved. Hybrid logical clocks provide causal ordering with deterministic client ID tiebreaking."
 				chart={CONFLICT_RESOLUTION}
-			/>
-
-			{/* Offline */}
-			<DiagramSection
-				label="Offline-first"
-				title="Works without a connection, catches up when it returns"
-				description="The full dataset lives in local SQLite. Edits queue in a persistent IndexedDB outbox that survives page refreshes and browser crashes. When connectivity returns, the outbox drains automatically."
-				chart={OFFLINE_SYNC}
 				border
 			/>
 
-			{/* Sync rules */}
-			<DiagramSection
-				label="Sync rules"
-				title="Each client gets only the data they need"
-				description="Declarative bucket-based filtering with JWT claim references. The gateway evaluates rules at pull time — clients never download data they shouldn't see."
-				chart={SYNC_RULES}
-			/>
-
 			{/* Design decisions */}
-			<section className="w-full border-t border-fd-border px-4 py-24">
+			<section className="w-full px-4 py-24">
 				<div className="mx-auto max-w-5xl">
 					<div className="mb-3 text-center text-xs font-medium uppercase tracking-wider text-fd-muted-foreground">
 						Under the hood
@@ -284,8 +233,8 @@ export default function HomePage() {
 					</h2>
 					<div className="grid grid-cols-1 gap-6 md:grid-cols-3">
 						<Feature
-							title="Pluggable adapters"
-							description="The gateway flushes through adapter interfaces — LakeAdapter for object storage, DatabaseAdapter for SQL backends. S3, R2, Postgres, MySQL, BigQuery, or anything else."
+							title="Adapter = data source"
+							description="Any system you can read from becomes a LakeSync source. Postgres, BigQuery, Iceberg, CloudWatch, or your own custom adapter."
 						/>
 						<Feature
 							title="Hybrid Logical Clocks"
@@ -304,8 +253,8 @@ export default function HomePage() {
 							description="Deltas queue in IndexedDB. Survives page refreshes, browser crashes, and network outages. Drains automatically."
 						/>
 						<Feature
-							title="Cloudflare DO gateway"
-							description="Lightweight gateway on Durable Objects. Push/pull protocol, JWT auth, sync rules, batch flush to any adapter."
+							title="Sync rules as the product"
+							description="Declarative rules define what data flows to each consumer. Filter by claims, columns, time ranges. The DSL is the interface between consumers and data."
 						/>
 					</div>
 				</div>
@@ -320,9 +269,10 @@ export default function HomePage() {
 					<h2 className="mb-4 text-3xl font-bold">Experimental, but real</h2>
 					<p className="mb-8 leading-relaxed text-fd-muted-foreground">
 						Core sync engine, conflict resolution, client SDK, Cloudflare Workers
-						gateway, compaction, checkpoint generation, sync rules, initial sync,
-						and all three backend tiers are implemented and tested. The API is
-						not yet stable &mdash; expect breaking changes.
+						gateway, compaction, checkpoint generation, sync rules, and adapters
+						for Postgres, MySQL, BigQuery, and S3/R2 are all implemented and
+						tested. Cross-backend flows and the extended sync rules DSL are
+						next. API is not yet stable &mdash; expect breaking changes.
 					</p>
 					<div className="flex flex-wrap items-center justify-center gap-4">
 						<Link
@@ -374,6 +324,23 @@ function DiagramSection({
 				</div>
 			</div>
 		</section>
+	);
+}
+
+function AdapterCard({
+	name,
+	description,
+	highlight,
+}: { name: string; description: string; highlight?: boolean }) {
+	return (
+		<div
+			className={`rounded-xl border p-5 ${highlight ? "border-fd-primary/50 bg-fd-primary/5" : "border-fd-border"}`}
+		>
+			<h3 className="mb-2 font-semibold">{name}</h3>
+			<p className="text-sm leading-relaxed text-fd-muted-foreground">
+				{description}
+			</p>
+		</div>
 	);
 }
 

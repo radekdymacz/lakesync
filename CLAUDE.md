@@ -1,19 +1,22 @@
 # LakeSync
 
 ## Vision
-**The universal synchronisation engine.** Right data, right time, doesn't matter where it lives.
+**Sync any data source to a local working set.** Your app or agent declares what it needs. The engine handles the rest.
 
-Three backend tiers, one abstraction — pick what fits your scale and requirements:
-- **Tier 1 — SQL** → Postgres, MySQL, RDS — small/medium OLTP data, familiar tooling
-- **Tier 2 — Analytics** → BigQuery, Snowflake — query-heavy OLAP workloads (planned)
-- **Tier 3 — Data Lake** → Apache Iceberg on S3/R2 — massive scale, zero ETL
+Any data source can be an adapter — Postgres, BigQuery, Iceberg, CloudWatch, Stripe, anything you can read from. Consumers (web apps, AI agents, dashboards) get a local SQLite copy of exactly the slice they need via declarative sync rules. The sync rules DSL is the product — adapters are plumbing.
 
-Client data lives in local SQLite, syncs through a lightweight gateway, flushes to whichever backend(s) you configure. The `LakeAdapter` and `DatabaseAdapter` interfaces abstract storage. Swap backends without changing client code.
+Current adapters: S3/R2 (Iceberg), Postgres, MySQL, BigQuery. The adapter interface is the extension point for any data source.
 
 ## Internal Context (not public)
 LakeSync is the data backbone for:
 - **CompanyOS** (https://company-os.pages.dev/) — company operating system web app
 - **AgentOS** — Claude Code Teams organised per department
+
+Real use cases driving development:
+- Agents analysing CloudWatch logs — sync a filtered subset locally, reason over it
+- Financial data in BigQuery — agent or dashboard gets exactly the slice it needs
+- Offline web app — CompanyOS works on a plane, catches up when back
+- Cross-backend flows — Iceberg → BigQuery, Postgres → Iceberg, any source → any destination
 
 LakeSync ensures data flows between all systems: web apps, agents, and backends. The library itself is the public-facing product; CompanyOS and AgentOS are the primary consumers. Focus development on the library, not the consumers.
 
@@ -25,12 +28,13 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - 3 apps: todo-app (Vite + vanilla TS), gateway-worker (Cloudflare Workers + DO), docs (Fumadocs + Next.js)
 - All phases complete (1 through 6): HLC, Delta, Result, Conflict, Queue, Gateway, Proto, Adapter, Parquet, Catalogue, SQLite client, CF Workers, Compaction, Schema Evolution, Analyst, Sync Rules, Initial Sync, Database Adapters
 
-### Pluggable Backend (packages/adapter)
+### Adapters — Any Data Source (packages/adapter)
 - `LakeAdapter` interface: `putObject`, `getObject`, `headObject`, `listObjects`, `deleteObject`, `deleteObjects`
-- `DatabaseAdapter` interface: `putRows`, `getRows`, `deleteRows` — for relational backends
-- Implementations: S3Adapter (S3/R2/MinIO), PostgresAdapter, MySQLAdapter, CompositeAdapter
+- `DatabaseAdapter` interface: `insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema` — adapters are both sources AND destinations
+- Implementations: S3Adapter (S3/R2/MinIO), PostgresAdapter, MySQLAdapter, BigQueryAdapter, CompositeAdapter
 - `migrateAdapter()`: copies data between any two adapters
 - Gateway takes an optional adapter — flush target is fully decoupled from sync logic
+- The adapter interface is the extension point — any data source that can be read from can become an adapter (CloudWatch, Stripe, etc.)
 - Same client code regardless of backend; swap adapters at the gateway level
 
 ### Key Patterns
@@ -88,7 +92,7 @@ For SEQUENTIAL tasks: execute one at a time.
 - NEVER use localStorage or sessionStorage — use OPFS or IndexedDB
 - NEVER throw exceptions from public APIs — use Result<T, E>
 - NEVER flush per-sync to Iceberg — always batch
-- Backend is adapter-dependent — Postgres/MySQL for small data, S3/R2 Iceberg for large data
+- Backend is adapter-dependent — any data source can be an adapter
 - NEVER use `any` type
 - NEVER create custom subagents — use built-in Task tool only
 

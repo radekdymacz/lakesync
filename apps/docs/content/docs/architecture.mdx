@@ -5,38 +5,37 @@ description: System architecture, key patterns, and design decisions.
 
 ## Overview
 
-LakeSync is a monorepo containing 10 packages and 3 apps. The core sync loop follows a **push/pull** model where clients push local deltas to a gateway and pull remote deltas back. The gateway flushes to whichever backend you configure — the adapter interface decouples sync from storage.
+LakeSync syncs any data source to a local working set. The core loop follows a **push/pull** model where consumers (web apps, AI agents) push local changes and pull filtered subsets from remote sources via the gateway.
 
 ```mermaid
 sequenceDiagram
-    participant A as Client A (SQLite)
-    participant GW as Gateway (CF DO)
-    participant B as Client B (SQLite)
-    participant BE as Backend (any tier)
+    participant A as Web App (SQLite)
+    participant GW as Gateway
+    participant B as Agent (SQLite)
+    participant Source as Any Data Source
 
-    A->>GW: push deltas
-    GW-->>A: ACK + server HLC
-    B->>GW: push deltas
-    GW-->>B: ACK + server HLC
-    A->>GW: pull since last HLC
-    GW-->>A: new deltas from B
-    B->>GW: pull since last HLC
-    GW-->>B: new deltas from A
-    Note over GW,BE: Periodic batch flush
-    GW->>BE: flush to configured adapter
+    A->>GW: push local changes
+    GW-->>A: ACK + pull remote deltas
+    B->>GW: pull (sync rule: errors, last 24h)
+    GW->>Source: query via adapter
+    Source-->>GW: filtered results
+    GW-->>B: deltas matching rule
+    Note over GW,Source: Adapters are sources AND destinations
+    GW->>Source: flush / archive via adapter
 ```
 
-## Three Backend Tiers
+## Adapters
 
-LakeSync supports three backend tiers through pluggable adapters. Pick what fits your scale — client code stays the same.
+Any data source you can read from becomes a LakeSync adapter. Adapters are both sources and destinations — enabling bidirectional sync and cross-backend flows.
 
-| Tier | Backend | Interface | Use case |
-|------|---------|-----------|----------|
-| **SQL** | Postgres, MySQL, RDS | `DatabaseAdapter` | Small/medium OLTP data, familiar tooling |
-| **Analytics** | BigQuery | `DatabaseAdapter` | Query-heavy OLAP workloads, managed analytics |
-| **Data Lake** | S3/R2 via Apache Iceberg | `LakeAdapter` | Massive scale, zero ETL, open format |
+| Adapter | Interface | Use case |
+|---------|-----------|----------|
+| **Postgres / MySQL** | `DatabaseAdapter` | Operational OLTP data, familiar SQL tooling |
+| **BigQuery** | `DatabaseAdapter` | Analytics-scale queries, managed and serverless |
+| **S3 / R2 (Iceberg)** | `LakeAdapter` | Massive scale on object storage, open format |
+| **Anything else** | Either interface | CloudWatch, Stripe, custom APIs — implement the interface |
 
-The `DatabaseAdapter` interface (`insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema`) handles relational backends. The `LakeAdapter` interface (`putObject`, `getObject`, `listObjects`, `deleteObject`) handles object storage. The `CompositeAdapter` can route data to multiple backends simultaneously.
+The `DatabaseAdapter` interface (`insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema`) handles SQL-like sources. The `LakeAdapter` interface (`putObject`, `getObject`, `listObjects`, `deleteObject`) handles object storage. The `CompositeAdapter` routes data to multiple backends simultaneously.
 
 ## Hybrid Logical Clocks (HLC)
 
