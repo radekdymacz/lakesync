@@ -2,7 +2,7 @@
 	"name": "lakesync",
 	"version": "0.1.0",
 	"type": "module",
-	"description": "Offline-first sync engine that writes column-level deltas to an Apache Iceberg data lake",
+	"description": "Local-first sync engine with pluggable backends — Postgres, MySQL, BigQuery, S3/R2 via Apache Iceberg",
 	"license": "Apache-2.0",
 	"files": [
 		"dist"
@@ -45,6 +45,10 @@
 		"./analyst": {
 			"types": "./dist/analyst.d.ts",
 			"import": "./dist/analyst.js"
+		},
+		"./gateway-server": {
+			"types": "./dist/gateway-server.d.ts",
+			"import": "./dist/gateway-server.js"
 		}
 	},
 	"scripts": {
@@ -66,7 +70,8 @@
 		"@duckdb/duckdb-wasm": "^1.33.0",
 		"pg": "^8.0.0",
 		"mysql2": "^3.0.0",
-		"@google-cloud/bigquery": "^8.0.0"
+		"@google-cloud/bigquery": "^8.0.0",
+		"better-sqlite3": "^11.0.0"
 	},
 	"peerDependenciesMeta": {
 		"sql.js": {
@@ -97,6 +102,9 @@
 			"optional": true
 		},
 		"@google-cloud/bigquery": {
+			"optional": true
+		},
+		"better-sqlite3": {
 			"optional": true
 		}
 	}

@@ -11,6 +11,7 @@ export default defineConfig({
 		catalogue: "src/catalogue.ts",
 		compactor: "src/compactor.ts",
 		analyst: "src/analyst.ts",
+		"gateway-server": "src/gateway-server.ts",
 	},
 	format: ["esm"],
 	dts: { resolve: true },
@@ -28,5 +29,6 @@ export default defineConfig({
 		"pg",
 		"mysql2",
 		"@google-cloud/bigquery",
+		"better-sqlite3",
 	],
 });

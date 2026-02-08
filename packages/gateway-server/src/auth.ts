@@ -120,7 +120,11 @@ export async function verifyToken(
 
 	let valid: boolean;
 	try {
-		valid = await crypto.subtle.verify("HMAC", cryptoKey, signatureBytes, signingInput);
+		const sigBuf = new ArrayBuffer(signatureBytes.byteLength);
+		new Uint8Array(sigBuf).set(signatureBytes);
+		const inputBuf = new ArrayBuffer(signingInput.byteLength);
+		new Uint8Array(inputBuf).set(signingInput);
+		valid = await crypto.subtle.verify("HMAC", cryptoKey, sigBuf, inputBuf);
 	} catch {
 		return Err(new AuthError("Signature verification failed"));
 	}
