@@ -27,5 +27,6 @@ export default defineConfig({
 		"@duckdb/duckdb-wasm",
 		"pg",
 		"mysql2",
+		"@google-cloud/bigquery",
 	],
 });

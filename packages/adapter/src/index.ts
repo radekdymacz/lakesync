@@ -1,7 +1,9 @@
+export type { BigQueryAdapterConfig } from "./bigquery";
+export { BigQueryAdapter } from "./bigquery";
 export type { CompositeAdapterConfig, CompositeRoute } from "./composite";
 export { CompositeAdapter } from "./composite";
 export type { DatabaseAdapter, DatabaseAdapterConfig } from "./db-types";
-export { isDatabaseAdapter } from "./db-types";
+export { isDatabaseAdapter, lakeSyncTypeToBigQuery } from "./db-types";
 export type { MigrateOptions, MigrateProgress, MigrateResult } from "./migrate";
 export { migrateAdapter } from "./migrate";
 export { MinIOAdapter } from "./minio";

@@ -1,11 +1,21 @@
 # LakeSync
 
 ## Vision
-Local-first sync engine with **pluggable backends**. Client data lives in SQLite on the device, syncs through a lightweight gateway, and flushes to the backend of your choice:
-- **Small data** → Postgres, MySQL, RDS — familiar tooling, simple operations
-- **Large data** → Apache Iceberg on S3/R2 — infinite scale, zero ETL, operational data IS analytics data
+**The universal synchronisation engine.** Right data, right time, doesn't matter where it lives.
 
-The `LakeAdapter` interface (put/get/list/delete) abstracts the storage layer. Swap backends without changing client code.
+Three backend tiers, one abstraction — pick what fits your scale and requirements:
+- **Tier 1 — SQL** → Postgres, MySQL, RDS — small/medium OLTP data, familiar tooling
+- **Tier 2 — Analytics** → BigQuery, Snowflake — query-heavy OLAP workloads (planned)
+- **Tier 3 — Data Lake** → Apache Iceberg on S3/R2 — massive scale, zero ETL
+
+Client data lives in local SQLite, syncs through a lightweight gateway, flushes to whichever backend(s) you configure. The `LakeAdapter` and `DatabaseAdapter` interfaces abstract storage. Swap backends without changing client code.
+
+## Internal Context (not public)
+LakeSync is the data backbone for:
+- **CompanyOS** (https://company-os.pages.dev/) — company operating system web app
+- **AgentOS** — Claude Code Teams organised per department
+
+LakeSync ensures data flows between all systems: web apps, agents, and backends. The library itself is the public-facing product; CompanyOS and AgentOS are the primary consumers. Focus development on the library, not the consumers.
 
 ## Monorepo
 TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.

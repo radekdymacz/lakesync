@@ -30,6 +30,24 @@ export interface DatabaseAdapter {
 	close(): Promise<void>;
 }
 
+/**
+ * Map a LakeSync column type to a BigQuery column definition.
+ */
+export function lakeSyncTypeToBigQuery(type: TableSchema["columns"][number]["type"]): string {
+	switch (type) {
+		case "string":
+			return "STRING";
+		case "number":
+			return "FLOAT64";
+		case "boolean":
+			return "BOOL";
+		case "json":
+			return "JSON";
+		case "null":
+			return "STRING";
+	}
+}
+
 /** Type guard to distinguish DatabaseAdapter from LakeAdapter at runtime. */
 export function isDatabaseAdapter(adapter: unknown): adapter is DatabaseAdapter {
 	return (

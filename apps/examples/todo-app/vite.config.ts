@@ -5,11 +5,10 @@ export default defineConfig({
 	build: {
 		outDir: "dist",
 		rollupOptions: {
-			// The gateway imports @lakesync/parquet which uses Node-only modules
-			// (node:fs, node:module). These are never called in browser code
-			// (parquet flush requires a configured adapter, which is absent here).
-			// Mark them as external so Rollup does not attempt named-export resolution.
-			external: ["node:fs", "node:module"],
+			// Server-only packages (adapter backends, parquet, etc.) import Node
+			// built-ins that are never called in browser code. Externalise all
+			// `node:*` imports so Rollup does not attempt named-export resolution.
+			external: [/^node:/],
 		},
 	},
 });
