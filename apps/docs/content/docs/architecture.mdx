@@ -5,14 +5,14 @@ description: System architecture, key patterns, and design decisions.
 
 ## Overview
 
-LakeSync is a monorepo containing 10 packages and 3 apps. The core sync loop follows a **push/pull** model where clients push local deltas to a gateway and pull remote deltas back.
+LakeSync is a monorepo containing 10 packages and 3 apps. The core sync loop follows a **push/pull** model where clients push local deltas to a gateway and pull remote deltas back. The gateway flushes to whichever backend you configure — the adapter interface decouples sync from storage.
 
 ```mermaid
 sequenceDiagram
     participant A as Client A (SQLite)
     participant GW as Gateway (CF DO)
     participant B as Client B (SQLite)
-    participant ICE as Iceberg (S3/R2)
+    participant BE as Backend (any tier)
 
     A->>GW: push deltas
     GW-->>A: ACK + server HLC
@@ -22,9 +22,21 @@ sequenceDiagram
     GW-->>A: new deltas from B
     B->>GW: pull since last HLC
     GW-->>B: new deltas from A
-    Note over GW,ICE: Periodic batch flush
-    GW->>ICE: flush to Parquet / Iceberg
+    Note over GW,BE: Periodic batch flush
+    GW->>BE: flush to configured adapter
 ```
+
+## Three Backend Tiers
+
+LakeSync supports three backend tiers through pluggable adapters. Pick what fits your scale — client code stays the same.
+
+| Tier | Backend | Interface | Use case |
+|------|---------|-----------|----------|
+| **SQL** | Postgres, MySQL, RDS | `DatabaseAdapter` | Small/medium OLTP data, familiar tooling |
+| **Analytics** | BigQuery | `DatabaseAdapter` | Query-heavy OLAP workloads, managed analytics |
+| **Data Lake** | S3/R2 via Apache Iceberg | `LakeAdapter` | Massive scale, zero ETL, open format |
+
+The `DatabaseAdapter` interface (`insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema`) handles relational backends. The `LakeAdapter` interface (`putObject`, `getObject`, `listObjects`, `deleteObject`) handles object storage. The `CompositeAdapter` can route data to multiple backends simultaneously.
 
 ## Hybrid Logical Clocks (HLC)
 

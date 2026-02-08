@@ -13,7 +13,7 @@ const CORE_FLOW = `sequenceDiagram
     GW-->>DB: ACK + pull remote changes
     Note over GW: Deltas merge via HLC + LWW
     GW->>Backend: Batch flush
-    Note over Backend: Postgres? R2? S3?<br/>You choose the adapter.`;
+    Note over Backend: Postgres? BigQuery? S3?<br/>You choose the adapter.`;
 
 const SMALL_DATA = `sequenceDiagram
     participant Client as Client (SQLite)
@@ -25,6 +25,18 @@ const SMALL_DATA = `sequenceDiagram
     Note over DB: Familiar tooling<br/>Standard SQL queries<br/>Works with your existing stack
     Client->>GW: pull since last HLC
     GW-->>Client: new deltas`;
+
+const ANALYTICS_DATA = `sequenceDiagram
+    participant Client as Client (SQLite)
+    participant GW as Gateway
+    participant BQ as BigQuery
+    participant BI as Dashboards / BI
+
+    Client->>GW: push deltas
+    GW->>BQ: MERGE deltas
+    Note over BQ: Query-heavy OLAP workloads<br/>Managed, serverless
+    BI->>BQ: SELECT * FROM lakesync_deltas
+    Note over BI,BQ: Looker, Metabase,<br/>or any SQL client`;
 
 const LARGE_DATA = `sequenceDiagram
     participant Client as Client (SQLite)
@@ -95,16 +107,21 @@ export default function HomePage() {
 				</div>
 
 				<h1 className="mb-6 max-w-4xl text-center text-5xl font-bold tracking-tight sm:text-6xl lg:text-7xl">
-					Local-first sync.{" "}
-					<span className="text-fd-muted-foreground">Any backend.</span>
+					The universal{" "}
+					<span className="text-fd-muted-foreground">sync engine.</span>
 				</h1>
 
-				<p className="mx-auto mb-10 max-w-2xl text-center text-lg leading-relaxed text-fd-muted-foreground">
-					LakeSync is an open-source sync engine for local-first TypeScript apps.
+				<p className="mx-auto mb-4 max-w-2xl text-center text-lg leading-relaxed text-fd-muted-foreground">
+					Right data, right time, doesn&apos;t matter where it lives.
+				</p>
+
+				<p className="mx-auto mb-10 max-w-2xl text-center text-base leading-relaxed text-fd-muted-foreground">
+					LakeSync is an open-source sync engine for TypeScript apps.
 					Your data lives in SQLite on the device, syncs through a lightweight
-					gateway, and flushes to the backend of your choice &mdash; Postgres for
-					small data, S3/R2 via Apache Iceberg for large data. Same client code
-					either way.
+					gateway, and flushes to whichever backend fits your scale &mdash;
+					Postgres for small data, BigQuery for analytics, S3/R2 via
+					Apache Iceberg for massive scale. Same client code, any backend.
+					Works for web apps, AI agents, and everything in between.
 				</p>
 
 				<div className="flex flex-wrap items-center justify-center gap-4">
@@ -139,49 +156,63 @@ export default function HomePage() {
 				border
 			/>
 
-			{/* The adapter story */}
+			{/* The three-tier story */}
 			<section className="w-full px-4 py-24">
 				<div className="mx-auto max-w-5xl">
 					<div className="mb-3 text-center text-xs font-medium uppercase tracking-wider text-fd-muted-foreground">
-						Pluggable backends
+						Three tiers, one abstraction
 					</div>
 					<h2 className="mb-6 text-center text-3xl font-bold">
-						Right-size your backend
+						Pick what fits your scale
 					</h2>
 					<p className="mx-auto mb-16 max-w-2xl text-center leading-relaxed text-fd-muted-foreground">
-						The gateway speaks a simple adapter interface &mdash; put, get, list,
-						delete. Implement it for any storage you like. Start with a database
-						you already know, switch to the lakehouse when your data outgrows it.
-						Client code stays the same.
+						The gateway speaks a simple adapter interface. Start with a
+						database you already know, add analytics when you need insights,
+						switch to the lakehouse when your data outgrows it all. Client
+						code stays the same.
 					</p>
 
-					<div className="mx-auto grid max-w-5xl grid-cols-1 gap-12 md:grid-cols-2">
+					<div className="mx-auto grid max-w-5xl grid-cols-1 gap-8 md:grid-cols-3">
 						<div>
 							<h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-fd-muted-foreground">
-								Small data &mdash; use what you know
+								Tier 1 &mdash; SQL
 							</h3>
 							<div className="space-y-3 rounded-xl border border-fd-border p-5">
 								<div className="font-mono text-sm text-fd-muted-foreground">
-									Client SQLite → Gateway → <strong className="text-fd-foreground">Postgres / MySQL / RDS</strong>
+									<strong className="text-fd-foreground">Postgres / MySQL / RDS</strong>
 								</div>
 								<ul className="space-y-1 text-sm text-fd-muted-foreground">
+									<li>Small/medium OLTP data</li>
 									<li>Familiar tooling and SQL queries</li>
 									<li>Works with your existing stack</li>
-									<li>Simple operational model</li>
 								</ul>
 							</div>
 						</div>
 						<div>
 							<h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-fd-muted-foreground">
-								Large data &mdash; scale to the lake
+								Tier 2 &mdash; Analytics
+							</h3>
+							<div className="space-y-3 rounded-xl border border-fd-border p-5">
+								<div className="font-mono text-sm text-fd-muted-foreground">
+									<strong className="text-fd-foreground">BigQuery</strong>
+								</div>
+								<ul className="space-y-1 text-sm text-fd-muted-foreground">
+									<li>Query-heavy OLAP workloads</li>
+									<li>Managed, serverless analytics</li>
+									<li>Connect BI tools directly</li>
+								</ul>
+							</div>
+						</div>
+						<div>
+							<h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-fd-muted-foreground">
+								Tier 3 &mdash; Data Lake
 							</h3>
 							<div className="space-y-3 rounded-xl border border-fd-primary/50 bg-fd-primary/5 p-5">
 								<div className="font-mono text-sm text-fd-muted-foreground">
-									Client SQLite → Gateway → <strong className="text-fd-foreground">Iceberg (S3/R2)</strong>
+									<strong className="text-fd-foreground">Iceberg (S3/R2)</strong>
 								</div>
 								<ul className="space-y-1 text-sm text-fd-muted-foreground">
-									<li>Infinite scale on object storage</li>
-									<li>Operational + analytics in one place</li>
+									<li>Massive scale on object storage</li>
 									<li>Query with Spark, DuckDB, Athena, Trino</li>
 									<li>Zero ETL &mdash; no replication pipeline</li>
 								</ul>
@@ -191,21 +222,30 @@ export default function HomePage() {
 				</div>
 			</section>
 
-			{/* Small data diagram */}
+			{/* Tier 1: SQL diagram */}
 			<DiagramSection
-				label="Small data"
+				label="Tier 1 — SQL"
 				title="Sync to Postgres, MySQL, or any database"
 				description="For apps with manageable data volumes, flush to a traditional database. Standard SQL, familiar tooling, easy to operate. The gateway adapter abstracts the storage — swap backends without touching client code."
 				chart={SMALL_DATA}
 				border
 			/>
 
-			{/* Large data diagram */}
+			{/* Tier 2: Analytics diagram */}
 			<DiagramSection
-				label="Large data"
+				label="Tier 2 — Analytics"
+				title="Sync to BigQuery for query-heavy workloads"
+				description="When you need analytics at scale, flush deltas to BigQuery via idempotent MERGE. Serverless, fully managed, and your BI tools connect directly. Same sync protocol, no pipeline to maintain."
+				chart={ANALYTICS_DATA}
+			/>
+
+			{/* Tier 3: Data Lake diagram */}
+			<DiagramSection
+				label="Tier 3 — Data Lake"
 				title="Sync to the lakehouse. Zero ETL."
 				description="When your data outgrows a single database, flush to Apache Iceberg on S3 or Cloudflare R2. Parquet files, open table format, queryable by any analytics engine. Your operational data and your analytics data are the same thing."
 				chart={LARGE_DATA}
+				border
 			/>
 
 			{/* Conflict resolution */}
@@ -214,7 +254,6 @@ export default function HomePage() {
 				title="Column-level merge, not row-level overwrite"
 				description="Concurrent edits to different fields of the same record are both preserved. Hybrid logical clocks provide causal ordering with deterministic client ID tiebreaking."
 				chart={CONFLICT_RESOLUTION}
-				border
 			/>
 
 			{/* Offline */}
@@ -223,6 +262,7 @@ export default function HomePage() {
 				title="Works without a connection, catches up when it returns"
 				description="The full dataset lives in local SQLite. Edits queue in a persistent IndexedDB outbox that survives page refreshes and browser crashes. When connectivity returns, the outbox drains automatically."
 				chart={OFFLINE_SYNC}
+				border
 			/>
 
 			{/* Sync rules */}
@@ -231,11 +271,10 @@ export default function HomePage() {
 				title="Each client gets only the data they need"
 				description="Declarative bucket-based filtering with JWT claim references. The gateway evaluates rules at pull time — clients never download data they shouldn't see."
 				chart={SYNC_RULES}
-				border
 			/>
 
 			{/* Design decisions */}
-			<section className="w-full px-4 py-24">
+			<section className="w-full border-t border-fd-border px-4 py-24">
 				<div className="mx-auto max-w-5xl">
 					<div className="mb-3 text-center text-xs font-medium uppercase tracking-wider text-fd-muted-foreground">
 						Under the hood
@@ -246,7 +285,7 @@ export default function HomePage() {
 					<div className="grid grid-cols-1 gap-6 md:grid-cols-3">
 						<Feature
 							title="Pluggable adapters"
-							description="The gateway flushes through a LakeAdapter interface — put, get, list, delete. Implement it for S3, R2, Postgres, MySQL, or anything else."
+							description="The gateway flushes through adapter interfaces — LakeAdapter for object storage, DatabaseAdapter for SQL backends. S3, R2, Postgres, MySQL, BigQuery, or anything else."
 						/>
 						<Feature
 							title="Hybrid Logical Clocks"
@@ -281,10 +320,9 @@ export default function HomePage() {
 					<h2 className="mb-4 text-3xl font-bold">Experimental, but real</h2>
 					<p className="mb-8 leading-relaxed text-fd-muted-foreground">
 						Core sync engine, conflict resolution, client SDK, Cloudflare Workers
-						gateway, compaction, checkpoint generation, sync rules, and initial sync
-						are all implemented and tested. The S3/Iceberg adapter is production-ready;
-						database adapters are coming next. API is not yet stable &mdash; expect
-						breaking changes.
+						gateway, compaction, checkpoint generation, sync rules, initial sync,
+						and all three backend tiers are implemented and tested. The API is
+						not yet stable &mdash; expect breaking changes.
 					</p>
 					<div className="flex flex-wrap items-center justify-center gap-4">
 						<Link
