@@ -1,6 +1,13 @@
 import { verifyToken } from "./auth";
 import type { Env } from "./env";
 import { logger } from "./logger";
+import {
+	handleShardedAdmin,
+	handleShardedPull,
+	handleShardedPush,
+	parseShardConfig,
+	type ShardConfig,
+} from "./shard-router";
 
 export { SyncGatewayDO } from "./sync-gateway-do";
 
@@ -162,23 +169,41 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 		);
 	}
 
+	// Attach identity headers to the request for DO consumption
+	const shardHeaders = new Headers(request.headers);
+	shardHeaders.set("X-Client-Id", clientId);
+	const { customClaims } = authResult.value;
+	shardHeaders.set("X-Auth-Claims", JSON.stringify(customClaims));
+
+	const enrichedRequest = new Request(request.url, {
+		method: request.method,
+		headers: shardHeaders,
+		body: request.body,
+	});
+
+	// ── Shard routing ──────────────────────────────────────────────
+	const shardConfig = env.SHARD_CONFIG ? parseShardConfig(env.SHARD_CONFIG) : null;
+
+	if (shardConfig) {
+		const response = await handleShardedRoute(shardConfig, enrichedRequest, route, env);
+		const durationMs = Date.now() - startMs;
+		logger.info("response", { method, path, status: response.status, durationMs, sharded: true });
+		return response;
+	}
+
+	// ── Direct DO routing (no sharding) ─────────────────────────────
+
 	const id = env.SYNC_GATEWAY.idFromName(route.gatewayId);
 	const stub = env.SYNC_GATEWAY.get(id);
 
 	const doUrl = new URL(request.url);
 	doUrl.pathname = route.doPath;
-	const doHeaders = new Headers(request.headers);
-	doHeaders.set("X-Client-Id", clientId);
-
-	// Forward custom JWT claims for sync rules evaluation
-	const { customClaims } = authResult.value;
-	doHeaders.set("X-Auth-Claims", JSON.stringify(customClaims));
 
 	const response = await stub.fetch(
 		new Request(doUrl.toString(), {
 			method: route.doMethod ?? method,
-			headers: doHeaders,
-			body: route.forwardBody ? request.body : undefined,
+			headers: shardHeaders,
+			body: route.forwardBody ? enrichedRequest.body : undefined,
 		}),
 	);
 
@@ -186,6 +211,59 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 	logger.info("response", { method, path, status: response.status, durationMs });
 
 	return response;
+}
+
+/**
+ * Route a request through the shard router, dispatching to the appropriate
+ * Durable Object(s) based on the table sharding configuration.
+ */
+async function handleShardedRoute(
+	config: ShardConfig,
+	request: Request,
+	route: RouteMatch,
+	env: Env,
+): Promise<Response> {
+	const url = new URL(request.url);
+
+	// Push — partition deltas by shard and fan out
+	if (route.doPath === "/push") {
+		return handleShardedPush(config, request, env.SYNC_GATEWAY);
+	}
+
+	// Pull — fan out to all shards and merge
+	if (route.doPath === "/pull") {
+		return handleShardedPull(config, request, url, env.SYNC_GATEWAY);
+	}
+
+	// Checkpoint — fan out to all shards (not yet implemented as sharded)
+	// For now, route to the default shard
+	if (route.doPath === "/checkpoint") {
+		const id = env.SYNC_GATEWAY.idFromName(config.default);
+		const stub = env.SYNC_GATEWAY.get(id);
+		const doUrl = new URL(request.url);
+		doUrl.pathname = route.doPath;
+		return stub.fetch(
+			new Request(doUrl.toString(), {
+				method: route.doMethod ?? request.method,
+				headers: request.headers,
+			}),
+		);
+	}
+
+	// Admin operations — fan out to all shards
+	let body: string | null = null;
+	if (route.forwardBody) {
+		body = await request.text();
+	}
+
+	return handleShardedAdmin(
+		config,
+		request,
+		route.doPath,
+		route.doMethod ?? request.method,
+		env.SYNC_GATEWAY,
+		body,
+	);
 }
 
 // ---------------------------------------------------------------------------

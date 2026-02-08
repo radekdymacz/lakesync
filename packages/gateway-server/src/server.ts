@@ -1,0 +1,620 @@
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
+import type { HLCTimestamp, SyncRulesConfig, SyncRulesContext, TableSchema } from "@lakesync/core";
+import { bigintReplacer, bigintReviver, validateSyncRules } from "@lakesync/core";
+import { SyncGateway, type SyncPull, type SyncPush } from "@lakesync/gateway";
+import { type AuthClaims, verifyToken } from "./auth";
+import { type DeltaPersistence, MemoryPersistence, SqlitePersistence } from "./persistence";
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+/** Configuration for the self-hosted gateway server. */
+export interface GatewayServerConfig {
+	/** Port to listen on (default 3000). */
+	port?: number;
+	/** Unique gateway identifier. */
+	gatewayId: string;
+	/** Storage adapter — LakeAdapter (S3/R2) or DatabaseAdapter (Postgres/MySQL). */
+	adapter?: LakeAdapter | DatabaseAdapter;
+	/** Maximum buffer size in bytes before triggering flush (default 4 MiB). */
+	maxBufferBytes?: number;
+	/** Maximum buffer age in milliseconds before triggering flush (default 30s). */
+	maxBufferAgeMs?: number;
+	/** HMAC-SHA256 secret for JWT verification. When omitted, auth is disabled. */
+	jwtSecret?: string;
+	/** Interval in milliseconds between periodic flushes (default 30s). */
+	flushIntervalMs?: number;
+	/** CORS allowed origins. When omitted, all origins are reflected. */
+	allowedOrigins?: string[];
+	/** DeltaBuffer persistence strategy (default "memory"). */
+	persistence?: "memory" | "sqlite";
+	/** Path to the SQLite file when `persistence` is "sqlite" (default "./lakesync-buffer.sqlite"). */
+	sqlitePath?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const DEFAULT_PORT = 3000;
+const DEFAULT_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+const DEFAULT_MAX_BUFFER_AGE_MS = 30_000;
+const DEFAULT_FLUSH_INTERVAL_MS = 30_000;
+const MAX_PUSH_PAYLOAD_BYTES = 1_048_576;
+const MAX_DELTAS_PER_PUSH = 10_000;
+const MAX_PULL_LIMIT = 10_000;
+const DEFAULT_PULL_LIMIT = 100;
+const VALID_COLUMN_TYPES = new Set(["string", "number", "boolean", "json", "null"]);
+
+// ---------------------------------------------------------------------------
+// Route matching
+// ---------------------------------------------------------------------------
+
+interface RouteMatch {
+	gatewayId: string;
+	action: string;
+}
+
+function matchRoute(pathname: string, method: string): RouteMatch | null {
+	// POST /sync/:gatewayId/push
+	{
+		const match = pathname.match(/^\/sync\/([^/]+)\/push$/);
+		if (match && method === "POST") {
+			return { gatewayId: match[1]!, action: "push" };
+		}
+	}
+	// GET /sync/:gatewayId/pull
+	{
+		const match = pathname.match(/^\/sync\/([^/]+)\/pull$/);
+		if (match && method === "GET") {
+			return { gatewayId: match[1]!, action: "pull" };
+		}
+	}
+	// POST /admin/flush/:gatewayId
+	{
+		const match = pathname.match(/^\/admin\/flush\/([^/]+)$/);
+		if (match && method === "POST") {
+			return { gatewayId: match[1]!, action: "flush" };
+		}
+	}
+	// POST /admin/schema/:gatewayId
+	{
+		const match = pathname.match(/^\/admin\/schema\/([^/]+)$/);
+		if (match && method === "POST") {
+			return { gatewayId: match[1]!, action: "schema" };
+		}
+	}
+	// POST /admin/sync-rules/:gatewayId
+	{
+		const match = pathname.match(/^\/admin\/sync-rules\/([^/]+)$/);
+		if (match && method === "POST") {
+			return { gatewayId: match[1]!, action: "sync-rules" };
+		}
+	}
+	return null;
+}
+
+// ---------------------------------------------------------------------------
+// Node HTTP helpers
+// ---------------------------------------------------------------------------
+
+/** Read the full request body as a string. */
+function readBody(req: IncomingMessage): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const chunks: Buffer[] = [];
+		req.on("data", (chunk: Buffer) => chunks.push(chunk));
+		req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+		req.on("error", reject);
+	});
+}
+
+/** Send a JSON response. */
+function sendJson(
+	res: ServerResponse,
+	body: unknown,
+	status = 200,
+	extraHeaders?: Record<string, string>,
+): void {
+	const json = JSON.stringify(body, bigintReplacer);
+	res.writeHead(status, {
+		"Content-Type": "application/json",
+		...extraHeaders,
+	});
+	res.end(json);
+}
+
+/** Send a JSON error response. */
+function sendError(
+	res: ServerResponse,
+	message: string,
+	status: number,
+	extraHeaders?: Record<string, string>,
+): void {
+	sendJson(res, { error: message }, status, extraHeaders);
+}
+
+// ---------------------------------------------------------------------------
+// GatewayServer
+// ---------------------------------------------------------------------------
+
+/**
+ * Self-hosted HTTP gateway server wrapping {@link SyncGateway}.
+ *
+ * Provides the same route surface as the Cloudflare Workers gateway-worker
+ * but runs as a standalone Node/Bun HTTP server. Supports optional JWT
+ * authentication, CORS, periodic flush, and SQLite-based buffer persistence.
+ *
+ * @example
+ * ```ts
+ * const server = new GatewayServer({
+ *   gatewayId: "my-gateway",
+ *   port: 3000,
+ *   adapter: new PostgresAdapter({ connectionString: "..." }),
+ *   jwtSecret: process.env.JWT_SECRET,
+ * });
+ * await server.start();
+ * ```
+ */
+export class GatewayServer {
+	private gateway: SyncGateway;
+	private config: Required<Pick<GatewayServerConfig, "port" | "gatewayId" | "flushIntervalMs">> &
+		GatewayServerConfig;
+	private httpServer: Server | null = null;
+	private flushTimer: ReturnType<typeof setInterval> | null = null;
+	private schemas = new Map<string, TableSchema>();
+	private syncRules = new Map<string, SyncRulesConfig>();
+	private persistence: DeltaPersistence;
+	private resolvedPort = 0;
+
+	constructor(config: GatewayServerConfig) {
+		this.config = {
+			port: config.port ?? DEFAULT_PORT,
+			flushIntervalMs: config.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS,
+			...config,
+		};
+
+		this.gateway = new SyncGateway(
+			{
+				gatewayId: config.gatewayId,
+				maxBufferBytes: config.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
+				maxBufferAgeMs: config.maxBufferAgeMs ?? DEFAULT_MAX_BUFFER_AGE_MS,
+			},
+			config.adapter,
+		);
+
+		this.persistence =
+			config.persistence === "sqlite"
+				? new SqlitePersistence(config.sqlitePath ?? "./lakesync-buffer.sqlite")
+				: new MemoryPersistence();
+	}
+
+	/**
+	 * Start the HTTP server and periodic flush timer.
+	 *
+	 * Rehydrates unflushed deltas from the persistence layer before
+	 * accepting connections.
+	 */
+	async start(): Promise<void> {
+		// Rehydrate unflushed deltas from persistence
+		const persisted = this.persistence.loadAll();
+		if (persisted.length > 0) {
+			const push: SyncPush = {
+				clientId: "__rehydrate__",
+				deltas: persisted,
+				lastSeenHlc: 0n as HLCTimestamp,
+			};
+			this.gateway.handlePush(push);
+			this.persistence.clear();
+		}
+
+		this.httpServer = createServer((req, res) => {
+			this.handleRequest(req, res);
+		});
+
+		await new Promise<void>((resolve) => {
+			this.httpServer!.listen(this.config.port, () => {
+				const addr = this.httpServer!.address();
+				if (addr && typeof addr === "object") {
+					this.resolvedPort = addr.port;
+				}
+				resolve();
+			});
+		});
+
+		// Periodic flush
+		this.flushTimer = setInterval(() => {
+			this.periodicFlush();
+		}, this.config.flushIntervalMs);
+	}
+
+	/** Stop the server and clear the flush timer. */
+	async stop(): Promise<void> {
+		if (this.flushTimer) {
+			clearInterval(this.flushTimer);
+			this.flushTimer = null;
+		}
+		if (this.httpServer) {
+			await new Promise<void>((resolve) => {
+				this.httpServer!.close(() => resolve());
+			});
+			this.httpServer = null;
+		}
+		this.persistence.close();
+	}
+
+	/** The port the server is listening on (available after start). */
+	get port(): number {
+		return this.resolvedPort || this.config.port;
+	}
+
+	/** The underlying SyncGateway instance for direct access. */
+	get gatewayInstance(): SyncGateway {
+		return this.gateway;
+	}
+
+	// -----------------------------------------------------------------------
+	// Request handling
+	// -----------------------------------------------------------------------
+
+	private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		const method = req.method ?? "GET";
+		const rawUrl = req.url ?? "/";
+		const url = new URL(rawUrl, `http://${req.headers.host ?? "localhost"}`);
+		const pathname = url.pathname;
+		const origin = req.headers.origin ?? null;
+		const corsH = this.corsHeaders(origin);
+
+		// CORS preflight
+		if (method === "OPTIONS") {
+			res.writeHead(204, corsH);
+			res.end();
+			return;
+		}
+
+		// Health check — unauthenticated
+		if (pathname === "/health" && method === "GET") {
+			sendJson(res, { status: "ok" }, 200, corsH);
+			return;
+		}
+
+		// Route matching
+		const route = matchRoute(pathname, method);
+		if (!route) {
+			sendError(res, "Not found", 404, corsH);
+			return;
+		}
+
+		// Verify gateway ID matches
+		if (route.gatewayId !== this.config.gatewayId) {
+			sendError(res, "Gateway ID mismatch", 404, corsH);
+			return;
+		}
+
+		// Authentication
+		let auth: AuthClaims | undefined;
+		if (this.config.jwtSecret) {
+			const token = extractBearerToken(req);
+			if (!token) {
+				sendError(res, "Missing Bearer token", 401, corsH);
+				return;
+			}
+
+			const authResult = await verifyToken(token, this.config.jwtSecret);
+			if (!authResult.ok) {
+				sendError(res, authResult.error.message, 401, corsH);
+				return;
+			}
+
+			auth = authResult.value;
+
+			// Verify JWT gateway ID matches the route
+			if (auth.gatewayId !== route.gatewayId) {
+				sendError(res, "Gateway ID mismatch: JWT authorises a different gateway", 403, corsH);
+				return;
+			}
+
+			// Admin route protection
+			if (route.action === "flush" || route.action === "schema" || route.action === "sync-rules") {
+				if (auth.role !== "admin") {
+					sendError(res, "Admin role required", 403, corsH);
+					return;
+				}
+			}
+		}
+
+		switch (route.action) {
+			case "push":
+				await this.handlePush(req, res, corsH, auth);
+				break;
+			case "pull":
+				await this.handlePull(url, res, corsH, auth);
+				break;
+			case "flush":
+				await this.handleFlush(res, corsH);
+				break;
+			case "schema":
+				await this.handleSaveSchema(req, res, corsH);
+				break;
+			case "sync-rules":
+				await this.handleSaveSyncRules(req, res, corsH);
+				break;
+			default:
+				sendError(res, "Not found", 404, corsH);
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Route handlers
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Handle `POST /sync/:gatewayId/push` -- ingest client deltas.
+	 */
+	private async handlePush(
+		req: IncomingMessage,
+		res: ServerResponse,
+		corsH: Record<string, string>,
+		auth?: AuthClaims,
+	): Promise<void> {
+		const contentLength = Number(req.headers["content-length"] ?? "0");
+		if (contentLength > MAX_PUSH_PAYLOAD_BYTES) {
+			sendError(res, "Payload too large (max 1 MiB)", 413, corsH);
+			return;
+		}
+
+		let body: SyncPush;
+		try {
+			const raw = await readBody(req);
+			body = JSON.parse(raw, bigintReviver) as SyncPush;
+		} catch {
+			sendError(res, "Invalid JSON body", 400, corsH);
+			return;
+		}
+
+		if (!body.clientId || !Array.isArray(body.deltas)) {
+			sendError(res, "Missing required fields: clientId, deltas", 400, corsH);
+			return;
+		}
+
+		if (auth && body.clientId !== auth.clientId) {
+			sendError(
+				res,
+				"Client ID mismatch: push clientId does not match authenticated identity",
+				403,
+				corsH,
+			);
+			return;
+		}
+
+		if (body.deltas.length > MAX_DELTAS_PER_PUSH) {
+			sendError(res, "Too many deltas in a single push (max 10,000)", 400, corsH);
+			return;
+		}
+
+		// Persist before processing (WAL-style)
+		this.persistence.appendBatch(body.deltas);
+
+		const result = this.gateway.handlePush(body);
+
+		if (!result.ok) {
+			const err = result.error;
+			if (err.code === "CLOCK_DRIFT") {
+				sendError(res, err.message, 409, corsH);
+				return;
+			}
+			if (err.code === "SCHEMA_MISMATCH") {
+				sendError(res, err.message, 422, corsH);
+				return;
+			}
+			sendError(res, err.message, 500, corsH);
+			return;
+		}
+
+		// Clear persisted deltas on success — they are now in the in-memory buffer
+		this.persistence.clear();
+
+		sendJson(res, result.value, 200, corsH);
+	}
+
+	/**
+	 * Handle `GET /sync/:gatewayId/pull` -- retrieve deltas since a given HLC.
+	 */
+	private async handlePull(
+		url: URL,
+		res: ServerResponse,
+		corsH: Record<string, string>,
+		auth?: AuthClaims,
+	): Promise<void> {
+		const sinceParam = url.searchParams.get("since");
+		const clientId = url.searchParams.get("clientId");
+		const limitParam = url.searchParams.get("limit");
+		const source = url.searchParams.get("source");
+
+		if (!sinceParam || !clientId) {
+			sendError(res, "Missing required query params: since, clientId", 400, corsH);
+			return;
+		}
+
+		let sinceHlc: HLCTimestamp;
+		try {
+			sinceHlc = BigInt(sinceParam) as HLCTimestamp;
+		} catch {
+			sendError(res, "Invalid 'since' parameter — must be a decimal integer", 400, corsH);
+			return;
+		}
+
+		const rawLimit = limitParam ? Number.parseInt(limitParam, 10) : DEFAULT_PULL_LIMIT;
+		if (Number.isNaN(rawLimit) || rawLimit < 1) {
+			sendError(res, "Invalid 'limit' parameter — must be a positive integer", 400, corsH);
+			return;
+		}
+		const maxDeltas = Math.min(rawLimit, MAX_PULL_LIMIT);
+
+		const msg: SyncPull = { clientId, sinceHlc, maxDeltas, ...(source ? { source } : {}) };
+		const context = this.buildSyncRulesContext(auth);
+
+		const result = source
+			? await this.gateway.handlePull(msg as SyncPull & { source: string }, context)
+			: this.gateway.handlePull(msg, context);
+
+		if (!result.ok) {
+			const err = result.error;
+			if (err.code === "ADAPTER_NOT_FOUND") {
+				sendError(res, err.message, 404, corsH);
+				return;
+			}
+			sendError(res, err.message, 500, corsH);
+			return;
+		}
+
+		sendJson(res, result.value, 200, corsH);
+	}
+
+	/** Handle `POST /admin/flush/:gatewayId` -- manual flush. */
+	private async handleFlush(res: ServerResponse, corsH: Record<string, string>): Promise<void> {
+		const result = await this.gateway.flush();
+		if (!result.ok) {
+			sendError(res, result.error.message, 500, corsH);
+			return;
+		}
+		this.persistence.clear();
+		sendJson(res, { flushed: true }, 200, corsH);
+	}
+
+	/** Handle `POST /admin/schema/:gatewayId` -- save table schema. */
+	private async handleSaveSchema(
+		req: IncomingMessage,
+		res: ServerResponse,
+		corsH: Record<string, string>,
+	): Promise<void> {
+		let schema: TableSchema;
+		try {
+			const raw = await readBody(req);
+			schema = JSON.parse(raw) as TableSchema;
+		} catch {
+			sendError(res, "Invalid JSON body", 400, corsH);
+			return;
+		}
+
+		if (!schema.table || !Array.isArray(schema.columns)) {
+			sendError(res, "Missing required fields: table, columns", 400, corsH);
+			return;
+		}
+
+		for (const col of schema.columns) {
+			if (typeof col.name !== "string" || col.name.length === 0) {
+				sendError(res, "Each column must have a non-empty 'name' string", 400, corsH);
+				return;
+			}
+			if (!VALID_COLUMN_TYPES.has(col.type)) {
+				sendError(
+					res,
+					`Invalid column type "${col.type}" for column "${col.name}". Allowed: string, number, boolean, json, null`,
+					400,
+					corsH,
+				);
+				return;
+			}
+		}
+
+		this.schemas.set(this.config.gatewayId, schema);
+		sendJson(res, { saved: true }, 200, corsH);
+	}
+
+	/** Handle `POST /admin/sync-rules/:gatewayId` -- save sync rules. */
+	private async handleSaveSyncRules(
+		req: IncomingMessage,
+		res: ServerResponse,
+		corsH: Record<string, string>,
+	): Promise<void> {
+		let config: unknown;
+		try {
+			const raw = await readBody(req);
+			config = JSON.parse(raw);
+		} catch {
+			sendError(res, "Invalid JSON body", 400, corsH);
+			return;
+		}
+
+		const validation = validateSyncRules(config);
+		if (!validation.ok) {
+			sendError(res, validation.error.message, 400, corsH);
+			return;
+		}
+
+		this.syncRules.set(this.config.gatewayId, config as SyncRulesConfig);
+		sendJson(res, { saved: true }, 200, corsH);
+	}
+
+	// -----------------------------------------------------------------------
+	// Periodic flush
+	// -----------------------------------------------------------------------
+
+	private async periodicFlush(): Promise<void> {
+		if (this.gateway.bufferStats.logSize === 0) {
+			return;
+		}
+
+		const result = await this.gateway.flush();
+		if (result.ok) {
+			this.persistence.clear();
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Sync rules context
+	// -----------------------------------------------------------------------
+
+	private buildSyncRulesContext(auth?: AuthClaims): SyncRulesContext | undefined {
+		const rules = this.syncRules.get(this.config.gatewayId);
+		if (!rules || rules.buckets.length === 0) {
+			return undefined;
+		}
+
+		const claims = auth?.customClaims ?? {};
+		return { claims, rules };
+	}
+
+	// -----------------------------------------------------------------------
+	// CORS
+	// -----------------------------------------------------------------------
+
+	private corsHeaders(origin?: string | null): Record<string, string> {
+		const allowedOrigins = this.config.allowedOrigins;
+		let allowOrigin = "*";
+
+		if (allowedOrigins && allowedOrigins.length > 0) {
+			if (origin && allowedOrigins.includes(origin)) {
+				allowOrigin = origin;
+			} else {
+				return {};
+			}
+		} else if (origin) {
+			allowOrigin = origin;
+		}
+
+		return {
+			"Access-Control-Allow-Origin": allowOrigin,
+			"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+			"Access-Control-Allow-Headers": "Authorization, Content-Type",
+			"Access-Control-Max-Age": "86400",
+		};
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the Bearer token from an Authorization header.
+ * Returns the raw token string, or null if missing/malformed.
+ */
+function extractBearerToken(req: IncomingMessage): string | null {
+	const header = req.headers.authorization;
+	if (!header) return null;
+	const match = header.match(/^Bearer\s+(\S+)$/);
+	return match?.[1] ?? null;
+}

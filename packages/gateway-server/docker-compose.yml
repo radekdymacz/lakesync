@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: lakesync
+      POSTGRES_PASSWORD: lakesync
+      POSTGRES_DB: lakesync
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: packages/gateway-server/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      GATEWAY_ID: "default"
+      DATABASE_URL: "postgres://lakesync:lakesync@postgres:5432/lakesync"
+      JWT_SECRET: "change-me-in-production"
+      PERSISTENCE: "sqlite"
+      SQLITE_PATH: "/data/lakesync-buffer.sqlite"
+    volumes:
+      - gateway-data:/data
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:
+  gateway-data:

@@ -5,7 +5,7 @@
 
 **Local-first sync. Any backend.**
 
-LakeSync is an open-source sync engine for local-first TypeScript apps. Your data lives in SQLite on the device, syncs through a lightweight gateway, and flushes to the backend of your choice — **Postgres for small data, S3/R2 via Apache Iceberg for large data**. Same client code either way.
+LakeSync is an open-source sync engine for local-first TypeScript apps. Your data lives in SQLite on the device, syncs through a lightweight gateway, and flushes to the backend of your choice — **Postgres for small data, BigQuery for analytics, S3/R2 via Apache Iceberg for large data**. Same client code either way.
 
 **[Documentation](https://radekdymacz.github.io/lakesync)** · **[Getting Started](https://radekdymacz.github.io/lakesync/docs/getting-started)** · **[Architecture](https://radekdymacz.github.io/lakesync/docs/architecture)**
 
@@ -19,9 +19,10 @@ Most sync engines lock you into a single backend. LakeSync's `LakeAdapter` inter
 | Column-level conflict resolution | Rarely | N/A | **Yes** |
 | Pluggable backend | No | No | **Yes** |
 | Small data (Postgres/MySQL) | Yes | No | **Yes** |
+| Analytics (BigQuery) | Sometimes | Sometimes | **Yes** |
 | Large data (Iceberg/S3/R2) | No | Yes | **Yes** |
 | Time-travel queries | No | Yes | **Yes** |
-| Runs on the edge (CF Workers) | Sometimes | No | **Yes** |
+| Self-hosted or edge (CF Workers) | Sometimes | No | **Yes** |
 
 ## How It Works
 
@@ -29,7 +30,7 @@ Most sync engines lock you into a single backend. LakeSync's `LakeAdapter` inter
 sequenceDiagram
     participant App as Your App
     participant DB as Local SQLite
-    participant GW as Gateway (CF DO)
+    participant GW as Gateway (CF DO / Self-Hosted)
     participant Backend as Any Backend
 
     App->>DB: INSERT / UPDATE / DELETE
@@ -38,7 +39,7 @@ sequenceDiagram
     GW-->>DB: ACK + pull remote changes
     Note over GW: Deltas merge via HLC + LWW
     GW->>Backend: Batch flush
-    Note over Backend: Postgres? R2? S3?<br/>You choose the adapter.
+    Note over Backend: Postgres? BigQuery? R2?<br/>You choose the adapter.
 ```
 
 1. **Mutations write to local SQLite** with zero latency
@@ -77,6 +78,28 @@ const adapter = new CompositeAdapter({
 ```
 
 The `CompositeAdapter` routes deltas to different backends by table name. When your data outgrows one backend, `migrateAdapter()` moves it to another — idempotent and safe to re-run.
+
+### Replicate — fan out writes
+
+```typescript
+const adapter = new FanOutAdapter({
+  primary: postgresAdapter,         // sync — fast operational reads/writes
+  secondaries: [bigqueryAdapter],   // async — best-effort analytics replica
+});
+```
+
+The `FanOutAdapter` writes to a primary adapter synchronously and replicates to secondaries in the background. Secondary failures never block the write path.
+
+### Tier — age-based lifecycle
+
+```typescript
+const adapter = new LifecycleAdapter({
+  hot: { adapter: postgresAdapter, maxAgeMs: 30 * 24 * 60 * 60 * 1000 }, // 30 days
+  cold: { adapter: bigqueryAdapter },
+});
+```
+
+Recent data stays in the hot tier for fast queries. Older data is served from the cold tier. Call `migrateToTier()` on a schedule to move aged-out deltas.
 
 ## Column-Level Conflict Resolution
 
@@ -128,14 +151,15 @@ sequenceDiagram
 
 ## Sync Rules
 
-Declarative bucket-based filtering with JWT claim references. The gateway evaluates rules at pull time — clients never download data they shouldn't see.
+Declarative bucket-based filtering with JWT claim references. The gateway evaluates rules at pull time — clients never download data they shouldn't see. Supports operators: `eq`, `neq`, `in`, `gt`, `lt`, `gte`, `lte`.
 
 ```json
 {
   "buckets": [{
     "name": "user-data",
     "filters": [
-      { "column": "user_id", "op": "eq", "value": "jwt:sub" }
+      { "column": "user_id", "op": "eq", "value": "jwt:sub" },
+      { "column": "priority", "op": "gte", "value": "3" }
     ],
     "tables": ["todos", "preferences"]
   }]
@@ -185,10 +209,36 @@ bun run test
 
 ### Deploy the Gateway
 
+**Cloudflare Workers (edge):**
+
 ```bash
 cd apps/gateway-worker
 wrangler r2 bucket create lakesync-data  # once
 wrangler deploy
+```
+
+**Self-hosted (Node.js / Bun):**
+
+```typescript
+import { GatewayServer } from "@lakesync/gateway-server";
+import { PostgresAdapter } from "@lakesync/adapter";
+
+const adapter = new PostgresAdapter({ connectionString: "postgres://..." });
+const server = new GatewayServer({
+  port: 3000,
+  gatewayId: "my-gateway",
+  adapter,
+  jwtSecret: "your-secret",
+  persistence: "sqlite", // survive restarts
+});
+server.start();
+```
+
+Or use Docker:
+
+```bash
+cd packages/gateway-server
+docker compose up
 ```
 
 See the [Todo App](apps/examples/todo-app/) for a complete working example.
@@ -205,19 +255,26 @@ graph TB
         Q[(IDB Queue)]
     end
 
-    subgraph "Edge (Cloudflare Workers)"
-        GW[SyncGateway<br/>Durable Object]
-        BUF[DeltaBuffer<br/>Log + Index]
-        AUTH[JWT Auth + Sync Rules]
+    subgraph "Gateway (pick one)"
+        subgraph "Edge"
+            CF[CF Workers + DO]
+        end
+        subgraph "Self-Hosted"
+            SH[GatewayServer<br/>Node.js / Bun]
+        end
     end
 
-    subgraph "Small Data"
+    subgraph "Backends"
         PG[(Postgres / MySQL)]
-    end
-
-    subgraph "Large Data"
+        BQ[(BigQuery)]
         R2[(R2 / S3)]
         PQ[Parquet / Iceberg]
+    end
+
+    subgraph "Adapters"
+        COMP[CompositeAdapter<br/>route by table]
+        FAN[FanOutAdapter<br/>replicate writes]
+        LIFE[LifecycleAdapter<br/>hot / cold tiers]
     end
 
     subgraph "Analytics"
@@ -228,11 +285,16 @@ graph TB
     SC --> ST
     ST --> DB
     ST --> Q
-    SC -->|HTTP| AUTH
-    AUTH --> GW
-    GW --> BUF
-    BUF -->|DatabaseAdapter| PG
-    BUF -->|LakeAdapter| R2
+    SC -->|HTTP| CF
+    SC -->|HTTP| SH
+    CF --> COMP
+    SH --> COMP
+    COMP --> PG
+    COMP --> R2
+    FAN --> PG
+    FAN --> BQ
+    LIFE --> PG
+    LIFE --> BQ
     R2 --> PQ
     DDB -->|query| PQ
 ```
@@ -244,7 +306,9 @@ graph TB
 - **Deterministic delta IDs** — SHA-256 hash of `(clientId, hlc, table, rowId, columns)` enables idempotent push
 - **DeltaBuffer** — dual structure (append log + row index) gives O(1) conflict checks and O(n) flush
 - **Result\<T, E\>** everywhere — no exceptions cross API boundaries; all errors are typed and composable
-- **CompositeAdapter** — route different tables to different backends. Mix Postgres + Iceberg in one deployment.
+- **Adapter composition** — `CompositeAdapter` (route by table), `FanOutAdapter` (replicate writes), `LifecycleAdapter` (hot/cold tiers). All implement `DatabaseAdapter` so they nest freely.
+- **Table sharding** — split a tenant's traffic across multiple Durable Objects by table name. The shard router fans out pushes and merges pull results automatically.
+- **Adapter-sourced pull** — clients can pull directly from named source adapters (e.g. a BigQuery dataset) via the gateway, with sync rules filtering applied.
 
 ## Packages
 
@@ -252,8 +316,9 @@ graph TB
 |---------|-------------|
 | [`@lakesync/core`](packages/core) | HLC timestamps, delta types, LWW conflict resolution, sync rules, Result type |
 | [`@lakesync/client`](packages/client) | Client SDK: SyncCoordinator, SyncTracker, LocalDB, transports, queues, initial sync |
-| [`@lakesync/gateway`](packages/gateway) | Sync gateway with delta buffer, conflict resolution, dual-adapter flush |
-| [`@lakesync/adapter`](packages/adapter) | Storage adapters: MinIO/S3, Postgres, MySQL, CompositeAdapter, migration tooling |
+| [`@lakesync/gateway`](packages/gateway) | Sync gateway with delta buffer, conflict resolution, adapter-sourced pull, dual-adapter flush |
+| [`@lakesync/gateway-server`](packages/gateway-server) | Self-hosted gateway server (Node.js / Bun) with SQLite persistence and JWT auth |
+| [`@lakesync/adapter`](packages/adapter) | Storage adapters: MinIO/S3, Postgres, MySQL, BigQuery, Composite, FanOut, Lifecycle, migration tooling |
 | [`@lakesync/proto`](packages/proto) | Protobuf codec for the wire protocol |
 | [`@lakesync/parquet`](packages/parquet) | Parquet read/write via parquet-wasm |
 | [`@lakesync/catalogue`](packages/catalogue) | Iceberg REST catalogue client (Nessie-compatible) |
@@ -263,7 +328,7 @@ graph TB
 
 | App | Description |
 |-----|-------------|
-| [`gateway-worker`](apps/gateway-worker) | Cloudflare Workers: Durable Object gateway, R2 storage, JWT auth, sync rules |
+| [`gateway-worker`](apps/gateway-worker) | Cloudflare Workers: Durable Object gateway, R2 storage, JWT auth, sync rules, table sharding |
 | [`todo-app`](apps/examples/todo-app) | Reference implementation: offline-first todo list with column-level sync |
 | [`docs`](apps/docs) | Documentation site (Fumadocs + Next.js) |
 
@@ -276,12 +341,14 @@ graph TB
 | MinIO | `LakeAdapter` | Production-ready |
 | PostgreSQL | `DatabaseAdapter` (PostgresAdapter) | Implemented |
 | MySQL | `DatabaseAdapter` (MySQLAdapter) | Implemented |
-| Composite (multi-backend) | `CompositeAdapter` | Implemented |
-| BigQuery | Planned (Phase 8) | — |
+| BigQuery | `DatabaseAdapter` (BigQueryAdapter) | Implemented |
+| Composite (route by table) | `CompositeAdapter` | Implemented |
+| Fan-out (replicate writes) | `FanOutAdapter` | Implemented |
+| Lifecycle (hot/cold tiers) | `LifecycleAdapter` | Implemented |
 
 ## Status
 
-Experimental, but real. Core sync engine, conflict resolution, client SDK, Cloudflare Workers gateway, compaction, checkpoint generation, sync rules, initial sync, database adapters, and composite routing are all implemented and tested. API is not yet stable — expect breaking changes.
+Experimental, but real. All planned phases are implemented and tested: core sync engine, conflict resolution, client SDK, Cloudflare Workers gateway, self-hosted gateway server, compaction, checkpoint generation, sync rules (with extended comparison operators), initial sync, database adapters (Postgres, MySQL, BigQuery), composite routing, fan-out replication, lifecycle tiering, table sharding, and adapter-sourced pull. API is not yet stable — expect breaking changes.
 
 ## Contributing
 

@@ -24,16 +24,19 @@ LakeSync ensures data flows between all systems: web apps, agents, and backends.
 TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 
 ## Architecture
-- 10 packages: core, client, gateway, adapter, proto, parquet, catalogue, compactor, analyst, lakesync
+- 11 packages: core, client, gateway, gateway-server, adapter, proto, parquet, catalogue, compactor, analyst, lakesync
 - 3 apps: todo-app (Vite + vanilla TS), gateway-worker (Cloudflare Workers + DO), docs (Fumadocs + Next.js)
-- All phases complete (1 through 6): HLC, Delta, Result, Conflict, Queue, Gateway, Proto, Adapter, Parquet, Catalogue, SQLite client, CF Workers, Compaction, Schema Evolution, Analyst, Sync Rules, Initial Sync, Database Adapters
+- All phases complete (1 through 8): HLC, Delta, Result, Conflict, Queue, Gateway, Proto, Adapter, Parquet, Catalogue, SQLite client, CF Workers, Compaction, Schema Evolution, Analyst, Sync Rules, Initial Sync, Database Adapters, Table Sharding, Self-Hosted Gateway, Fan-Out, Lifecycle
 
 ### Adapters — Any Data Source (packages/adapter)
 - `LakeAdapter` interface: `putObject`, `getObject`, `headObject`, `listObjects`, `deleteObject`, `deleteObjects`
 - `DatabaseAdapter` interface: `insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema` — adapters are both sources AND destinations
-- Implementations: S3Adapter (S3/R2/MinIO), PostgresAdapter, MySQLAdapter, BigQueryAdapter, CompositeAdapter
+- Implementations: S3Adapter (S3/R2/MinIO), PostgresAdapter, MySQLAdapter, BigQueryAdapter, CompositeAdapter, FanOutAdapter, LifecycleAdapter
+- `FanOutAdapter`: writes to primary (sync), replicates to secondaries (async best-effort)
+- `LifecycleAdapter`: hot/cold tiers based on delta age; `migrateToTier()` moves aged-out deltas
 - `migrateAdapter()`: copies data between any two adapters
 - Gateway takes an optional adapter — flush target is fully decoupled from sync logic
+- Gateway supports `sourceAdapters` — named DatabaseAdapters for adapter-sourced pull
 - The adapter interface is the extension point — any data source that can be read from can become an adapter (CloudWatch, Stripe, etc.)
 - Same client code regardless of backend; swap adapters at the gateway level
 
@@ -56,10 +59,28 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - Initial sync: checkpoint download on first sync (`lastSyncedHlc === 0`), then incremental pull
 
 ### Sync Rules (packages/core/src/sync-rules/)
-- Declarative bucket-based filtering with `eq`/`in` operators
+- Declarative bucket-based filtering with `eq`, `neq`, `in`, `gt`, `lt`, `gte`, `lte` operators
 - JWT claim references via `jwt:` prefix (e.g. `"jwt:sub"`)
 - `filterDeltas()`: pure function, union across buckets
 - Gateway `handlePull()` accepts optional `SyncRulesContext` for filtered pulls
+- Adapter-sourced pull: `handlePull({ source: "name" })` queries named DatabaseAdapter with sync rules filtering
+
+### Gateway Server (packages/gateway-server)
+- Self-hosted gateway server wrapping SyncGateway in a node:http server (works in Node.js and Bun)
+- Routes mirror gateway-worker: /sync/:id/push, /sync/:id/pull, /admin/flush/:id, /admin/schema/:id, /admin/sync-rules/:id, /health
+- Optional JWT auth (HMAC-SHA256) when `jwtSecret` is provided
+- CORS support with configurable origins
+- Periodic flush via setInterval (default 30s)
+- Persistence: `'memory'` (default) or `'sqlite'` (WAL-mode, survives restarts)
+- Docker image + compose example in package directory
+
+### Table Sharding (apps/gateway-worker)
+- Shard router splits tenant traffic across multiple DOs by table name
+- Config via `SHARD_CONFIG` env variable (JSON)
+- Push: partitions deltas by table, fans out to correct shard DOs
+- Pull: fans out to all shards, merges results sorted by HLC
+- Admin ops (flush, schema, sync-rules): apply to all shards
+- Backward compatible — no shard config = unchanged behaviour
 
 ### Checkpoints (packages/compactor + apps/gateway-worker)
 - Per-table proto-encoded chunks (not per-user); filtering at serve time
@@ -109,3 +130,8 @@ For SEQUENTIAL tasks: execute one at a time.
 - gateway-worker sync rules route is `POST /admin/sync-rules/:gatewayId`
 - gateway-worker checkpoint route is `GET /sync/:gatewayId/checkpoint`
 - Checkpoint chunks contain ALL rows — sync rules filtering happens at serve time, not generation time
+- gateway-worker: `SHARD_CONFIG` env is optional JSON — when absent, sharding is disabled (backward compatible)
+- gateway-server uses node:http (not Bun.serve) so tests run under vitest/Node without issues
+- gateway-server SqlitePersistence serialises HLC bigints to string (same structuredClone constraint as IDBQueue)
+- FanOutAdapter secondary failures are silently caught — never affect the return value
+- LifecycleAdapter determines age from HLC upper 48 bits: `wallMs = Number(hlc >> 16n)`

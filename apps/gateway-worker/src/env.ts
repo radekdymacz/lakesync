@@ -10,4 +10,6 @@ export interface Env {
 	JWT_SECRET: string;
 	/** Optional comma-separated list of allowed CORS origins */
 	ALLOWED_ORIGINS?: string;
+	/** Optional JSON shard configuration for table-based sharding across DOs */
+	SHARD_CONFIG?: string;
 }
