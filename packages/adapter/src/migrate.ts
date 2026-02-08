@@ -1,4 +1,4 @@
-import { type AdapterError, type HLCTimestamp, Ok } from "@lakesync/core";
+import { type AdapterError, type HLCTimestamp, Ok, type Result } from "@lakesync/core";
 
 import type { DatabaseAdapter } from "./db-types";
 

@@ -2,6 +2,7 @@ import {
 	type AdapterError,
 	type HLCTimestamp,
 	Ok,
+	type Result,
 	type RowDelta,
 	type TableSchema,
 } from "@lakesync/core";
