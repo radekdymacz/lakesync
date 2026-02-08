@@ -1,12 +1,25 @@
 # LakeSync
 
+## Vision
+Local-first sync engine with **pluggable backends**. Client data lives in SQLite on the device, syncs through a lightweight gateway, and flushes to the backend of your choice:
+- **Small data** → Postgres, MySQL, RDS — familiar tooling, simple operations
+- **Large data** → Apache Iceberg on S3/R2 — infinite scale, zero ETL, operational data IS analytics data
+
+The `LakeAdapter` interface (put/get/list/delete) abstracts the storage layer. Swap backends without changing client code. The Iceberg/S3 adapter is the flagship; database adapters are the next milestone.
+
 ## Monorepo
 TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 
 ## Architecture
 - 10 packages: core, client, gateway, adapter, proto, parquet, catalogue, compactor, analyst, lakesync
-- 2 apps: todo-app (Vite + vanilla TS), gateway-worker (Cloudflare Workers + DO)
-- All phases complete (1 through 4A): HLC, Delta, Result, Conflict, Queue, Gateway, Proto, Adapter, Parquet, Catalogue, SQLite client, CF Workers, Compaction, Schema Evolution, Analyst
+- 3 apps: todo-app (Vite + vanilla TS), gateway-worker (Cloudflare Workers + DO), docs (Fumadocs + Next.js)
+- All phases complete (1 through 5): HLC, Delta, Result, Conflict, Queue, Gateway, Proto, Adapter, Parquet, Catalogue, SQLite client, CF Workers, Compaction, Schema Evolution, Analyst, Sync Rules, Initial Sync
+
+### Pluggable Backend (packages/adapter)
+- `LakeAdapter` interface: `putObject`, `getObject`, `headObject`, `listObjects`, `deleteObject`, `deleteObjects`
+- Current implementation: MinIO/S3-compatible (works with S3, R2, MinIO)
+- Gateway takes an optional adapter — flush target is fully decoupled from sync logic
+- Same client code regardless of backend; swap adapters at the gateway level
 
 ### Key Patterns
 - `Result<T, E>` — never throw from public APIs
@@ -24,6 +37,19 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - Queues: MemoryQueue, IDBQueue (outbox pattern)
 - SchemaSynchroniser: client-side schema migration
 - applyRemoteDeltas: conflict-aware remote delta application
+- Initial sync: checkpoint download on first sync (`lastSyncedHlc === 0`), then incremental pull
+
+### Sync Rules (packages/core/src/sync-rules/)
+- Declarative bucket-based filtering with `eq`/`in` operators
+- JWT claim references via `jwt:` prefix (e.g. `"jwt:sub"`)
+- `filterDeltas()`: pure function, union across buckets
+- Gateway `handlePull()` accepts optional `SyncRulesContext` for filtered pulls
+
+### Checkpoints (packages/compactor + apps/gateway-worker)
+- Per-table proto-encoded chunks (not per-user); filtering at serve time
+- Generated post-compaction from base Parquet files
+- Byte-budget sizing (default 16 MB per chunk for 128 MB DO)
+- Serve endpoint: `GET /sync/:gatewayId/checkpoint` with JWT-claim filtering
 
 ## Code Style
 - TypeScript strict mode, no `any`
@@ -50,7 +76,7 @@ For SEQUENTIAL tasks: execute one at a time.
 - NEVER use localStorage or sessionStorage — use OPFS or IndexedDB
 - NEVER throw exceptions from public APIs — use Result<T, E>
 - NEVER flush per-sync to Iceberg — always batch
-- NEVER suggest PostgreSQL as a backend
+- Backend is adapter-dependent — Postgres/MySQL for small data, S3/R2 Iceberg for large data
 - NEVER use `any` type
 - NEVER create custom subagents — use built-in Task tool only
 
@@ -64,3 +90,6 @@ For SEQUENTIAL tasks: execute one at a time.
 - todo-app tsconfig must exclude `__tests__/` to avoid tsc errors on vitest globals
 - gateway-worker: ALL routes except /health require JWT (including admin routes)
 - gateway-worker flush route is `/admin/flush/:gatewayId` (not `/sync/`)
+- gateway-worker sync rules route is `POST /admin/sync-rules/:gatewayId`
+- gateway-worker checkpoint route is `GET /sync/:gatewayId/checkpoint`
+- Checkpoint chunks contain ALL rows — sync rules filtering happens at serve time, not generation time

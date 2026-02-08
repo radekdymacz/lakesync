@@ -1,4 +1,4 @@
-import type { LakeAdapter } from "@lakesync/adapter";
+import { type DatabaseAdapter, isDatabaseAdapter, type LakeAdapter } from "@lakesync/adapter";
 import {
 	buildPartitionSpec,
 	type DataFile,
@@ -9,6 +9,7 @@ import {
 	type ClockDriftError,
 	Err,
 	FlushError,
+	filterDeltas,
 	HLC,
 	type HLCTimestamp,
 	Ok,
@@ -20,6 +21,7 @@ import {
 	type SyncPull,
 	type SyncPush,
 	type SyncResponse,
+	type SyncRulesContext,
 	toError,
 } from "@lakesync/core";
 import { writeDeltasToParquet } from "@lakesync/parquet";
@@ -38,14 +40,14 @@ export class SyncGateway {
 	private hlc: HLC;
 	private buffer: DeltaBuffer;
 	private config: GatewayConfig;
-	private adapter: LakeAdapter | null;
+	private adapter: LakeAdapter | DatabaseAdapter | null;
 	private flushing = false;
 
-	constructor(config: GatewayConfig, adapter?: LakeAdapter) {
+	constructor(config: GatewayConfig, adapter?: LakeAdapter | DatabaseAdapter) {
 		this.config = config;
 		this.hlc = new HLC();
 		this.buffer = new DeltaBuffer();
-		this.adapter = adapter ?? null;
+		this.adapter = config.adapter ?? adapter ?? null;
 	}
 
 	/** Restore drained entries back to the buffer for retry. */
@@ -114,15 +116,63 @@ export class SyncGateway {
 	/**
 	 * Handle a pull request from a client.
 	 *
-	 * Returns change events from the log since the given HLC.
+	 * Returns change events from the log since the given HLC. When a
+	 * {@link SyncRulesContext} is provided, deltas are post-filtered by
+	 * the client's bucket definitions and JWT claims. The method over-fetches
+	 * (3× the requested limit) and retries up to 5 times to fill the page.
 	 *
 	 * @param msg - The pull message specifying the cursor and limit.
+	 * @param context - Optional sync rules context for row-level filtering.
 	 * @returns A `Result` containing the matching deltas, server HLC, and pagination flag.
 	 */
-	handlePull(msg: SyncPull): Result<SyncResponse, never> {
-		const { deltas, hasMore } = this.buffer.getEventsSince(msg.sinceHlc, msg.maxDeltas);
+	handlePull(msg: SyncPull, context?: SyncRulesContext): Result<SyncResponse, never> {
+		if (!context) {
+			const { deltas, hasMore } = this.buffer.getEventsSince(msg.sinceHlc, msg.maxDeltas);
+			const serverHlc = this.hlc.now();
+			return Ok({ deltas, serverHlc, hasMore });
+		}
+
+		// Over-fetch and filter with bounded retry
+		const maxRetries = 5;
+		const overFetchMultiplier = 3;
+		let cursor = msg.sinceHlc;
+		const collected: RowDelta[] = [];
+
+		for (let attempt = 0; attempt < maxRetries; attempt++) {
+			const fetchLimit = msg.maxDeltas * overFetchMultiplier;
+			const { deltas: raw, hasMore: rawHasMore } = this.buffer.getEventsSince(cursor, fetchLimit);
+
+			if (raw.length === 0) {
+				// No more data in buffer
+				const serverHlc = this.hlc.now();
+				return Ok({ deltas: collected, serverHlc, hasMore: false });
+			}
+
+			const filtered = filterDeltas(raw, context);
+			collected.push(...filtered);
+
+			if (collected.length >= msg.maxDeltas) {
+				// Trim to exactly maxDeltas
+				const trimmed = collected.slice(0, msg.maxDeltas);
+				const serverHlc = this.hlc.now();
+				return Ok({ deltas: trimmed, serverHlc, hasMore: true });
+			}
+
+			if (!rawHasMore) {
+				// Exhausted the buffer
+				const serverHlc = this.hlc.now();
+				return Ok({ deltas: collected, serverHlc, hasMore: false });
+			}
+
+			// Advance cursor past the last examined delta
+			cursor = raw[raw.length - 1]!.hlc;
+		}
+
+		// Exhausted retries — return what we have
 		const serverHlc = this.hlc.now();
-		return Ok({ deltas, serverHlc, hasMore });
+		const hasMore = collected.length >= msg.maxDeltas;
+		const trimmed = collected.slice(0, msg.maxDeltas);
+		return Ok({ deltas: trimmed, serverHlc, hasMore });
 	}
 
 	/**
@@ -148,6 +198,31 @@ export class SyncGateway {
 
 		this.flushing = true;
 
+		// Database adapter path — batch INSERT deltas directly
+		if (isDatabaseAdapter(this.adapter)) {
+			const entries = this.buffer.drain();
+			if (entries.length === 0) {
+				this.flushing = false;
+				return Ok(undefined);
+			}
+			try {
+				const result = await this.adapter.insertDeltas(entries);
+				if (!result.ok) {
+					this.restoreEntries(entries);
+					this.flushing = false;
+					return Err(new FlushError(`Database flush failed: ${result.error.message}`));
+				}
+				return Ok(undefined);
+			} catch (error: unknown) {
+				this.restoreEntries(entries);
+				const message = toError(error).message;
+				return Err(new FlushError(`Unexpected database flush failure: ${message}`));
+			} finally {
+				this.flushing = false;
+			}
+		}
+
+		// Lake adapter path — write to object storage as Parquet or JSON
 		// Capture byte size before draining (avoids recomputing)
 		const byteSize = this.buffer.byteSize;
 		const entries = this.buffer.drain();

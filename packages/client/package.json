@@ -43,7 +43,8 @@
 		"vitest": "^3.0.0"
 	},
 	"peerDependencies": {
-		"@lakesync/core": "workspace:*"
+		"@lakesync/core": "workspace:*",
+		"@lakesync/proto": "workspace:*"
 	},
 	"dependencies": {
 		"idb": "^8.0.3",

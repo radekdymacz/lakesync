@@ -1,3 +1,4 @@
+import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
 import type { NessieCatalogueClient } from "@lakesync/catalogue";
 import type { HLCTimestamp, RowDelta, TableSchema } from "@lakesync/core";
 import type { SchemaManager } from "./schema-manager";
@@ -18,6 +19,8 @@ export interface GatewayConfig {
 	catalogue?: NessieCatalogueClient;
 	/** Optional schema manager for delta validation. */
 	schemaManager?: SchemaManager;
+	/** Optional storage adapter — LakeAdapter (S3/R2) or DatabaseAdapter (Postgres/MySQL). */
+	adapter?: LakeAdapter | DatabaseAdapter;
 }
 
 /** Gateway runtime state */

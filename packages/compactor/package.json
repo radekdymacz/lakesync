@@ -39,7 +39,8 @@
 	"peerDependencies": {
 		"@lakesync/core": "workspace:*",
 		"@lakesync/adapter": "workspace:*",
-		"@lakesync/parquet": "workspace:*"
+		"@lakesync/parquet": "workspace:*",
+		"@lakesync/proto": "workspace:*"
 	},
 	"devDependencies": {
 		"typescript": "^5.7.0",

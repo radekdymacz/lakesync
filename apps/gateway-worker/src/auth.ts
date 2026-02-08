@@ -6,6 +6,8 @@ export interface AuthClaims {
 	clientId: string;
 	/** Authorised gateway ID (from JWT `gw` claim) */
 	gatewayId: string;
+	/** Non-standard JWT claims for sync rule evaluation */
+	customClaims: Record<string, string | string[]>;
 }
 
 /** Authentication error returned when JWT verification fails */
@@ -163,8 +165,25 @@ export async function verifyToken(
 		return Err(new AuthError('Missing or invalid "gw" claim (gatewayId)'));
 	}
 
+	// Extract non-standard claims for sync rules evaluation
+	const standardClaims = new Set(["sub", "gw", "exp", "iat", "iss", "aud"]);
+	const customClaims: Record<string, string | string[]> = {};
+
+	for (const [key, value] of Object.entries(payload)) {
+		if (standardClaims.has(key)) continue;
+		if (typeof value === "string") {
+			customClaims[key] = value;
+		} else if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+			customClaims[key] = value as string[];
+		}
+	}
+
+	// Always include `sub` in custom claims so sync rules can reference jwt:sub
+	customClaims.sub = payload.sub;
+
 	return Ok({
 		clientId: payload.sub,
 		gatewayId: payload.gw,
+		customClaims,
 	});
 }

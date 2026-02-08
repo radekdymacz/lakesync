@@ -1,11 +1,18 @@
 import { DurableObject } from "cloudflare:workers";
-import type { HLCTimestamp, TableSchema } from "@lakesync/core";
-import { bigintReplacer, bigintReviver } from "@lakesync/core";
+import type {
+	HLCTimestamp,
+	ResolvedClaims,
+	SyncRulesConfig,
+	SyncRulesContext,
+	TableSchema,
+} from "@lakesync/core";
+import { bigintReplacer, bigintReviver, filterDeltas, validateSyncRules } from "@lakesync/core";
 import { SyncGateway, type SyncPull, type SyncPush, type SyncResponse } from "@lakesync/gateway";
 import {
 	type CodecError,
 	decodeSyncPull,
 	decodeSyncPush,
+	decodeSyncResponse,
 	encodeSyncResponse,
 } from "@lakesync/proto";
 import type { Env } from "./env";
@@ -132,12 +139,59 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	}
 
 	/**
+	 * Load sync rules from Durable Storage.
+	 *
+	 * @returns The stored sync rules, or `undefined` if none configured.
+	 */
+	private async loadSyncRules(): Promise<SyncRulesConfig | undefined> {
+		const rules = await this.ctx.storage.get<SyncRulesConfig>("syncRules");
+		return rules ?? undefined;
+	}
+
+	/**
+	 * Persist sync rules to Durable Storage.
+	 */
+	private async saveSyncRules(rules: SyncRulesConfig): Promise<void> {
+		await this.ctx.storage.put("syncRules", rules);
+	}
+
+	/**
+	 * Build a SyncRulesContext from stored rules and forwarded JWT claims.
+	 * Returns undefined if no sync rules are configured (backward compat).
+	 */
+	private async buildSyncRulesContext(
+		request: Request | URL,
+	): Promise<SyncRulesContext | undefined> {
+		const rules = await this.loadSyncRules();
+		if (!rules || rules.buckets.length === 0) {
+			return undefined;
+		}
+
+		// Extract claims from X-Auth-Claims header (forwarded by the worker)
+		let claims: ResolvedClaims = {};
+		const claimsHeader = request instanceof Request ? request.headers.get("X-Auth-Claims") : null;
+
+		if (claimsHeader) {
+			try {
+				claims = JSON.parse(claimsHeader) as ResolvedClaims;
+			} catch {
+				// Invalid claims header — use empty claims
+			}
+		}
+
+		return { claims, rules };
+	}
+
+	/**
 	 * Handle incoming HTTP requests routed from the Worker fetch handler.
 	 *
 	 * Supported routes:
 	 * - `POST /push`  -- ingest client deltas
 	 * - `GET  /pull`  -- retrieve deltas since a given HLC
 	 * - `POST /flush` -- flush the buffer to the lake
+	 * - `POST /admin/schema` -- save table schema
+	 * - `POST /admin/sync-rules` -- save sync rules
+	 * - `GET  /checkpoint` -- serve checkpoint for initial sync
 	 * - Upgrade to WebSocket for binary protobuf transport
 	 *
 	 * @param request - The incoming HTTP request.
@@ -156,11 +210,15 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			case "/push":
 				return this.handlePush(request);
 			case "/pull":
-				return this.handlePull(url);
+				return this.handlePull(url, request);
 			case "/flush":
 				return this.handleFlush();
 			case "/admin/schema":
 				return this.handleSaveSchema(request);
+			case "/admin/sync-rules":
+				return this.handleSaveSyncRules(request);
+			case "/checkpoint":
+				return this.handleCheckpoint(request);
 			default:
 				return errorResponse("Not found", 404);
 		}
@@ -233,12 +291,16 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	/**
 	 * Handle `GET /pull` -- retrieve deltas since a given HLC.
 	 *
+	 * When sync rules are configured, the pull is filtered by the client's
+	 * JWT claims. The filtering is performed by the gateway's handlePull
+	 * with a SyncRulesContext.
+	 *
 	 * Query parameters:
 	 * - `since` (required) -- HLC timestamp as a decimal string
 	 * - `limit` (optional) -- maximum number of deltas (default 100)
 	 * - `clientId` (required) -- requesting client identifier
 	 */
-	private async handlePull(url: URL): Promise<Response> {
+	private async handlePull(url: URL, request: Request): Promise<Response> {
 		const sinceParam = url.searchParams.get("since");
 		const clientId = url.searchParams.get("clientId");
 		const limitParam = url.searchParams.get("limit");
@@ -262,7 +324,8 @@ export class SyncGatewayDO extends DurableObject<Env> {
 
 		const msg: SyncPull = { clientId, sinceHlc, maxDeltas };
 		const gateway = await this.getGateway();
-		const result = gateway.handlePull(msg);
+		const context = await this.buildSyncRulesContext(request);
+		const result = gateway.handlePull(msg, context);
 
 		// handlePull never fails (Result<SyncResponse, never>), but guard for safety
 		if (!result.ok) {
@@ -326,6 +389,103 @@ export class SyncGatewayDO extends DurableObject<Env> {
 
 		await this.saveTableSchema(schema);
 		return jsonResponse({ saved: true });
+	}
+
+	/**
+	 * Handle `POST /admin/sync-rules` -- save sync rules to Durable Storage.
+	 *
+	 * Validates the sync rules configuration before persisting.
+	 */
+	private async handleSaveSyncRules(request: Request): Promise<Response> {
+		if (request.method !== "POST") {
+			return errorResponse("Method not allowed", 405);
+		}
+
+		let config: unknown;
+		try {
+			config = await request.json();
+		} catch {
+			return errorResponse("Invalid JSON body", 400);
+		}
+
+		const validation = validateSyncRules(config);
+		if (!validation.ok) {
+			return errorResponse(validation.error.message, 400);
+		}
+
+		await this.saveSyncRules(config as SyncRulesConfig);
+		return jsonResponse({ saved: true });
+	}
+
+	/**
+	 * Handle `GET /checkpoint` -- serve checkpoint chunks with serve-time filtering.
+	 *
+	 * Reads checkpoint manifest and chunks from R2, filters each chunk by
+	 * the client's sync rules and JWT claims, and returns a single proto
+	 * SyncResponse containing all matching deltas.
+	 *
+	 * Peak memory: one decoded chunk at a time.
+	 */
+	private async handleCheckpoint(request: Request): Promise<Response> {
+		const adapter = new R2Adapter(this.env.LAKE_BUCKET);
+		const gatewayId = this.ctx.id.toString();
+		const manifestKey = `checkpoints/${gatewayId}/manifest.json`;
+
+		// Read manifest
+		const manifestResult = await adapter.getObject(manifestKey);
+		if (!manifestResult.ok) {
+			return errorResponse("No checkpoint available", 404);
+		}
+
+		let manifest: { snapshotHlc: string; chunks: string[]; chunkCount: number };
+		try {
+			manifest = JSON.parse(new TextDecoder().decode(manifestResult.value));
+		} catch {
+			return errorResponse("Corrupt checkpoint manifest", 500);
+		}
+
+		// Build sync rules context for filtering
+		const context = await this.buildSyncRulesContext(request);
+
+		// Process chunks one at a time, collect filtered deltas
+		const allFilteredDeltas: import("@lakesync/core").RowDelta[] = [];
+
+		for (const chunkName of manifest.chunks) {
+			const chunkKey = `checkpoints/${gatewayId}/${chunkName}`;
+			const chunkResult = await adapter.getObject(chunkKey);
+			if (!chunkResult.ok) {
+				continue; // Skip missing chunks
+			}
+
+			const decoded = decodeSyncResponse(chunkResult.value);
+			if (!decoded.ok) {
+				continue; // Skip corrupt chunks
+			}
+
+			const deltas = context ? filterDeltas(decoded.value.deltas, context) : decoded.value.deltas;
+
+			allFilteredDeltas.push(...deltas);
+		}
+
+		// Encode all filtered deltas as a single SyncResponse
+		const snapshotHlc = BigInt(manifest.snapshotHlc) as HLCTimestamp;
+		const responsePayload = encodeSyncResponse({
+			deltas: allFilteredDeltas,
+			serverHlc: snapshotHlc,
+			hasMore: false,
+		});
+
+		if (!responsePayload.ok) {
+			return errorResponse("Failed to encode checkpoint response", 500);
+		}
+
+		return new Response(responsePayload.value, {
+			status: 200,
+			headers: {
+				"Content-Type": "application/octet-stream",
+				"X-Checkpoint-Hlc": manifest.snapshotHlc,
+			},
+		});
 	}
 
 	// -----------------------------------------------------------------------

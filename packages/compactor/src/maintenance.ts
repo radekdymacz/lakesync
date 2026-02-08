@@ -1,5 +1,6 @@
 import type { LakeAdapter, ObjectInfo } from "@lakesync/adapter";
-import { Err, LakeSyncError, Ok, type Result } from "@lakesync/core";
+import { Err, HLC, LakeSyncError, Ok, type Result } from "@lakesync/core";
+import type { CheckpointGenerator, CheckpointResult } from "./checkpoint-generator";
 import type { Compactor } from "./compactor";
 import type { CompactionResult } from "./types";
 
@@ -25,6 +26,8 @@ export interface MaintenanceReport {
 	snapshotsExpired: number;
 	/** Number of orphaned files removed */
 	orphansRemoved: number;
+	/** Result of checkpoint generation (if a generator was configured) */
+	checkpoint?: CheckpointResult;
 }
 
 /**
@@ -39,6 +42,7 @@ export class MaintenanceRunner {
 	private readonly compactor: Compactor;
 	private readonly adapter: LakeAdapter;
 	private readonly config: MaintenanceConfig;
+	private readonly checkpointGenerator: CheckpointGenerator | null;
 
 	/**
 	 * Create a new MaintenanceRunner instance.
@@ -46,11 +50,19 @@ export class MaintenanceRunner {
 	 * @param compactor - The compactor instance for merging delta files
 	 * @param adapter - The lake adapter for storage operations
 	 * @param config - Maintenance configuration (retention and age thresholds)
+	 * @param checkpointGenerator - Optional checkpoint generator; when provided,
+	 *   checkpoints are generated after successful compaction
 	 */
-	constructor(compactor: Compactor, adapter: LakeAdapter, config: MaintenanceConfig) {
+	constructor(
+		compactor: Compactor,
+		adapter: LakeAdapter,
+		config: MaintenanceConfig,
+		checkpointGenerator?: CheckpointGenerator,
+	) {
 		this.compactor = compactor;
 		this.adapter = adapter;
 		this.config = config;
+		this.checkpointGenerator = checkpointGenerator ?? null;
 	}
 
 	/**
@@ -112,7 +124,36 @@ export class MaintenanceRunner {
 			activeKeys.add(obj.key);
 		}
 
-		// Step 2: Remove orphaned files
+		// Step 2: Generate checkpoints (if configured)
+		let checkpoint: CheckpointResult | undefined;
+		if (this.checkpointGenerator && compaction.baseFilesWritten > 0) {
+			// Collect base file keys from the output
+			const baseFileKeys = listOutputResult.value
+				.filter((obj) => obj.key.endsWith(".parquet") && obj.key.includes("/base-"))
+				.map((obj) => obj.key);
+
+			if (baseFileKeys.length > 0) {
+				// Use the latest HLC from the compacted data as the snapshot HLC.
+				// Read the first base file's max HLC as an approximation.
+				const snapshotHlc = HLC.encode(Date.now(), 0);
+
+				const checkpointResult = await this.checkpointGenerator.generate(baseFileKeys, snapshotHlc);
+
+				if (checkpointResult.ok) {
+					checkpoint = checkpointResult.value;
+					// Add checkpoint keys to active set to prevent orphan removal
+					const checkpointKeys = this.checkpointGenerator.getCheckpointKeys(
+						checkpoint.chunksWritten,
+					);
+					for (const key of checkpointKeys) {
+						activeKeys.add(key);
+					}
+				}
+				// Checkpoint failure is non-fatal — compaction still succeeded
+			}
+		}
+
+		// Step 3: Remove orphaned files
 		const orphanResult = await this.removeOrphans(storagePrefix, activeKeys);
 		if (!orphanResult.ok) {
 			return Err(
@@ -128,6 +169,7 @@ export class MaintenanceRunner {
 			compaction,
 			snapshotsExpired: 0,
 			orphansRemoved: orphanResult.value,
+			checkpoint,
 		});
 	}
 

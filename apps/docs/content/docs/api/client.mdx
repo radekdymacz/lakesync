@@ -1,0 +1,163 @@
+---
+title: Client SDK
+description: API reference for @lakesync/client — LocalDB, SyncCoordinator, transports, and queues.
+---
+
+The `@lakesync/client` package provides the browser-side SDK for building local-first applications with LakeSync.
+
+## LocalDB
+
+SQLite database running in the browser via sql.js WASM, with IndexedDB snapshot persistence.
+
+### `LocalDB.create()`
+
+```ts
+class LocalDB {
+  static create(): Promise<LocalDB>;
+  exec(sql: string, params?: unknown[]): void;
+  query<T>(sql: string, params?: unknown[]): T[];
+  snapshot(): Uint8Array;
+  restore(data: Uint8Array): void;
+}
+```
+
+- **`exec(sql, params?)`** — Execute a SQL statement (DDL or DML).
+- **`query(sql, params?)`** — Execute a SQL query and return rows.
+- **`snapshot()`** — Export the full database as a binary snapshot.
+- **`restore(data)`** — Replace the database contents from a snapshot.
+
+## SyncTracker
+
+Wraps a `LocalDB`, a queue, and an HLC to automatically extract deltas from mutations.
+
+```ts
+class SyncTracker {
+  constructor(
+    db: LocalDB,
+    queue: SyncQueue,
+    hlc: HLC,
+    clientId: string,
+  );
+  insert(table: string, row: Record<string, unknown>): void;
+  update(table: string, rowId: string, changes: Record<string, unknown>): void;
+  delete(table: string, rowId: string): void;
+}
+```
+
+Each mutation is recorded as a `Delta` and enqueued for sync.
+
+## SyncCoordinator
+
+Orchestrates push/pull sync between the local database and a remote gateway.
+
+### Constructor
+
+```ts
+class SyncCoordinator {
+  constructor(config: SyncCoordinatorConfig);
+  push(): Promise<Result<void, string>>;
+  pull(): Promise<Result<void, string>>;
+  start(): void;
+  stop(): void;
+}
+```
+
+### `SyncCoordinatorConfig`
+
+```ts
+interface SyncCoordinatorConfig {
+  tracker: SyncTracker;
+  transport: SyncTransport;
+  syncMode?: SyncMode;
+  intervalMs?: number;
+}
+```
+
+### `SyncMode`
+
+```ts
+type SyncMode = "auto" | "manual";
+```
+
+- **`auto`** — Syncs on a 10-second interval and on visibility change.
+- **`manual`** — Only syncs when `push()` or `pull()` are called explicitly.
+
+## Transports
+
+### `SyncTransport` (interface)
+
+```ts
+interface SyncTransport {
+  push(deltas: Delta[]): Promise<Result<{ serverHlc: HLCTimestamp }, string>>;
+  pull(since: HLCTimestamp): Promise<Result<{ deltas: Delta[] }, string>>;
+  checkpoint?(): Promise<Result<CheckpointResponse, string>>;
+}
+```
+
+### `LocalTransport`
+
+In-process transport for development and testing. Connects directly to a `Gateway` instance.
+
+```ts
+class LocalTransport implements SyncTransport {
+  constructor(gateway: LocalGateway, clientId: string);
+}
+```
+
+### `HttpTransport`
+
+Remote transport that communicates with a gateway over HTTP.
+
+```ts
+class HttpTransport implements SyncTransport {
+  constructor(config: HttpTransportConfig);
+}
+
+interface HttpTransportConfig {
+  baseUrl: string;
+  gatewayId: string;
+  getToken: () => Promise<string>;
+}
+```
+
+## Queues
+
+### `MemoryQueue`
+
+In-memory queue for development and testing. Deltas are lost on page refresh.
+
+```ts
+class MemoryQueue implements SyncQueue {
+  enqueue(delta: Delta): void;
+  dequeueAll(): Delta[];
+  peek(): Delta[];
+}
+```
+
+### `IDBQueue`
+
+IndexedDB-backed queue for production use. Persists deltas across page refreshes.
+
+```ts
+class IDBQueue implements SyncQueue {
+  static create(dbName?: string): Promise<IDBQueue>;
+  enqueue(delta: Delta): void;
+  dequeueAll(): Delta[];
+  peek(): Delta[];
+}
+```
+
+Note: `IDBQueue` serialises `HLCTimestamp` to string internally because IndexedDB's `structuredClone` cannot handle `bigint`.
+
+## Schema Synchronisation
+
+### `SchemaSynchroniser`
+
+Handles client-side schema migrations by comparing local table schemas against the gateway's schema.
+
+```ts
+class SchemaSynchroniser {
+  constructor(db: LocalDB);
+  synchronise(schemas: TableSchema[]): void;
+}
+```

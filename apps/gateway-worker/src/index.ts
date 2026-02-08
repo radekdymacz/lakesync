@@ -57,6 +57,15 @@ const ROUTE_TABLE: RouteEntry[] = [
 		},
 	},
 	{
+		// GET /sync/:gatewayId/checkpoint
+		pattern: /^\/sync\/([^/]+)\/checkpoint$/,
+		extract: (match) => {
+			const gatewayId = match[1];
+			if (!gatewayId) return null;
+			return { gatewayId, doPath: "/checkpoint", doMethod: "GET", forwardBody: false };
+		},
+	},
+	{
 		// POST /admin/flush/:gatewayId
 		pattern: /^\/admin\/flush\/([^/]+)$/,
 		extract: (match) => {
@@ -72,6 +81,15 @@ const ROUTE_TABLE: RouteEntry[] = [
 			const gatewayId = match[1];
 			if (!gatewayId) return null;
 			return { gatewayId, doPath: "/admin/schema", doMethod: "POST", forwardBody: true };
+		},
+	},
+	{
+		// POST /admin/sync-rules/:gatewayId
+		pattern: /^\/admin\/sync-rules\/([^/]+)$/,
+		extract: (match) => {
+			const gatewayId = match[1];
+			if (!gatewayId) return null;
+			return { gatewayId, doPath: "/admin/sync-rules", doMethod: "POST", forwardBody: true };
 		},
 	},
 ];
@@ -134,6 +152,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 	const doHeaders = new Headers(request.headers);
 	doHeaders.set("X-Client-Id", clientId);
 
+	// Forward custom JWT claims for sync rules evaluation
+	const { customClaims } = authResult.value;
+	doHeaders.set("X-Auth-Claims", JSON.stringify(customClaims));
+
 	return stub.fetch(
 		new Request(doUrl.toString(), {
 			method: route.doMethod ?? request.method,
@@ -166,7 +188,8 @@ function corsHeaders(env: Env, origin?: string | null): Record<string, string> {
 	return {
 		"Access-Control-Allow-Origin": allowOrigin,
 		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-		"Access-Control-Allow-Headers": "Authorization, Content-Type, X-Client-Id",
+		"Access-Control-Allow-Headers": "Authorization, Content-Type, X-Client-Id, X-Auth-Claims",
+		"Access-Control-Expose-Headers": "X-Checkpoint-Hlc, X-Sync-Rules-Version",
 		"Access-Control-Max-Age": "86400",
 	};
 }

@@ -19,6 +19,14 @@
 		"lineWidth": 100
 	},
 	"files": {
-		"includes": ["**", "!**/node_modules", "!**/dist", "!**/.turbo", "!**/*.wasm", "!**/*.proto"]
+		"includes": [
+			"**",
+			"!**/node_modules",
+			"!**/dist",
+			"!**/.turbo",
+			"!**/*.wasm",
+			"!**/*.proto",
+			"!apps/docs"
+		]
 	}
 }

@@ -2,10 +2,19 @@ import type {
 	HLCTimestamp,
 	LakeSyncError,
 	Result,
+	RowDelta,
 	SyncPull,
 	SyncPush,
 	SyncResponse,
 } from "@lakesync/core";
+
+/** Response from a checkpoint download */
+export interface CheckpointResponse {
+	/** All deltas from the checkpoint (filtered by server) */
+	deltas: RowDelta[];
+	/** Snapshot HLC marking the point-in-time of this checkpoint */
+	snapshotHlc: HLCTimestamp;
+}
 
 /** Abstract transport layer for communicating with a remote sync gateway */
 export interface SyncTransport {
@@ -15,4 +24,6 @@ export interface SyncTransport {
 	): Promise<Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>>;
 	/** Pull remote deltas from the gateway */
 	pull(msg: SyncPull): Promise<Result<SyncResponse, LakeSyncError>>;
+	/** Download checkpoint for initial sync. Returns null if no checkpoint available. */
+	checkpoint?(): Promise<Result<CheckpointResponse | null, LakeSyncError>>;
 }

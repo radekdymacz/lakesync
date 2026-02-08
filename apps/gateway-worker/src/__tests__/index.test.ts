@@ -61,7 +61,7 @@ function createMockEnv(): Env {
 function mockAuthSuccess(clientId = "client-1", gatewayId = "gw-1"): void {
 	mockedVerifyToken.mockResolvedValue({
 		ok: true,
-		value: { clientId, gatewayId },
+		value: { clientId, gatewayId, customClaims: { sub: clientId } },
 	});
 }
 

@@ -14,7 +14,8 @@ import {
 	Ok,
 	toError,
 } from "@lakesync/core";
-import type { SyncTransport } from "./transport";
+import { decodeSyncResponse } from "@lakesync/proto";
+import type { CheckpointResponse, SyncTransport } from "./transport";
 
 /** Configuration for the HTTP sync transport */
 export interface HttpTransportConfig {
@@ -116,6 +117,63 @@ export class HttpTransport implements SyncTransport {
 		} catch (error) {
 			const cause = toError(error);
 			return Err(new LSError(`Pull request failed: ${cause.message}`, "TRANSPORT_ERROR", cause));
+		}
+	}
+
+	/**
+	 * Download checkpoint for initial sync.
+	 *
+	 * Sends a GET request to the checkpoint endpoint. Returns null if no
+	 * checkpoint is available (404). The response body is proto-encoded
+	 * and contains pre-filtered deltas (filtered server-side by JWT claims).
+	 */
+	async checkpoint(): Promise<Result<CheckpointResponse | null, LakeSyncError>> {
+		const url = `${this.baseUrl}/sync/${this.gatewayId}/checkpoint`;
+
+		try {
+			const response = await this._fetch(url, {
+				method: "GET",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+				},
+			});
+
+			if (response.status === 404) {
+				return Ok(null);
+			}
+
+			if (!response.ok) {
+				const text = await response.text().catch(() => "Unknown error");
+				return Err(
+					new LSError(`Checkpoint failed (${response.status}): ${text}`, "TRANSPORT_ERROR"),
+				);
+			}
+
+			const bytes = new Uint8Array(await response.arrayBuffer());
+			const decoded = decodeSyncResponse(bytes);
+
+			if (!decoded.ok) {
+				return Err(
+					new LSError(
+						`Checkpoint decode failed: ${decoded.error.message}`,
+						"TRANSPORT_ERROR",
+						decoded.error,
+					),
+				);
+			}
+
+			const hlcHeader = response.headers.get("X-Checkpoint-Hlc");
+			const snapshotHlc = hlcHeader ? (BigInt(hlcHeader) as HLCTimestamp) : decoded.value.serverHlc;
+
+			return Ok({
+				deltas: decoded.value.deltas,
+				snapshotHlc,
+			});
+		} catch (error) {
+			const cause = toError(error);
+			return Err(
+				new LSError(`Checkpoint request failed: ${cause.message}`, "TRANSPORT_ERROR", cause),
+			);
 		}
 	}
 }

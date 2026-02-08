@@ -120,6 +120,50 @@ describe("DeltaBuffer", () => {
 		expect(buffer.shouldFlush({ maxBytes: 999_999, maxAgeMs: 0 })).toBe(true);
 	});
 
+	it("large JSON values increase byte estimate significantly", () => {
+		const buffer = new DeltaBuffer();
+		buffer.append(
+			makeDelta({
+				hlc: hlcLow,
+				columns: [{ column: "payload", value: { data: "x".repeat(10000) } }],
+			}),
+		);
+		expect(buffer.byteSize).toBeGreaterThan(10000);
+	});
+
+	it("boolean columns are counted accurately", () => {
+		const buffer = new DeltaBuffer();
+		buffer.append(
+			makeDelta({
+				hlc: hlcLow,
+				columns: [{ column: "done", value: true }],
+			}),
+		);
+		expect(buffer.byteSize).toBeLessThan(200);
+	});
+
+	it("string length affects byte estimate", () => {
+		const shortBuffer = new DeltaBuffer();
+		shortBuffer.append(
+			makeDelta({
+				hlc: hlcLow,
+				deltaId: "delta-short",
+				columns: [{ column: "title", value: "hi" }],
+			}),
+		);
+
+		const longBuffer = new DeltaBuffer();
+		longBuffer.append(
+			makeDelta({
+				hlc: hlcLow,
+				deltaId: "delta-long",
+				columns: [{ column: "title", value: "a".repeat(5000) }],
+			}),
+		);
+
+		expect(longBuffer.byteSize).toBeGreaterThan(shortBuffer.byteSize * 10);
+	});
+
 	it("drain clears both log and index, returns entries", () => {
 		const buffer = new DeltaBuffer();
 		const d1 = makeDelta({

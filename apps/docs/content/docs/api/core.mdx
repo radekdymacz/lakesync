@@ -1,0 +1,148 @@
+---
+title: Core API
+description: API reference for @lakesync/core — HLC, Delta, Result, conflict resolution, sync rules, and validation.
+---
+
+The `@lakesync/core` package provides the foundational types and functions used across the LakeSync ecosystem.
+
+## HLC
+
+Hybrid Logical Clock for causal ordering of events.
+
+### `HLC`
+
+```ts
+class HLC {
+  constructor(clock?: () => number);
+  now(): HLCTimestamp;
+  receive(remote: HLCTimestamp): HLCTimestamp;
+}
+```
+
+- **`now()`** — Generate a new timestamp, advancing the clock.
+- **`receive(remote)`** — Merge a remote timestamp, ensuring the local clock stays ahead.
+
+### `HLCTimestamp`
+
+A branded `bigint` encoding 48 bits of wall-clock milliseconds and 16 bits of a monotonic counter.
+
+```ts
+type HLCTimestamp = bigint & { readonly __brand: "HLCTimestamp" };
+```
+
+### Utility Functions
+
+```ts
+function hlcTimestamp(wallMs: number, counter: number): HLCTimestamp;
+function wallMs(ts: HLCTimestamp): number;
+function counter(ts: HLCTimestamp): number;
+function compareHLC(a: HLCTimestamp, b: HLCTimestamp): number;
+```
+
+## Delta
+
+### `Delta`
+
+```ts
+interface Delta {
+  deltaId: string;
+  table: string;
+  rowId: string;
+  columns: Record<string, unknown>;
+  hlc: HLCTimestamp;
+  clientId: string;
+}
+```
+
+### `createDeltaId(delta)`
+
+```ts
+function createDeltaId(delta: Omit<Delta, "deltaId">): Promise<string>;
+```
+
+Generates a deterministic SHA-256 hash from a stable-stringified delta payload.
+
+## Result
+
+Type-safe error handling without exceptions.
+
+### Types
+
+```ts
+type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
+```
+
+### Constructors
+
+```ts
+function ok<T>(value: T): Result<T, never>;
+function err<E>(error: E): Result<never, E>;
+```
+
+## Conflict Resolution
+
+### `resolveConflict(local, remote)`
+
+```ts
+function resolveConflict(
+  local: Delta | undefined,
+  remote: Delta,
+): { winner: "local" | "remote"; columns: Record<string, unknown> };
+```
+
+Performs column-level LWW merge. When HLC timestamps are equal, the higher `clientId` wins.
+
+## Sync Rules
+
+### `SyncRules`
+
+```ts
+interface SyncRules {
+  buckets: SyncBucket[];
+}
+
+interface SyncBucket {
+  name: string;
+  filters: SyncFilter[];
+  tables: string[];
+}
+
+interface SyncFilter {
+  column: string;
+  op: "eq" | "in";
+  value: string | string[];
+}
+```
+
+### `filterDeltas(deltas, rules, claims)`
+
+```ts
+function filterDeltas(
+  deltas: Delta[],
+  rules: SyncRules,
+  claims: Record<string, unknown>,
+): Delta[];
+```
+
+Pure function that returns the union of deltas matching any bucket's filters. JWT claim references (prefixed with `jwt:`) are resolved from the `claims` object.
+
+## Validation
+
+### `validateTableSchema(schema)`
+
+```ts
+function validateTableSchema(
+  schema: TableSchema,
+): Result<TableSchema, string>;
+```
+
+Validates that a table schema has a valid table name and at least one column with a supported type.
+
+### `TableSchema`
+
+```ts
+interface TableSchema {
+  table: string;
+  columns: Array<{ name: string; type: "text" | "integer" | "real" | "blob" }>;
+}
+```

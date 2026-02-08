@@ -1,0 +1,30 @@
+---
+title: Introduction
+description: LakeSync — open-source local-first sync for the modern web.
+---
+
+LakeSync is an open-source local-first sync engine built in TypeScript. It keeps your application data in a local SQLite database and synchronises changes with a remote gateway using column-level last-writer-wins (LWW) conflict resolution.
+
+## Key Features
+
+- **Column-level LWW** — Conflicts are resolved per-column, not per-row, so concurrent edits to different fields never overwrite each other.
+- **Offline-first** — The full dataset lives in local SQLite (via sql.js WASM). Changes are queued and pushed when connectivity returns.
+- **Sync Rules** — Declarative bucket-based filtering with JWT claim references. Each client receives only the data they are authorised to see.
+- **Hybrid Logical Clocks** — Every mutation is timestamped with a branded `HLCTimestamp` (48-bit wall clock + 16-bit counter) for causal ordering.
+- **Result-based error handling** — Public APIs return `Result<T, E>` instead of throwing, making error paths explicit and composable.
+- **Static export friendly** — The gateway runs on Cloudflare Workers + Durable Objects; the client SDK works in any browser or Node.js environment.
+
+## Packages
+
+| Package | Description |
+|---------|-------------|
+| `@lakesync/core` | HLC, Delta, Result, conflict resolution, sync rules, validation |
+| `@lakesync/client` | LocalDB (sql.js), SyncCoordinator, transports, queues |
+| `@lakesync/gateway` | In-memory sync gateway with push/pull protocol |
+| `@lakesync/proto` | Protocol Buffer encoding/decoding for deltas |
+| `@lakesync/adapter` | Apache Iceberg table adapter |
+| `@lakesync/parquet` | Parquet file reader/writer |
+| `@lakesync/catalogue` | Iceberg catalogue management |
+| `@lakesync/compactor` | Compaction, maintenance, and checkpoint generation |
+| `@lakesync/analyst` | Schema evolution and analytics |
+| `lakesync` | Unified package re-exporting core + client |

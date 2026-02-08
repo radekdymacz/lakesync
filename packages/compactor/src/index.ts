@@ -1,3 +1,9 @@
+export type {
+	CheckpointConfig,
+	CheckpointManifest,
+	CheckpointResult,
+} from "./checkpoint-generator";
+export { CheckpointGenerator, DEFAULT_CHECKPOINT_CONFIG } from "./checkpoint-generator";
 export { Compactor } from "./compactor";
 export { readEqualityDeletes, writeEqualityDeletes } from "./equality-delete";
 export type { MaintenanceConfig, MaintenanceReport } from "./maintenance";

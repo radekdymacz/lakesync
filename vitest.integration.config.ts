@@ -13,6 +13,7 @@ export default defineConfig({
 			"@lakesync/proto": path.join(packages, "proto/src/index.ts"),
 			"@lakesync/parquet": path.join(packages, "parquet/src/index.ts"),
 			"@lakesync/catalogue": path.join(packages, "catalogue/src/index.ts"),
+			"@lakesync/compactor": path.join(packages, "compactor/src/index.ts"),
 		},
 	},
 	test: {
@@ -30,6 +31,7 @@ export default defineConfig({
 						"@lakesync/proto": path.join(packages, "proto/src/index.ts"),
 						"@lakesync/parquet": path.join(packages, "parquet/src/index.ts"),
 						"@lakesync/catalogue": path.join(packages, "catalogue/src/index.ts"),
+						"@lakesync/compactor": path.join(packages, "compactor/src/index.ts"),
 					},
 				},
 				test: {

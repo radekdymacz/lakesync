@@ -1,2 +1,10 @@
+export type { CompositeAdapterConfig, CompositeRoute } from "./composite";
+export { CompositeAdapter } from "./composite";
+export type { DatabaseAdapter, DatabaseAdapterConfig } from "./db-types";
+export { isDatabaseAdapter } from "./db-types";
+export type { MigrateOptions, MigrateProgress, MigrateResult } from "./migrate";
+export { migrateAdapter } from "./migrate";
 export { MinIOAdapter } from "./minio";
+export { MySQLAdapter } from "./mysql";
+export { PostgresAdapter } from "./postgres";
 export type { AdapterConfig, LakeAdapter, ObjectInfo } from "./types";

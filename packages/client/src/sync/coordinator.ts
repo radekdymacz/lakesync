@@ -6,6 +6,9 @@ import { applyRemoteDeltas } from "./applier";
 import { SyncTracker } from "./tracker";
 import type { SyncTransport } from "./transport";
 
+/** Controls which operations syncOnce() / startAutoSync() performs */
+export type SyncMode = "full" | "pushOnly" | "pullOnly";
+
 /** Optional configuration for dependency injection (useful for testing) */
 export interface SyncCoordinatorConfig {
 	/** Sync queue implementation. Defaults to IDBQueue. */
@@ -16,6 +19,8 @@ export interface SyncCoordinatorConfig {
 	clientId?: string;
 	/** Maximum retries before dead-lettering an entry. Defaults to 10. */
 	maxRetries?: number;
+	/** Sync mode. Defaults to "full" (push + pull). */
+	syncMode?: SyncMode;
 }
 
 /** Auto-sync interval in milliseconds (every 10 seconds) */
@@ -36,6 +41,7 @@ export class SyncCoordinator {
 	private readonly resolver = new LWWResolver();
 	private readonly _clientId: string;
 	private readonly maxRetries: number;
+	private readonly syncMode: SyncMode;
 	private lastSyncedHlc = HLC.encode(0, 0);
 	private _lastSyncTime: Date | null = null;
 	private syncIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -49,6 +55,7 @@ export class SyncCoordinator {
 		this.queue = config?.queue ?? new IDBQueue();
 		this._clientId = config?.clientId ?? `client-${crypto.randomUUID()}`;
 		this.maxRetries = config?.maxRetries ?? 10;
+		this.syncMode = config?.syncMode ?? "full";
 		this.tracker = new SyncTracker(db, this.queue, this.hlc, this._clientId);
 	}
 
@@ -145,12 +152,40 @@ export class SyncCoordinator {
 		}
 	}
 
+	/**
+	 * Perform initial sync via checkpoint download.
+	 *
+	 * Called on first sync when `lastSyncedHlc` is zero. Downloads the
+	 * server's checkpoint (which is pre-filtered by JWT claims server-side),
+	 * applies the deltas locally, and advances the sync cursor to the
+	 * snapshot's HLC. If no checkpoint is available or the transport does
+	 * not support checkpoints, falls back to incremental pull.
+	 */
+	private async initialSync(): Promise<void> {
+		if (!this.transport.checkpoint) return;
+		const result = await this.transport.checkpoint();
+		if (!result.ok || result.value === null) return;
+		const { deltas, snapshotHlc } = result.value;
+		if (deltas.length > 0) {
+			await applyRemoteDeltas(this.db, deltas, this.resolver, this.queue);
+		}
+		this.lastSyncedHlc = snapshotHlc;
+		this._lastSyncTime = new Date();
+	}
+
 	private async syncOnce(): Promise<void> {
 		if (this.syncing) return;
 		this.syncing = true;
 		try {
-			await this.pullFromGateway();
-			await this.pushToGateway();
+			if (this.syncMode !== "pushOnly") {
+				if (this.lastSyncedHlc === HLC.encode(0, 0)) {
+					await this.initialSync();
+				}
+				await this.pullFromGateway();
+			}
+			if (this.syncMode !== "pullOnly") {
+				await this.pushToGateway();
+			}
 		} finally {
 			this.syncing = false;
 		}

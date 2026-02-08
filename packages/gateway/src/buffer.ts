@@ -1,10 +1,47 @@
 import type { HLCTimestamp, RowDelta, RowKey } from "@lakesync/core";
 import { HLC, rowKey } from "@lakesync/core";
 
-/** Estimated bytes per column in a delta (for flush threshold estimation). */
-const ESTIMATED_BYTES_PER_COLUMN = 50;
-/** Estimated base bytes per delta entry (for flush threshold estimation). */
-const ESTIMATED_BASE_BYTES_PER_DELTA = 200;
+/** Estimated base overhead per delta entry (metadata fields: deltaId, table, rowId, clientId, op + HLC bigint). */
+const BASE_DELTA_OVERHEAD = 8 + 8 + 8 + 8 + 1;
+
+/**
+ * Estimate the byte size of a single column value.
+ * Uses type-aware heuristics as a proxy for in-memory size.
+ */
+function estimateValueBytes(value: unknown): number {
+	if (value === null || value === undefined) return 4;
+	switch (typeof value) {
+		case "boolean":
+			return 4;
+		case "number":
+			return 8;
+		case "bigint":
+			return 8;
+		case "string":
+			return (value as string).length * 2; // UTF-16
+		default:
+			// Objects, arrays — use JSON.stringify as proxy
+			try {
+				return JSON.stringify(value).length;
+			} catch {
+				return 100; // fallback for circular refs etc.
+			}
+	}
+}
+
+/** Estimate the byte size of a RowDelta. */
+function estimateDeltaBytes(delta: RowDelta): number {
+	let bytes = BASE_DELTA_OVERHEAD;
+	bytes += delta.deltaId.length;
+	bytes += delta.table.length * 2;
+	bytes += delta.rowId.length * 2;
+	bytes += delta.clientId.length * 2;
+	for (const col of delta.columns) {
+		bytes += col.column.length * 2; // column name
+		bytes += estimateValueBytes(col.value); // column value
+	}
+	return bytes;
+}
 
 /**
  * Dual-structure delta buffer.
@@ -25,8 +62,7 @@ export class DeltaBuffer {
 		const key = rowKey(delta.table, delta.rowId);
 		this.index.set(key, delta);
 		this.deltaIds.add(delta.deltaId);
-		this.estimatedBytes +=
-			delta.columns.length * ESTIMATED_BYTES_PER_COLUMN + ESTIMATED_BASE_BYTES_PER_DELTA;
+		this.estimatedBytes += estimateDeltaBytes(delta);
 	}
 
 	/** Get the current merged state for a row (for conflict resolution). */

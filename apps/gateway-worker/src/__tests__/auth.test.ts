@@ -212,4 +212,79 @@ describe("verifyToken", () => {
 			expect(result.value.gatewayId).toBe("gateway-2");
 		}
 	});
+
+	// ── Custom claims extraction ─────────────────────────────────────
+
+	it("extracts string custom claims from JWT payload", async () => {
+		const payload = {
+			...validPayload(),
+			org_id: "org-42",
+			role: "admin",
+		};
+		const token = await createJwt(payload, TEST_SECRET);
+		const result = await verifyToken(token, TEST_SECRET);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.customClaims.org_id).toBe("org-42");
+			expect(result.value.customClaims.role).toBe("admin");
+		}
+	});
+
+	it("extracts array custom claims from JWT payload", async () => {
+		const payload = {
+			...validPayload(),
+			orgs: ["org-1", "org-2"],
+		};
+		const token = await createJwt(payload, TEST_SECRET);
+		const result = await verifyToken(token, TEST_SECRET);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.customClaims.orgs).toEqual(["org-1", "org-2"]);
+		}
+	});
+
+	it("always includes sub in custom claims", async () => {
+		const token = await createJwt(validPayload(), TEST_SECRET);
+		const result = await verifyToken(token, TEST_SECRET);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.customClaims.sub).toBe("client-1");
+		}
+	});
+
+	it("excludes standard claims (gw, exp, iat, iss, aud) from custom claims", async () => {
+		const payload = {
+			...validPayload(),
+			iat: Math.floor(Date.now() / 1000),
+			iss: "test-issuer",
+			aud: "test-audience",
+		};
+		const token = await createJwt(payload, TEST_SECRET);
+		const result = await verifyToken(token, TEST_SECRET);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.customClaims.gw).toBeUndefined();
+			expect(result.value.customClaims.exp).toBeUndefined();
+			expect(result.value.customClaims.iat).toBeUndefined();
+			expect(result.value.customClaims.iss).toBeUndefined();
+			expect(result.value.customClaims.aud).toBeUndefined();
+		}
+	});
+
+	it("ignores non-string, non-string-array custom claims", async () => {
+		const payload = {
+			...validPayload(),
+			numeric_claim: 42,
+			nested: { foo: "bar" },
+			valid_claim: "kept",
+		};
+		const token = await createJwt(payload, TEST_SECRET);
+		const result = await verifyToken(token, TEST_SECRET);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.customClaims.numeric_claim).toBeUndefined();
+			expect(result.value.customClaims.nested).toBeUndefined();
+			expect(result.value.customClaims.valid_claim).toBe("kept");
+		}
+	});
 });

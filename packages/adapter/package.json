@@ -40,9 +40,12 @@
 		"@lakesync/core": "workspace:*"
 	},
 	"dependencies": {
-		"@aws-sdk/client-s3": "^3.0.0"
+		"@aws-sdk/client-s3": "^3.0.0",
+		"mysql2": "^3.16.3",
+		"pg": "^8.18.0"
 	},
 	"devDependencies": {
+		"@types/pg": "^8.16.0",
 		"typescript": "^5.7.0",
 		"vitest": "^3.0.0"
 	}

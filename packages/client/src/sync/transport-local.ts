@@ -6,7 +6,8 @@ import type {
 	SyncPush,
 	SyncResponse,
 } from "@lakesync/core";
-import type { SyncTransport } from "./transport";
+import { Ok } from "@lakesync/core";
+import type { CheckpointResponse, SyncTransport } from "./transport";
 
 /**
  * Gateway-like interface used by LocalTransport.
@@ -40,5 +41,10 @@ export class LocalTransport implements SyncTransport {
 	/** Pull remote deltas from the in-process gateway */
 	async pull(msg: SyncPull): Promise<Result<SyncResponse, LakeSyncError>> {
 		return this.gateway.handlePull(msg);
+	}
+
+	/** Local transport has no checkpoint — returns null */
+	async checkpoint(): Promise<Result<CheckpointResponse | null, LakeSyncError>> {
+		return Ok(null);
 	}
 }
