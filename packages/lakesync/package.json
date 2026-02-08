@@ -63,7 +63,9 @@
 		"@bufbuild/protobuf": "^2.0.0",
 		"parquet-wasm": "^0.7.0",
 		"apache-arrow": "^18.0.0",
-		"@duckdb/duckdb-wasm": "^1.33.0"
+		"@duckdb/duckdb-wasm": "^1.33.0",
+		"pg": "^8.0.0",
+		"mysql2": "^3.0.0"
 	},
 	"peerDependenciesMeta": {
 		"sql.js": {
@@ -85,6 +87,12 @@
 			"optional": true
 		},
 		"@duckdb/duckdb-wasm": {
+			"optional": true
+		},
+		"pg": {
+			"optional": true
+		},
+		"mysql2": {
 			"optional": true
 		}
 	}

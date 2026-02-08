@@ -25,5 +25,7 @@ export default defineConfig({
 		"parquet-wasm",
 		"apache-arrow",
 		"@duckdb/duckdb-wasm",
+		"pg",
+		"mysql2",
 	],
 });
