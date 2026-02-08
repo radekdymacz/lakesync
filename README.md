@@ -3,255 +3,157 @@
 [![CI](https://github.com/radekdymacz/lakesync/actions/workflows/ci.yml/badge.svg)](https://github.com/radekdymacz/lakesync/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**Offline-first sync engine for browser apps — tracks column-level changes locally and lands them as Parquet in an Iceberg lakehouse.**
+**Local-first sync. Any backend.**
 
-LakeSync synchronises data between browser clients and a shared lakehouse backend. Instead of syncing entire rows, it tracks changes at the **column level** — so when one user edits a title and another marks a task complete, both changes merge cleanly without conflict. Data flows through a sync gateway into **Apache Parquet files** managed by an **Iceberg-compatible catalogue**, giving you a full audit trail and time-travel queries out of the box.
+LakeSync is an open-source sync engine for local-first TypeScript apps. Your data lives in SQLite on the device, syncs through a lightweight gateway, and flushes to the backend of your choice — **Postgres for small data, S3/R2 via Apache Iceberg for large data**. Same client code either way.
+
+**[Documentation](https://radekdymacz.github.io/lakesync)** · **[Getting Started](https://radekdymacz.github.io/lakesync/docs/getting-started)** · **[Architecture](https://radekdymacz.github.io/lakesync/docs/architecture)**
 
 ## Why LakeSync?
 
-Most sync engines force a choice: real-time collaboration (Firebase, Supabase) **or** analytical power (data lakes). LakeSync bridges that gap.
+Most sync engines lock you into a single backend. LakeSync's `LakeAdapter` interface decouples sync from storage — swap backends without changing client code.
 
 | | Traditional Sync | Data Lake | LakeSync |
 |---|---|---|---|
 | Offline-first | Yes | No | **Yes** |
 | Column-level conflict resolution | Rarely | N/A | **Yes** |
-| Data lands in Parquet/Iceberg | No | Yes | **Yes** |
+| Pluggable backend | No | No | **Yes** |
+| Small data (Postgres/MySQL) | Yes | No | **Yes** |
+| Large data (Iceberg/S3/R2) | No | Yes | **Yes** |
 | Time-travel queries | No | Yes | **Yes** |
 | Runs on the edge (CF Workers) | Sometimes | No | **Yes** |
 
-**The key insight:** every client mutation is a _delta_ — a small, timestamped change to specific columns. These deltas are the sync protocol, the conflict resolution input, _and_ the data lake records. One data model serves three purposes.
-
 ## How It Works
-
-### The Journey of a Single Change
-
-When a user edits a field in the browser, here's what happens:
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant LocalDB as Local DB (sql.js)
-    participant Tracker as SyncTracker
-    participant Queue as IDB Queue
-    participant Transport as HTTP Transport
-    participant Gateway as Sync Gateway
-    participant Store as Object Store (R2/S3)
-    participant Cat as Catalogue (Nessie)
+    participant App as Your App
+    participant DB as Local SQLite
+    participant GW as Gateway (CF DO)
+    participant Backend as Any Backend
 
-    User->>LocalDB: UPDATE todos SET title = 'Buy milk'
-    LocalDB-->>Tracker: Row diff detected
-    Tracker->>Tracker: Extract column-level delta
-    Tracker->>Tracker: Stamp with HLC timestamp
-    Tracker->>Queue: Enqueue delta (pending)
-
-    Note over Queue,Transport: Background sync cycle (every 10s or on tab focus)
-
-    Queue-->>Transport: Peek pending deltas
-    Transport->>Gateway: POST /sync/:id/push {deltas, clientId, hlc}
-    Gateway->>Gateway: Validate HLC (clock drift check)
-    Gateway->>Gateway: Resolve conflicts (LWW per column)
-    Gateway->>Gateway: Append to DeltaBuffer
-    Gateway-->>Transport: {serverHlc, accepted}
-    Transport-->>Queue: Ack — remove from queue
-
-    Note over Gateway,Cat: Periodic flush (time or size threshold)
-
-    Gateway->>Store: Write Parquet file
-    Gateway->>Cat: Commit Iceberg snapshot
+    App->>DB: INSERT / UPDATE / DELETE
+    Note over App,DB: Zero latency — local write
+    DB-->>GW: Push column-level deltas
+    GW-->>DB: ACK + pull remote changes
+    Note over GW: Deltas merge via HLC + LWW
+    GW->>Backend: Batch flush
+    Note over Backend: Postgres? R2? S3?<br/>You choose the adapter.
 ```
 
-### Column-Level Conflict Resolution
+1. **Mutations write to local SQLite** with zero latency
+2. **Column-level deltas push** to a lightweight gateway
+3. **Gateway merges** via Hybrid Logical Clocks — concurrent edits to different columns are both preserved
+4. **Batch flush** to whatever backend you choose via the adapter interface
 
-Traditional sync engines resolve conflicts at the row level — if two users edit the same row, one wins and the other loses. LakeSync resolves at the **column level** using Last-Write-Wins (LWW) with Hybrid Logical Clocks:
+## Right-Size Your Backend
+
+### Small data — use what you know
+
+```
+Client SQLite → Gateway → Postgres / MySQL / RDS
+```
+
+Familiar tooling, standard SQL queries, simple operational model. The `PostgresAdapter` or `MySQLAdapter` flushes deltas directly to your database.
+
+### Large data — scale to the lake
+
+```
+Client SQLite → Gateway → Apache Iceberg (S3/R2)
+```
+
+Infinite scale on object storage. Operational data and analytics data are the same thing. Query with Spark, DuckDB, Athena, Trino — zero ETL.
+
+### Mix both — route by table
+
+```typescript
+const adapter = new CompositeAdapter({
+  routes: [
+    { tables: ["users", "settings"], adapter: postgresAdapter },
+    { tables: ["events", "telemetry"], adapter: icebergAdapter },
+  ],
+  defaultAdapter: postgresAdapter,
+});
+```
+
+The `CompositeAdapter` routes deltas to different backends by table name. When your data outgrows one backend, `migrateAdapter()` moves it to another — idempotent and safe to re-run.
+
+## Column-Level Conflict Resolution
+
+Traditional sync engines resolve conflicts at the row level — if two users edit the same row, one wins. LakeSync resolves at the **column level** using Last-Write-Wins with Hybrid Logical Clocks:
 
 ```mermaid
-graph LR
-    subgraph "Client A (t=100)"
-        A["UPDATE row-1<br/>title = 'Buy milk'"]
-    end
-    subgraph "Client B (t=101)"
-        B["UPDATE row-1<br/>completed = true"]
-    end
-    subgraph "Gateway (merged)"
-        M["row-1:<br/>title = 'Buy milk' ← from A<br/>completed = true ← from B"]
-    end
-    A --> M
-    B --> M
+sequenceDiagram
+    participant A as Alice
+    participant GW as Gateway
+    participant B as Bob
+
+    Note over A,B: Both editing the same todo
+    A->>A: title = "Buy oat milk"
+    B->>B: status = "done"
+    A->>GW: push delta (title, HLC=100)
+    B->>GW: push delta (status, HLC=101)
+    Note over GW: Column-level merge<br/>title ← Alice (HLC 100)<br/>status ← Bob (HLC 101)
+    GW->>A: pull → status = "done"
+    GW->>B: pull → title = "Buy oat milk"
+    Note over A,B: Both changes preserved ✓
 ```
 
 Both changes are preserved because they touch different columns. The HLC timestamp determines the winner only when two clients modify the _same_ column.
 
-### Offline-First Sync Cycle
+## Offline-First
 
-The client works fully offline. Mutations queue in IndexedDB and sync when connectivity returns:
-
-```mermaid
-stateDiagram-v2
-    [*] --> Pending: User mutation
-    Pending --> Sending: Sync cycle starts
-    Sending --> Acked: Gateway accepts
-    Sending --> Pending: Network failure (nack)
-    Pending --> Pending: Exponential backoff
-    Pending --> DeadLettered: Max retries exceeded
-    Acked --> [*]
-    DeadLettered --> [*]
-```
-
-Failed pushes use exponential backoff (1s, 2s, 4s... capped at 30s) and are dead-lettered after 10 retries to prevent queue starvation.
-
-## Architecture
+The full dataset lives in local SQLite. Edits queue in a persistent IndexedDB outbox that survives page refreshes and browser crashes. When connectivity returns, the outbox drains automatically.
 
 ```mermaid
-graph TB
-    subgraph "Browser"
-        UI[Application UI]
-        SC[SyncCoordinator]
-        ST[SyncTracker]
-        DB[(LocalDB<br/>sql.js + IDB)]
-        Q[(IDB Queue)]
-    end
+sequenceDiagram
+    participant App as App (offline)
+    participant DB as Local SQLite
+    participant Q as Outbox (IndexedDB)
+    participant GW as Gateway
 
-    subgraph "Edge (Cloudflare Workers)"
-        GW[SyncGateway<br/>Durable Object]
-        BUF[DeltaBuffer<br/>Log + Index]
-        AUTH[JWT Auth]
-    end
-
-    subgraph "Storage"
-        R2[(R2 / MinIO / S3)]
-        PQ[Parquet Files]
-    end
-
-    subgraph "Catalogue"
-        NS[Nessie]
-        ICE[Iceberg Snapshots]
-    end
-
-    subgraph "Analytics"
-        CMP[Compactor]
-        DDB[DuckDB-WASM]
-    end
-
-    UI --> SC
-    SC --> ST
-    ST --> DB
-    ST --> Q
-    SC -->|HTTP/WS| AUTH
-    AUTH --> GW
-    GW --> BUF
-    BUF -->|flush| R2
-    R2 --> PQ
-    GW -->|commit| NS
-    NS --> ICE
-    CMP -->|compact| R2
-    CMP -->|commit| NS
-    DDB -->|query| PQ
+    App->>DB: Edit 1
+    DB-->>Q: Delta queued
+    App->>DB: Edit 2
+    DB-->>Q: Delta queued
+    App->>DB: Edit 3
+    DB-->>Q: Delta queued
+    Note over App,Q: Fully functional offline
+    Note over Q,GW: ← Connection restored →
+    Q->>GW: Push all 3 deltas
+    GW-->>Q: ACK
+    GW->>App: Pull remote changes
+    Note over App,GW: Caught up ✓
 ```
 
-### Key Design Decisions
+## Sync Rules
 
-- **HLC timestamps** (branded bigints) — 48-bit wall clock + 16-bit counter, giving monotonic ordering across distributed clients without coordination
-- **Deterministic delta IDs** — SHA-256 hash of `(clientId, hlc, table, rowId, columns)` enables idempotent push
-- **DeltaBuffer** — dual structure (append log for ordering + row index for conflict resolution) gives O(1) conflict checks and O(n) flush
-- **Result\<T, E\>** everywhere — no exceptions cross API boundaries; all errors are typed and composable
-- **Parquet as the flush format** — columnar storage is a natural fit for column-level deltas, and Iceberg gives you schema evolution + time travel for free
+Declarative bucket-based filtering with JWT claim references. The gateway evaluates rules at pull time — clients never download data they shouldn't see.
 
-## Conflict Semantics
-
-LakeSync uses **column-level Last-Write-Wins (LWW)** with deterministic tiebreaks. Here are the exact rules:
-
-### Same Row, Different Columns
-
-No conflict. Both changes are preserved in the merged result. This is the common case — two users editing different fields of the same record.
-
-### Same Row, Same Column
-
-The delta with the **higher HLC timestamp** wins. If timestamps are identical (rare — requires same millisecond + same counter), the **lexicographically higher `clientId`** wins. This tiebreak is deterministic: all clients converge to the same state regardless of the order they receive deltas.
-
-### DELETE vs UPDATE
-
-Treated as a whole-row conflict resolved by HLC comparison:
-- If the DELETE has the higher HLC, the row stays deleted (tombstoned)
-- If the UPDATE has the higher HLC, the row is **resurrected** with the UPDATE's columns
-
-### What LakeSync Guarantees
-
-- **Convergence**: all clients that sync the same set of deltas will arrive at the same state
-- **Causality per client**: deltas from a single client are always applied in order
-- **No data loss between columns**: edits to different columns of the same row never clobber each other
-- **Idempotent push**: re-pushing the same delta (same `deltaId`) is a no-op
-
-### What LakeSync Does Not Guarantee
-
-- **No global total order**: deltas from different clients are ordered by HLC, not by a central sequencer
-- **No merge for same-column conflicts**: when two clients edit the same column, one value wins entirely — there is no character-level or list-level merge
-- **No intent preservation**: LWW does not know _why_ a value changed, only _when_. A "set price to $10" and "set price to $20" conflict is resolved by timestamp, not business logic
-
-### Recommended Patterns
-
-| Scenario | Approach |
-|----------|----------|
-| Collaborative text editing | Use one column per field (title, description), not one column for the whole document |
-| Counters / accumulators | Model as append-only deltas with application-level reduction, not as a single mutable column |
-| Dependent fields (e.g. subtotal + tax + total) | Compute derived fields on read, store only the independent inputs |
-| Strong consistency required | LakeSync is eventually consistent — use a traditional database for strict serialisability |
-
-> For the full delta format, wire protocol, and storage layout, see [docs/delta-spec.md](docs/delta-spec.md). For the security model and threat analysis, see [docs/security.md](docs/security.md).
-
-## When Not to Use LakeSync
-
-LakeSync is designed for **collaborative apps with independent field edits** (task managers, forms, CMS, inventory). It is not the right fit for every use case:
-
-- **Financial ledgers or double-entry accounting** — LWW can silently drop a concurrent write. Use a serialisable transaction log instead.
-- **Heavy same-column contention** — if many users frequently edit the exact same field (e.g. a shared counter or a wiki paragraph), LWW will discard all but the latest write. Consider a CRDT-based editor for character-level merging.
-- **Strict CRDT semantics** — LakeSync's conflict resolution is LWW, not an operation-based or state-based CRDT. If you need grow-only sets, PN-counters, or RGA sequences, use a dedicated CRDT library.
-- **Sub-second real-time** — the default sync cycle is 10 seconds (configurable). For <100ms latency, use a WebSocket-native solution like Liveblocks or Yjs.
-- **Large binary blobs** — deltas are JSON-serialised column values. Syncing images or files should go through an object store with LakeSync tracking only the metadata/URL.
-
-## Interoperability
-
-### Iceberg Compatibility
-
-LakeSync writes **Apache Iceberg v2** table metadata. Flushed data lands as Parquet files registered through the [Iceberg REST Catalogue API](https://iceberg.apache.org/spec/#iceberg-rest-catalog), with Nessie as the default catalogue backend.
-
-### Query Engines
-
-Once data is flushed, it is standard Parquet + Iceberg — queryable by any engine that speaks the format:
-
-| Engine | Access Method |
-|--------|--------------|
-| **DuckDB** | Direct Parquet reads or Iceberg metadata |
-| **Apache Spark** | Iceberg connector |
-| **Trino / Presto** | Iceberg connector |
-| **Snowflake** | External Iceberg tables |
-| **BigQuery** | BigLake Iceberg tables |
-| **Pandas / Polars** | `read_parquet()` on the object store |
-
-### Object Store Support
-
-| Store | Status |
-|-------|--------|
-| Cloudflare R2 | Primary target (gateway-worker) |
-| AWS S3 | Supported via `@lakesync/adapter` |
-| MinIO | Supported (S3-compatible, used in integration tests) |
-| GCS / Azure Blob | Not yet tested — PRs welcome |
+```json
+{
+  "buckets": [{
+    "name": "user-data",
+    "filters": [
+      { "column": "user_id", "op": "eq", "value": "jwt:sub" }
+    ],
+    "tables": ["todos", "preferences"]
+  }]
+}
+```
 
 ## Quick Start
 
 ### Install
 
 ```bash
-# Individual packages (recommended for production — minimise bundle size)
-npm install @lakesync/client @lakesync/core
-
-# Or install everything via the unified package
 npm install lakesync
 ```
 
 ### Sync in 10 Lines
 
 ```typescript
-import { LocalDB, SyncCoordinator, HttpTransport } from "@lakesync/client";
+import { LocalDB, SyncCoordinator, HttpTransport } from "lakesync/client";
 
 const db = await LocalDB.open({ name: "my-app", backend: "idb" });
 
@@ -289,27 +191,97 @@ wrangler r2 bucket create lakesync-data  # once
 wrangler deploy
 ```
 
-See the [Todo App](apps/examples/todo-app/) for a complete working example, or the [Gateway Worker README](apps/gateway-worker/README.md) for deployment details.
+See the [Todo App](apps/examples/todo-app/) for a complete working example.
+
+## Architecture
+
+```mermaid
+graph TB
+    subgraph "Browser"
+        UI[Application UI]
+        SC[SyncCoordinator]
+        ST[SyncTracker]
+        DB[(LocalDB<br/>sql.js + IDB)]
+        Q[(IDB Queue)]
+    end
+
+    subgraph "Edge (Cloudflare Workers)"
+        GW[SyncGateway<br/>Durable Object]
+        BUF[DeltaBuffer<br/>Log + Index]
+        AUTH[JWT Auth + Sync Rules]
+    end
+
+    subgraph "Small Data"
+        PG[(Postgres / MySQL)]
+    end
+
+    subgraph "Large Data"
+        R2[(R2 / S3)]
+        PQ[Parquet / Iceberg]
+    end
+
+    subgraph "Analytics"
+        DDB[DuckDB-WASM]
+    end
+
+    UI --> SC
+    SC --> ST
+    ST --> DB
+    ST --> Q
+    SC -->|HTTP| AUTH
+    AUTH --> GW
+    GW --> BUF
+    BUF -->|DatabaseAdapter| PG
+    BUF -->|LakeAdapter| R2
+    R2 --> PQ
+    DDB -->|query| PQ
+```
+
+### Key Design Decisions
+
+- **Pluggable adapters** — `LakeAdapter` (object storage) and `DatabaseAdapter` (SQL) interfaces. Swap backends at the gateway level.
+- **HLC timestamps** (branded bigints) — 48-bit wall clock + 16-bit counter, monotonic ordering across distributed clients without coordination
+- **Deterministic delta IDs** — SHA-256 hash of `(clientId, hlc, table, rowId, columns)` enables idempotent push
+- **DeltaBuffer** — dual structure (append log + row index) gives O(1) conflict checks and O(n) flush
+- **Result\<T, E\>** everywhere — no exceptions cross API boundaries; all errors are typed and composable
+- **CompositeAdapter** — route different tables to different backends. Mix Postgres + Iceberg in one deployment.
 
 ## Packages
 
 | Package | Description |
 |---------|-------------|
-| [`@lakesync/core`](packages/core) | HLC timestamps, delta types, LWW conflict resolution, Result type |
-| [`@lakesync/client`](packages/client) | Client SDK: SyncCoordinator, SyncTracker, LocalDB, HTTP + local transports, IDB queue & persistence |
-| [`@lakesync/gateway`](packages/gateway) | Sync gateway with delta buffer, conflict resolution, Parquet/JSON flush |
-| [`@lakesync/adapter`](packages/adapter) | Storage adapter interface + MinIO/S3 implementation |
+| [`@lakesync/core`](packages/core) | HLC timestamps, delta types, LWW conflict resolution, sync rules, Result type |
+| [`@lakesync/client`](packages/client) | Client SDK: SyncCoordinator, SyncTracker, LocalDB, transports, queues, initial sync |
+| [`@lakesync/gateway`](packages/gateway) | Sync gateway with delta buffer, conflict resolution, dual-adapter flush |
+| [`@lakesync/adapter`](packages/adapter) | Storage adapters: MinIO/S3, Postgres, MySQL, CompositeAdapter, migration tooling |
 | [`@lakesync/proto`](packages/proto) | Protobuf codec for the wire protocol |
 | [`@lakesync/parquet`](packages/parquet) | Parquet read/write via parquet-wasm |
 | [`@lakesync/catalogue`](packages/catalogue) | Iceberg REST catalogue client (Nessie-compatible) |
-| [`@lakesync/compactor`](packages/compactor) | Parquet compaction + equality delete files |
+| [`@lakesync/compactor`](packages/compactor) | Parquet compaction, equality deletes, checkpoint generation |
 | [`@lakesync/analyst`](packages/analyst) | Time-travel queries + analytics via DuckDB-WASM |
 | [`lakesync`](packages/lakesync) | Unified package with subpath exports for all of the above |
 
 | App | Description |
 |-----|-------------|
-| [`gateway-worker`](apps/gateway-worker) | Cloudflare Workers deployment: Durable Object gateway, R2 storage, JWT auth |
+| [`gateway-worker`](apps/gateway-worker) | Cloudflare Workers: Durable Object gateway, R2 storage, JWT auth, sync rules |
 | [`todo-app`](apps/examples/todo-app) | Reference implementation: offline-first todo list with column-level sync |
+| [`docs`](apps/docs) | Documentation site (Fumadocs + Next.js) |
+
+## Backend Support
+
+| Backend | Adapter | Status |
+|---------|---------|--------|
+| Cloudflare R2 | `LakeAdapter` (MinIO-compatible) | Production-ready |
+| AWS S3 | `LakeAdapter` (MinIO-compatible) | Production-ready |
+| MinIO | `LakeAdapter` | Production-ready |
+| PostgreSQL | `DatabaseAdapter` (PostgresAdapter) | Implemented |
+| MySQL | `DatabaseAdapter` (MySQLAdapter) | Implemented |
+| Composite (multi-backend) | `CompositeAdapter` | Implemented |
+| BigQuery | Planned (Phase 8) | — |
+
+## Status
+
+Experimental, but real. Core sync engine, conflict resolution, client SDK, Cloudflare Workers gateway, compaction, checkpoint generation, sync rules, initial sync, database adapters, and composite routing are all implemented and tested. API is not yet stable — expect breaking changes.
 
 ## Contributing
 

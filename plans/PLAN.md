@@ -19,7 +19,8 @@ Phases 1–5 built the core: HLC, deltas, gateway, queue, proto, S3/R2 adapter, 
 | 3B (done) | [phase-3b-schema-evolution.md](./phase-3b-schema-evolution.md) | Server schema versioning + client ALTER TABLE |
 | 4A (done) | [phase-4a-analyst.md](./phase-4a-analyst.md) | DuckDB-Wasm + Union Read + time travel |
 | 5 (done) | [phase-5-sync-rules-initial-sync.md](./phase-5-sync-rules-initial-sync.md) | Sync rules + checkpoint generation + initial sync |
-| 6 (next) | — | Database adapters, composite routing, migration tooling, docs |
+| 5B (done) | — | README rewrite, docs site, GitHub Pages deployment |
+| 6 (done) | — | Database adapters, composite routing, migration tooling, flush accuracy |
 | 7 | — | Gateway scaling: table sharding + self-hosted server |
 | 8 | — | Advanced adapters: BigQuery, fan-out, data lifecycle |
 
@@ -224,6 +225,25 @@ For a solo developer, the optimal execution order maximises parallelism where po
   - Sync rules filtering + initial sync via checkpoint + delta catchup
 - **Task 5E.2** — Documentation
 
+### Phase 5B — README, Docs Site, GitHub Pages (done)
+
+- **Task 5B.1** — Fumadocs site (`apps/docs/`) ✅
+  - Fumadocs + Next.js 15 + Tailwind v4 + Mermaid diagrams
+  - Landing page with pluggable backend story (sequence diagrams for core flow, small/large data, conflict resolution, offline sync, sync rules)
+  - Architecture docs, API reference, getting started guide
+  - Static export to GitHub Pages (`output: 'export'`, `basePath: /lakesync`)
+- **Task 5B.2** — GitHub Actions deployment (`.github/workflows/docs.yml`) ✅
+  - Triggers on push to main (paths: apps/docs/**, packages/*/src/**)
+  - Builds with `NEXT_PUBLIC_BASE_PATH=/lakesync`, uploads to GitHub Pages
+- **Task 5B.3** — README rewrite ✅
+  - Updated to reflect pluggable backend vision ("Local-first sync. Any backend.")
+  - Right-size your backend section (small data / large data / mix both)
+  - Backend support table (R2, S3, MinIO, Postgres, MySQL, Composite, BigQuery planned)
+  - Links to docs site, architecture diagrams
+- **Task 5B.4** — GitHub Pages configuration ✅
+  - Repo Settings → Pages → Source: GitHub Actions
+  - `public/.nojekyll` for static export
+
 ### Phase 6 — Database Adapters + Docs
 
 The "any backend" story. The `LakeAdapter` interface (`putObject`, `getObject`, `headObject`, `listObjects`, `deleteObject`, `deleteObjects`) currently has one implementation (MinIO/S3). Phase 6 adds database adapters so users can sync to Postgres, MySQL, or any SQL database for small-data use cases. The docs site (Fumadocs) is also part of this phase.
@@ -272,13 +292,7 @@ Option B is cleaner — the gateway accepts `LakeAdapter | DatabaseAdapter` and 
   - Handles MySQL-specific types (BIGINT for HLC, JSON columns)
 - **Task 6C.2** — Integration tests (Docker Compose + MySQL)
 
-**6D — Documentation Site** (done)
-
-- **Task 6D.1** — Fumadocs site (`apps/docs/`) ✅
-  - Landing page with pluggable backend story
-  - Architecture docs, API reference, getting started guide
-  - Mermaid sequence diagrams, dark/light theme
-  - GitHub Pages deployment via GitHub Actions
+**6D — Documentation Site** (moved to Phase 5B)
 
 **6E — Composite Adapter + Migration Tooling**
 
