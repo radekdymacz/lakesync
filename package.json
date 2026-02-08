@@ -14,6 +14,7 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --fix .",
 		"test:integration": "vitest run --config vitest.integration.config.ts",
+		"test:hardening": "vitest run --config tests/hardening/vitest.hardening.config.ts",
 		"docs:dev": "bun run --filter @lakesync/docs dev",
 		"publish:npm": "cd packages/lakesync && bun run build && bun publish --access public",
 		"prepare": "husky"
