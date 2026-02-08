@@ -143,6 +143,6 @@ Validates that a table schema has a valid table name and at least one column wit
 ```ts
 interface TableSchema {
   table: string;
-  columns: Array<{ name: string; type: "text" | "integer" | "real" | "blob" }>;
+  columns: Array<{ name: string; type: "string" | "number" | "boolean" | "json" | "null" }>;
 }
 ```

@@ -5,7 +5,7 @@ Local-first sync engine with **pluggable backends**. Client data lives in SQLite
 - **Small data** → Postgres, MySQL, RDS — familiar tooling, simple operations
 - **Large data** → Apache Iceberg on S3/R2 — infinite scale, zero ETL, operational data IS analytics data
 
-The `LakeAdapter` interface (put/get/list/delete) abstracts the storage layer. Swap backends without changing client code. The Iceberg/S3 adapter is the flagship; database adapters are the next milestone.
+The `LakeAdapter` interface (put/get/list/delete) abstracts the storage layer. Swap backends without changing client code.
 
 ## Monorepo
 TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
@@ -13,11 +13,13 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 ## Architecture
 - 10 packages: core, client, gateway, adapter, proto, parquet, catalogue, compactor, analyst, lakesync
 - 3 apps: todo-app (Vite + vanilla TS), gateway-worker (Cloudflare Workers + DO), docs (Fumadocs + Next.js)
-- All phases complete (1 through 5): HLC, Delta, Result, Conflict, Queue, Gateway, Proto, Adapter, Parquet, Catalogue, SQLite client, CF Workers, Compaction, Schema Evolution, Analyst, Sync Rules, Initial Sync
+- All phases complete (1 through 6): HLC, Delta, Result, Conflict, Queue, Gateway, Proto, Adapter, Parquet, Catalogue, SQLite client, CF Workers, Compaction, Schema Evolution, Analyst, Sync Rules, Initial Sync, Database Adapters
 
 ### Pluggable Backend (packages/adapter)
 - `LakeAdapter` interface: `putObject`, `getObject`, `headObject`, `listObjects`, `deleteObject`, `deleteObjects`
-- Current implementation: MinIO/S3-compatible (works with S3, R2, MinIO)
+- `DatabaseAdapter` interface: `putRows`, `getRows`, `deleteRows` — for relational backends
+- Implementations: S3Adapter (S3/R2/MinIO), PostgresAdapter, MySQLAdapter, CompositeAdapter
+- `migrateAdapter()`: copies data between any two adapters
 - Gateway takes an optional adapter — flush target is fully decoupled from sync logic
 - Same client code regardless of backend; swap adapters at the gateway level
 

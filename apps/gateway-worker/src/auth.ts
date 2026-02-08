@@ -6,6 +6,8 @@ export interface AuthClaims {
 	clientId: string;
 	/** Authorised gateway ID (from JWT `gw` claim) */
 	gatewayId: string;
+	/** Role for route-level access control (from JWT `role` claim, defaults to "client") */
+	role: string;
 	/** Non-standard JWT claims for sync rule evaluation */
 	customClaims: Record<string, string | string[]>;
 }
@@ -148,12 +150,13 @@ export async function verifyToken(
 		return Err(new AuthError("Malformed JWT: payload is not valid JSON"));
 	}
 
-	// Check expiry
-	if (payload.exp !== undefined) {
-		const nowSeconds = Math.floor(Date.now() / 1000);
-		if (typeof payload.exp !== "number" || payload.exp <= nowSeconds) {
-			return Err(new AuthError("JWT has expired"));
-		}
+	// Check expiry — exp claim is mandatory
+	if (payload.exp === undefined || typeof payload.exp !== "number") {
+		return Err(new AuthError('Missing or invalid "exp" claim (expiry)'));
+	}
+	const nowSeconds = Math.floor(Date.now() / 1000);
+	if (payload.exp <= nowSeconds) {
+		return Err(new AuthError("JWT has expired"));
 	}
 
 	// Extract required claims
@@ -166,7 +169,7 @@ export async function verifyToken(
 	}
 
 	// Extract non-standard claims for sync rules evaluation
-	const standardClaims = new Set(["sub", "gw", "exp", "iat", "iss", "aud"]);
+	const standardClaims = new Set(["sub", "gw", "exp", "iat", "iss", "aud", "role"]);
 	const customClaims: Record<string, string | string[]> = {};
 
 	for (const [key, value] of Object.entries(payload)) {
@@ -181,9 +184,14 @@ export async function verifyToken(
 	// Always include `sub` in custom claims so sync rules can reference jwt:sub
 	customClaims.sub = payload.sub;
 
+	// Extract role claim (default to "client" if absent)
+	const role =
+		typeof payload.role === "string" && payload.role.length > 0 ? payload.role : "client";
+
 	return Ok({
 		clientId: payload.sub,
 		gatewayId: payload.gw,
+		role,
 		customClaims,
 	});
 }

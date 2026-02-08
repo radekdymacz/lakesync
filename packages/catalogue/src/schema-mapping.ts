@@ -10,7 +10,7 @@ type ColumnType = TableSchema["columns"][number]["type"];
  * Maps a LakeSync column type to an Iceberg type string.
  *
  * The mapping mirrors the Arrow schema produced by `buildArrowSchema` in
- * `@lakesync/core/parquet/schema`:
+ * `@lakesync/parquet`:
  * - `"string"` → `"string"` (Utf8 equivalent)
  * - `"number"` → `"double"` (Float64 equivalent)
  * - `"boolean"` → `"boolean"` (Bool equivalent)
@@ -41,7 +41,7 @@ function lakeSyncTypeToIceberg(colType: ColumnType): string {
  * The resulting schema always includes six system columns (required) followed
  * by user-defined columns (not required). Column order and types are aligned
  * with the Apache Arrow schema produced by `buildArrowSchema` from
- * `@lakesync/core`.
+ * `@lakesync/parquet`.
  *
  * System columns (always present, in this order):
  * 1. `op` — `"string"` (the delta operation type)

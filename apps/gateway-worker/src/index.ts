@@ -1,5 +1,6 @@
 import { verifyToken } from "./auth";
 import type { Env } from "./env";
+import { logger } from "./logger";
 
 export { SyncGatewayDO } from "./sync-gateway-do";
 
@@ -105,11 +106,16 @@ function matchRoute(path: string, method: string): RouteMatch | null {
 }
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
+	const startMs = Date.now();
 	const url = new URL(request.url);
 	const path = url.pathname;
+	const method = request.method;
+	const origin = request.headers.get("Origin");
+
+	logger.info("request", { method, path, origin: origin ?? undefined });
 
 	// Health check — unauthenticated
-	if (path === "/health" && request.method === "GET") {
+	if (path === "/health" && method === "GET") {
 		return new Response(JSON.stringify({ status: "ok" }), {
 			status: 200,
 			headers: { "Content-Type": "application/json" },
@@ -119,20 +125,32 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 	// ── Authentication ──────────────────────────────────────────────
 	const token = extractBearerToken(request);
 	if (!token) {
+		logger.warn("auth_failed", { reason: "Missing Bearer token" });
 		return unauthorised("Missing Bearer token");
 	}
 
 	const authResult = await verifyToken(token, env.JWT_SECRET);
 	if (!authResult.ok) {
+		logger.warn("auth_failed", { reason: authResult.error.message });
 		return unauthorised(authResult.error.message);
 	}
 
-	const { clientId, gatewayId: jwtGatewayId } = authResult.value;
+	const { clientId, gatewayId: jwtGatewayId, role } = authResult.value;
+
+	// ── Admin route protection ───────────────────────────────────────
+	if (path.startsWith("/admin/") && role !== "admin") {
+		logger.warn("admin_denied", { clientId, path });
+		return new Response(JSON.stringify({ error: "Admin role required" }), {
+			status: 403,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
 
 	// ── Routing ─────────────────────────────────────────────────────
 
-	const route = matchRoute(path, request.method);
+	const route = matchRoute(path, method);
 	if (!route) {
+		logger.warn("route_not_found", { path });
 		return new Response("Not found", { status: 404 });
 	}
 
@@ -156,13 +174,18 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 	const { customClaims } = authResult.value;
 	doHeaders.set("X-Auth-Claims", JSON.stringify(customClaims));
 
-	return stub.fetch(
+	const response = await stub.fetch(
 		new Request(doUrl.toString(), {
-			method: route.doMethod ?? request.method,
+			method: route.doMethod ?? method,
 			headers: doHeaders,
 			body: route.forwardBody ? request.body : undefined,
 		}),
 	);
+
+	const durationMs = Date.now() - startMs;
+	logger.info("response", { method, path, status: response.status, durationMs });
+
+	return response;
 }
 
 // ---------------------------------------------------------------------------

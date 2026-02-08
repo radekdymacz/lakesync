@@ -58,10 +58,10 @@ function createMockEnv(): Env {
 /**
  * Helper to configure the mock verifyToken to return Ok.
  */
-function mockAuthSuccess(clientId = "client-1", gatewayId = "gw-1"): void {
+function mockAuthSuccess(clientId = "client-1", gatewayId = "gw-1", role = "client"): void {
 	mockedVerifyToken.mockResolvedValue({
 		ok: true,
-		value: { clientId, gatewayId, customClaims: { sub: clientId } },
+		value: { clientId, gatewayId, role, customClaims: { sub: clientId } },
 	});
 }
 
@@ -186,9 +186,9 @@ describe("Worker fetch handler", () => {
 
 	// ── Routing: /admin/flush/:id ─────────────────────────────────────
 
-	it("POST /admin/flush/:id forwards request to DO stub", async () => {
+	it("POST /admin/flush/:id forwards request to DO stub for admin role", async () => {
 		const env = createMockEnv();
-		mockAuthSuccess("client-1", "gw1");
+		mockAuthSuccess("client-1", "gw1", "admin");
 
 		const request = new Request("https://api.example.com/admin/flush/gw1", {
 			method: "POST",
@@ -202,6 +202,40 @@ describe("Worker fetch handler", () => {
 			idFromName: ReturnType<typeof vi.fn>;
 		};
 		expect(ns.idFromName).toHaveBeenCalledWith("gw1");
+	});
+
+	// ── Admin role enforcement ────────────────────────────────────────
+
+	it("returns 403 when client role accesses /admin/ routes", async () => {
+		const env = createMockEnv();
+		mockAuthSuccess("client-1", "gw1", "client");
+
+		const request = new Request("https://api.example.com/admin/flush/gw1", {
+			method: "POST",
+			headers: { Authorization: "Bearer valid-token" },
+		});
+
+		const response = await handler.fetch(request, env);
+
+		expect(response.status).toBe(403);
+		const body = (await response.json()) as { error: string };
+		expect(body.error).toBe("Admin role required");
+	});
+
+	it("returns 403 for admin schema route without admin role", async () => {
+		const env = createMockEnv();
+		mockAuthSuccess("client-1", "gw1", "client");
+
+		const request = new Request("https://api.example.com/admin/schema/gw1", {
+			method: "POST",
+			headers: { Authorization: "Bearer valid-token" },
+		});
+
+		const response = await handler.fetch(request, env);
+
+		expect(response.status).toBe(403);
+		const body = (await response.json()) as { error: string };
+		expect(body.error).toBe("Admin role required");
 	});
 
 	// ── 404 ───────────────────────────────────────────────────────────

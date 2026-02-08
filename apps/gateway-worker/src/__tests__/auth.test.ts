@@ -202,14 +202,13 @@ describe("verifyToken", () => {
 		}
 	});
 
-	it("accepts a valid token without an exp claim", async () => {
+	it("rejects a token without an exp claim", async () => {
 		const payload = { sub: "client-2", gw: "gateway-2" };
 		const token = await createJwt(payload, TEST_SECRET);
 		const result = await verifyToken(token, TEST_SECRET);
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.value.clientId).toBe("client-2");
-			expect(result.value.gatewayId).toBe("gateway-2");
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.message).toContain("exp");
 		}
 	});
 
@@ -219,14 +218,14 @@ describe("verifyToken", () => {
 		const payload = {
 			...validPayload(),
 			org_id: "org-42",
-			role: "admin",
+			department: "engineering",
 		};
 		const token = await createJwt(payload, TEST_SECRET);
 		const result = await verifyToken(token, TEST_SECRET);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.value.customClaims.org_id).toBe("org-42");
-			expect(result.value.customClaims.role).toBe("admin");
+			expect(result.value.customClaims.department).toBe("engineering");
 		}
 	});
 
@@ -249,6 +248,37 @@ describe("verifyToken", () => {
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.value.customClaims.sub).toBe("client-1");
+		}
+	});
+
+	// ── Role extraction ─────────────────────────────────────────────
+
+	it("extracts role from JWT payload", async () => {
+		const payload = { ...validPayload(), role: "admin" };
+		const token = await createJwt(payload, TEST_SECRET);
+		const result = await verifyToken(token, TEST_SECRET);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.role).toBe("admin");
+		}
+	});
+
+	it("defaults role to client when not present in JWT", async () => {
+		const token = await createJwt(validPayload(), TEST_SECRET);
+		const result = await verifyToken(token, TEST_SECRET);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.role).toBe("client");
+		}
+	});
+
+	it("excludes role from custom claims", async () => {
+		const payload = { ...validPayload(), role: "admin" };
+		const token = await createJwt(payload, TEST_SECRET);
+		const result = await verifyToken(token, TEST_SECRET);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.customClaims.role).toBeUndefined();
 		}
 	});
 

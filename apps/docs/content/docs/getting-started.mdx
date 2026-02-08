@@ -19,83 +19,80 @@ bun add lakesync
 
 ## Quick Start
 
-### 1. Create a Local Database
+### 1. Open a Local Database
 
 ```ts
-import { LocalDB } from "lakesync";
+import { LocalDB } from "lakesync/client";
 
-const db = await LocalDB.create();
+const dbResult = await LocalDB.open({ name: "my-app" });
+if (!dbResult.ok) throw dbResult.error;
+const db = dbResult.value;
 ```
 
-### 2. Set Up a Sync Tracker
+### 2. Register a Schema
 
-The `SyncTracker` wraps your local database, a queue, and a hybrid logical clock. It automatically extracts deltas from every insert, update, and delete operation.
-
-```ts
-import { SyncTracker, MemoryQueue } from "lakesync";
-import { HLC } from "lakesync";
-
-const hlc = new HLC();
-const queue = new MemoryQueue();
-const tracker = new SyncTracker(db, queue, hlc, "client-1");
-```
-
-### 3. Define a Table
+Use `registerSchema` to create the table and store schema metadata:
 
 ```ts
-db.exec(`
-  CREATE TABLE IF NOT EXISTS todos (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    completed INTEGER NOT NULL DEFAULT 0
-  )
-`);
-```
+import { registerSchema } from "lakesync/client";
 
-### 4. Insert Data
-
-```ts
-tracker.insert("todos", {
-  id: "todo-1",
-  title: "Build something great",
-  completed: 0,
+await registerSchema(db, {
+  table: "todos",
+  columns: [
+    { name: "title", type: "string" },
+    { name: "completed", type: "number" },
+  ],
 });
 ```
 
-### 5. Connect a Transport and Sync
+### 3. Set Up a Transport
 
 For local development, use `LocalTransport` to sync in-process:
 
 ```ts
-import { SyncCoordinator, LocalTransport } from "lakesync";
-import { Gateway } from "@lakesync/gateway";
+import { LocalTransport } from "lakesync/client";
+import { SyncGateway } from "lakesync/gateway";
 
-const gateway = new Gateway("gw-1");
-const transport = new LocalTransport(gateway, "client-1");
-
-const coordinator = new SyncCoordinator({
-  tracker,
-  transport,
-  syncMode: "manual",
-});
-
-// Push local changes to the gateway
-await coordinator.push();
-
-// Pull remote changes from the gateway
-await coordinator.pull();
+const gateway = new SyncGateway("gw-1");
+const transport = new LocalTransport(gateway);
 ```
 
 For production, use `HttpTransport` to connect to a remote gateway:
 
 ```ts
-import { HttpTransport } from "lakesync";
+import { HttpTransport } from "lakesync/client";
 
 const transport = new HttpTransport({
   baseUrl: "https://your-gateway.example.com",
   gatewayId: "gw-1",
-  getToken: async () => "your-jwt-token",
+  token: "your-jwt-token",
 });
+```
+
+### 4. Create a Coordinator and Sync
+
+```ts
+import { SyncCoordinator } from "lakesync/client";
+
+const coordinator = new SyncCoordinator(db, transport);
+coordinator.startAutoSync();
+```
+
+### 5. Insert Data
+
+The coordinator exposes a `tracker` for CRUD operations. Each mutation requires a separate `rowId` argument:
+
+```ts
+await coordinator.tracker.insert("todos", "todo-1", {
+  title: "Build something great",
+  completed: 0,
+});
+
+await coordinator.tracker.update("todos", "todo-1", {
+  completed: 1,
+});
+
+await coordinator.tracker.delete("todos", "todo-1");
 ```
 
 ## Next Steps

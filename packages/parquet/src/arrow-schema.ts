@@ -1,5 +1,5 @@
+import type { RowDelta, TableSchema } from "@lakesync/core";
 import * as arrow from "apache-arrow";
-import type { RowDelta, TableSchema } from "../delta/types";
 
 /**
  * Column type from a TableSchema definition.

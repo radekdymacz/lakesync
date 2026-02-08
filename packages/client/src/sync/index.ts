@@ -1,5 +1,10 @@
 export { applyRemoteDeltas } from "./applier";
-export { SyncCoordinator, type SyncCoordinatorConfig, type SyncMode } from "./coordinator";
+export {
+	SyncCoordinator,
+	type SyncCoordinatorConfig,
+	type SyncEvents,
+	type SyncMode,
+} from "./coordinator";
 export { SchemaSynchroniser } from "./schema-sync";
 export { SyncTracker } from "./tracker";
 export type { CheckpointResponse, SyncTransport } from "./transport";

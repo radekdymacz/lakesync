@@ -6,7 +6,7 @@ export interface DbConfig {
 	/** Database name (used for identification and future persistence) */
 	name: string;
 	/** Storage backend — auto-detected if not set */
-	backend?: "opfs" | "idb" | "memory";
+	backend?: "idb" | "memory";
 }
 
 /** Error type for database operations */

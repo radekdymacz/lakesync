@@ -9,6 +9,16 @@ import type { SyncTransport } from "./transport";
 /** Controls which operations syncOnce() / startAutoSync() performs */
 export type SyncMode = "full" | "pushOnly" | "pullOnly";
 
+/** Events emitted by SyncCoordinator */
+export interface SyncEvents {
+	/** Fired after remote deltas are applied locally. Count is the number of deltas applied. */
+	onChange: (count: number) => void;
+	/** Fired after a successful sync cycle (push + pull) completes. */
+	onSyncComplete: () => void;
+	/** Fired when a sync error occurs. */
+	onError: (error: Error) => void;
+}
+
 /** Optional configuration for dependency injection (useful for testing) */
 export interface SyncCoordinatorConfig {
 	/** Sync queue implementation. Defaults to IDBQueue. */
@@ -21,6 +31,8 @@ export interface SyncCoordinatorConfig {
 	maxRetries?: number;
 	/** Sync mode. Defaults to "full" (push + pull). */
 	syncMode?: SyncMode;
+	/** Auto-sync interval in milliseconds. Defaults to 10000 (10 seconds). */
+	autoSyncIntervalMs?: number;
 }
 
 /** Auto-sync interval in milliseconds (every 10 seconds) */
@@ -42,11 +54,17 @@ export class SyncCoordinator {
 	private readonly _clientId: string;
 	private readonly maxRetries: number;
 	private readonly syncMode: SyncMode;
+	private readonly autoSyncIntervalMs: number;
 	private lastSyncedHlc = HLC.encode(0, 0);
 	private _lastSyncTime: Date | null = null;
 	private syncIntervalId: ReturnType<typeof setInterval> | null = null;
 	private visibilityHandler: (() => void) | null = null;
 	private syncing = false;
+	private listeners: { [K in keyof SyncEvents]: Array<SyncEvents[K]> } = {
+		onChange: [],
+		onSyncComplete: [],
+		onError: [],
+	};
 
 	constructor(db: LocalDB, transport: SyncTransport, config?: SyncCoordinatorConfig) {
 		this.db = db;
@@ -56,7 +74,30 @@ export class SyncCoordinator {
 		this._clientId = config?.clientId ?? `client-${crypto.randomUUID()}`;
 		this.maxRetries = config?.maxRetries ?? 10;
 		this.syncMode = config?.syncMode ?? "full";
+		this.autoSyncIntervalMs = config?.autoSyncIntervalMs ?? AUTO_SYNC_INTERVAL_MS;
 		this.tracker = new SyncTracker(db, this.queue, this.hlc, this._clientId);
+	}
+
+	/** Register an event listener */
+	on<K extends keyof SyncEvents>(event: K, listener: SyncEvents[K]): void {
+		this.listeners[event].push(listener);
+	}
+
+	/** Remove an event listener */
+	off<K extends keyof SyncEvents>(event: K, listener: SyncEvents[K]): void {
+		const arr = this.listeners[event];
+		const idx = arr.indexOf(listener);
+		if (idx !== -1) arr.splice(idx, 1);
+	}
+
+	private emit<K extends keyof SyncEvents>(event: K, ...args: Parameters<SyncEvents[K]>): void {
+		for (const listener of this.listeners[event]) {
+			try {
+				(listener as (...a: Parameters<SyncEvents[K]>) => void)(...args);
+			} catch {
+				// Swallow listener errors to avoid breaking sync
+			}
+		}
 	}
 
 	/** Push pending deltas to the gateway via the transport */
@@ -73,6 +114,10 @@ export class SyncCoordinator {
 				`[SyncCoordinator] Dead-lettering ${deadLettered.length} entries after ${this.maxRetries} retries`,
 			);
 			await this.queue.ack(deadLettered.map((e) => e.id));
+			this.emit(
+				"onError",
+				new Error(`Dead-lettered ${deadLettered.length} entries after ${this.maxRetries} retries`),
+			);
 		}
 
 		if (entries.length === 0) return;
@@ -111,6 +156,9 @@ export class SyncCoordinator {
 		if (applyResult.ok) {
 			this.lastSyncedHlc = serverHlc;
 			this._lastSyncTime = new Date();
+			if (applyResult.value > 0) {
+				this.emit("onChange", applyResult.value);
+			}
 			return applyResult.value;
 		}
 		return 0;
@@ -139,7 +187,7 @@ export class SyncCoordinator {
 	startAutoSync(): void {
 		this.syncIntervalId = setInterval(() => {
 			void this.syncOnce();
-		}, AUTO_SYNC_INTERVAL_MS);
+		}, this.autoSyncIntervalMs);
 
 		this.visibilityHandler = () => {
 			if (typeof document !== "undefined" && document.visibilityState === "visible") {
@@ -173,7 +221,8 @@ export class SyncCoordinator {
 		this._lastSyncTime = new Date();
 	}
 
-	private async syncOnce(): Promise<void> {
+	/** Perform a single sync cycle (push + pull, depending on syncMode). */
+	async syncOnce(): Promise<void> {
 		if (this.syncing) return;
 		this.syncing = true;
 		try {
@@ -186,6 +235,9 @@ export class SyncCoordinator {
 			if (this.syncMode !== "pullOnly") {
 				await this.pushToGateway();
 			}
+			this.emit("onSyncComplete");
+		} catch (err) {
+			this.emit("onError", err instanceof Error ? err : new Error(String(err)));
 		} finally {
 			this.syncing = false;
 		}

@@ -1,12 +1,4 @@
-import {
-	deltasToArrowTable,
-	Err,
-	FlushError,
-	Ok,
-	type Result,
-	type RowDelta,
-	type TableSchema,
-} from "@lakesync/core";
+import { Err, FlushError, Ok, type Result, type RowDelta, type TableSchema } from "@lakesync/core";
 import * as arrow from "apache-arrow";
 import {
 	Compression,
@@ -14,6 +6,7 @@ import {
 	WriterPropertiesBuilder,
 	writeParquet,
 } from "parquet-wasm/esm";
+import { deltasToArrowTable } from "./arrow-schema";
 import { ensureWasmInitialised } from "./wasm";
 
 /**

@@ -416,7 +416,10 @@ describe("SyncGatewayDO", () => {
 
 			// Mock WebSocketPair as a class constructor (CF Workers global)
 			const mockClient = { close: vi.fn() };
-			const mockServer = { close: vi.fn() };
+			const mockServer = {
+				close: vi.fn(),
+				serializeAttachment: vi.fn(),
+			};
 			const g = globalThis as Record<string, unknown>;
 			const originalWebSocketPair = g.WebSocketPair;
 
@@ -447,11 +450,20 @@ describe("SyncGatewayDO", () => {
 				const DO = createDO();
 				const request = new Request("https://do.example.com/ws", {
 					method: "GET",
-					headers: { Upgrade: "websocket" },
+					headers: {
+						Upgrade: "websocket",
+						"X-Auth-Claims": JSON.stringify({ sub: "client-1" }),
+						"X-Client-Id": "client-1",
+					},
 				});
 
 				const response = await DO.fetch(request);
 				expect(response.status).toBe(101);
+				// Verify claims were stored on the server WebSocket
+				expect(mockServer.serializeAttachment).toHaveBeenCalledWith({
+					claims: { sub: "client-1" },
+					clientId: "client-1",
+				});
 			} finally {
 				globalThis.Response = OriginalResponse;
 				if (originalWebSocketPair) {
@@ -464,10 +476,22 @@ describe("SyncGatewayDO", () => {
 	});
 
 	describe("webSocketMessage", () => {
+		/** Create a mock WebSocket with deserializeAttachment support. */
+		function createMockWs(
+			clientId = "client-1",
+			claims: Record<string, unknown> = { sub: "client-1" },
+		): WebSocket {
+			return {
+				close: vi.fn(),
+				send: vi.fn(),
+				deserializeAttachment: vi.fn().mockReturnValue({ claims, clientId }),
+			} as unknown as WebSocket;
+		}
+
 		it("text frame closes with 1003", async () => {
 			resetGatewayMocks();
 			const DO = createDO();
-			const mockWs = { close: vi.fn(), send: vi.fn() } as unknown as WebSocket;
+			const mockWs = createMockWs();
 
 			await DO.webSocketMessage(mockWs, "hello text");
 
@@ -477,7 +501,7 @@ describe("SyncGatewayDO", () => {
 		it("short message closes with 1002", async () => {
 			resetGatewayMocks();
 			const DO = createDO();
-			const mockWs = { close: vi.fn(), send: vi.fn() } as unknown as WebSocket;
+			const mockWs = createMockWs();
 
 			await DO.webSocketMessage(mockWs, new Uint8Array([0x01]).buffer);
 
@@ -487,7 +511,7 @@ describe("SyncGatewayDO", () => {
 		it("unknown tag closes with 1002", async () => {
 			resetGatewayMocks();
 			const DO = createDO();
-			const mockWs = { close: vi.fn(), send: vi.fn() } as unknown as WebSocket;
+			const mockWs = createMockWs();
 
 			await DO.webSocketMessage(mockWs, new Uint8Array([0xff, 0x00]).buffer);
 
@@ -500,7 +524,7 @@ describe("SyncGatewayDO", () => {
 		it("tag 0x01 delegates to decodeSyncPush and handlePush", async () => {
 			resetGatewayMocks();
 			const DO = createDO();
-			const mockWs = { close: vi.fn(), send: vi.fn() } as unknown as WebSocket;
+			const mockWs = createMockWs();
 
 			const mockedDecodeSyncPush = vi.mocked(decodeSyncPush);
 			mockedDecodeSyncPush.mockReturnValue({
@@ -531,10 +555,35 @@ describe("SyncGatewayDO", () => {
 			expect(mockWs.send).toHaveBeenCalled();
 		});
 
+		it("tag 0x01 closes when push clientId mismatches authenticated identity", async () => {
+			resetGatewayMocks();
+			const DO = createDO();
+			const mockWs = createMockWs("client-1");
+
+			const mockedDecodeSyncPush = vi.mocked(decodeSyncPush);
+			mockedDecodeSyncPush.mockReturnValue({
+				ok: true,
+				value: {
+					clientId: "impersonator",
+					deltas: [],
+					lastSeenHlc: BigInt(0) as never,
+				},
+			});
+
+			const payload = new Uint8Array([0x01, 0x10, 0x20]);
+			await DO.webSocketMessage(mockWs, payload.buffer);
+
+			expect(mockWs.close).toHaveBeenCalledWith(
+				1008,
+				"Client ID mismatch: push clientId does not match authenticated identity",
+			);
+			expect(mockHandlePush).not.toHaveBeenCalled();
+		});
+
 		it("tag 0x02 delegates to decodeSyncPull and handlePull", async () => {
 			resetGatewayMocks();
 			const DO = createDO();
-			const mockWs = { close: vi.fn(), send: vi.fn() } as unknown as WebSocket;
+			const mockWs = createMockWs();
 
 			const mockedDecodeSyncPull = vi.mocked(decodeSyncPull);
 			mockedDecodeSyncPull.mockReturnValue({

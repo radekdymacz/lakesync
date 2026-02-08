@@ -1,8 +1,8 @@
+import type { RowDelta, TableSchema } from "@lakesync/core";
+import { HLC } from "@lakesync/core";
 import * as arrow from "apache-arrow";
 import { describe, expect, it } from "vitest";
-import type { RowDelta, TableSchema } from "../../delta/types";
-import { HLC } from "../../hlc/hlc";
-import { buildArrowSchema, deltasToArrowTable } from "../schema";
+import { buildArrowSchema, deltasToArrowTable } from "../arrow-schema";
 
 const testSchema: TableSchema = {
 	table: "users",

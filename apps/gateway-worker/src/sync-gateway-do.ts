@@ -16,6 +16,7 @@ import {
 	encodeSyncResponse,
 } from "@lakesync/proto";
 import type { Env } from "./env";
+import { logger } from "./logger";
 import { R2Adapter } from "./r2-adapter";
 
 // ---------------------------------------------------------------------------
@@ -201,7 +202,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		// WebSocket upgrade
 		const upgradeHeader = request.headers.get("Upgrade");
 		if (upgradeHeader?.toLowerCase() === "websocket") {
-			return this.handleWebSocketUpgrade();
+			return this.handleWebSocketUpgrade(request);
 		}
 
 		const url = new URL(request.url);
@@ -270,10 +271,18 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		}
 
 		const gateway = await this.getGateway();
+
+		logger.info("push", {
+			clientId: body.clientId,
+			deltaCount: body.deltas.length,
+			contentLength,
+		});
+
 		const result = gateway.handlePush(body);
 
 		if (!result.ok) {
 			const err = result.error;
+			logger.warn("push_error", { code: err.code, message: err.message });
 			if (err.code === "CLOCK_DRIFT") {
 				return errorResponse(err.message, 409);
 			}
@@ -332,6 +341,12 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			return errorResponse("Internal pull error", 500);
 		}
 
+		logger.info("pull", {
+			clientId,
+			deltaCount: result.value.deltas.length,
+			sinceHlc: sinceHlc.toString(),
+		});
+
 		return jsonResponse(result.value);
 	}
 
@@ -388,6 +403,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		}
 
 		await this.saveTableSchema(schema);
+		logger.info("schema_saved", { table: schema.table });
 		return jsonResponse({ saved: true });
 	}
 
@@ -414,6 +430,9 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		}
 
 		await this.saveSyncRules(config as SyncRulesConfig);
+		logger.info("sync_rules_saved", {
+			bucketCount: (config as SyncRulesConfig).buckets.length,
+		});
 		return jsonResponse({ saved: true });
 	}
 
@@ -479,6 +498,12 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			return errorResponse("Failed to encode checkpoint response", 500);
 		}
 
+		logger.info("checkpoint", {
+			chunkCount: manifest.chunks.length,
+			deltaCount: allFilteredDeltas.length,
+			filtered: !!context,
+		});
+
 		return new Response(responsePayload.value, {
 			status: 200,
 			headers: {
@@ -495,14 +520,34 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	/**
 	 * Upgrade an HTTP request to a WebSocket connection.
 	 *
+	 * Stores authenticated JWT claims and client ID on the server WebSocket
+	 * via `serializeAttachment` so they are available during message handling.
 	 * Uses the Durable Object's hibernatable WebSocket API so the DO can
 	 * sleep between messages without losing the connection.
 	 */
-	private handleWebSocketUpgrade(): Response {
+	private handleWebSocketUpgrade(request: Request): Response {
 		const pair = new WebSocketPair();
 		const [client, server] = [pair[0], pair[1]];
 
+		// Store claims and clientId from the authenticated request
+		const claimsHeader = request.headers.get("X-Auth-Claims");
+		const clientId = request.headers.get("X-Client-Id");
+		let claims: ResolvedClaims = {};
+		if (claimsHeader) {
+			try {
+				claims = JSON.parse(claimsHeader) as ResolvedClaims;
+			} catch {
+				// Invalid claims header — use empty claims
+			}
+		}
+
 		this.ctx.acceptWebSocket(server);
+		(server as unknown as { serializeAttachment: (data: unknown) => void }).serializeAttachment({
+			claims,
+			clientId,
+		});
+
+		logger.info("ws_connect", { clientId: clientId ?? "unknown" });
 
 		return new Response(null, {
 			status: 101,
@@ -539,6 +584,17 @@ export class SyncGatewayDO extends DurableObject<Env> {
 
 		const gateway = await this.getGateway();
 
+		// Retrieve per-connection state stored during upgrade
+		const attachment = (
+			ws as unknown as {
+				deserializeAttachment: () => { claims?: ResolvedClaims; clientId?: string } | null;
+			}
+		).deserializeAttachment();
+		const storedClaims = attachment?.claims ?? {};
+		const storedClientId = attachment?.clientId ?? null;
+
+		logger.info("ws_message", { tag, clientId: storedClientId ?? "unknown" });
+
 		if (tag === 0x01) {
 			// SyncPush — validate payload size before decoding
 			if (payload.byteLength > MAX_PUSH_PAYLOAD_BYTES) {
@@ -549,6 +605,12 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			const decoded = decodeSyncPush(payload);
 			if (!decoded.ok) {
 				this.sendProtoError(ws, decoded.error);
+				return;
+			}
+
+			// Verify client ID matches the authenticated identity
+			if (storedClientId && decoded.value.clientId !== storedClientId) {
+				ws.close(1008, "Client ID mismatch: push clientId does not match authenticated identity");
 				return;
 			}
 
@@ -574,14 +636,19 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			};
 			this.sendSyncResponse(ws, response);
 		} else if (tag === 0x02) {
-			// SyncPull
+			// SyncPull — apply sync rules using stored claims
 			const decoded = decodeSyncPull(payload);
 			if (!decoded.ok) {
 				this.sendProtoError(ws, decoded.error);
 				return;
 			}
 
-			const pullResult = gateway.handlePull(decoded.value);
+			// Build sync rules context from stored claims
+			const rules = await this.loadSyncRules();
+			const context: SyncRulesContext | undefined =
+				rules && rules.buckets.length > 0 ? { claims: storedClaims, rules } : undefined;
+
+			const pullResult = gateway.handlePull(decoded.value, context);
 			if (!pullResult.ok) {
 				this.sendProtoError(ws, pullResult.error);
 				return;
@@ -601,18 +668,18 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 */
 	async webSocketClose(
 		_ws: WebSocket,
-		_code: number,
-		_reason: string,
+		code: number,
+		reason: string,
 		_wasClean: boolean,
 	): Promise<void> {
-		// WebSocket closed — no per-client state to clean up yet
+		logger.info("ws_close", { code, reason });
 	}
 
 	/**
 	 * Handle WebSocket errors — log and clean up.
 	 */
 	async webSocketError(_ws: WebSocket, _error: unknown): Promise<void> {
-		// WebSocket error — connection will close automatically
+		logger.error("ws_error", {});
 	}
 
 	// -----------------------------------------------------------------------
@@ -636,6 +703,8 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			return;
 		}
 
+		logger.info("flush_start", { bufferSize: stats.logSize });
+
 		const result = await gateway.flush();
 
 		if (!result.ok) {
@@ -645,11 +714,18 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				MAX_RETRY_BACKOFF_MS,
 			);
 
+			logger.error("flush_failed", {
+				error: result.error.message,
+				retryCount: this.flushRetryCount,
+				nextBackoffMs: backoffMs,
+			});
+
 			await this.ctx.storage.setAlarm(Date.now() + backoffMs);
 			return;
 		}
 
 		// Flush succeeded — reset retry counter and log metrics
+		logger.info("flush_success", { bufferSize: stats.logSize });
 		this.flushRetryCount = 0;
 
 		// If the buffer still has data (e.g. pushes arrived during flush),
