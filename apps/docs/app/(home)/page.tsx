@@ -2,47 +2,31 @@ import Link from "next/link";
 import { Mermaid } from "@/components/mdx/mermaid";
 
 const CORE_FLOW = `sequenceDiagram
-    participant Consumer as Web App / Agent
-    participant DB as Local SQLite
+    participant Consumer as Consumer (SQLite)
     participant GW as Gateway
     participant Source as Any Data Source
 
-    Consumer->>DB: read / write
-    Note over Consumer,DB: Zero latency — local working set
-    DB-->>GW: Push local changes
-    GW-->>DB: Pull from source
-    Note over GW: Sync rules decide<br/>what data flows where
-    GW->>Source: Read / write via adapter
-    Note over Source: Postgres? BigQuery?<br/>CloudWatch? S3?<br/>If you can read it, it's a source.`;
+    Consumer->>GW: push local deltas
+    GW-->>Consumer: ACK + server HLC
+    Consumer->>GW: pull (sync rule filter)
+    GW->>Source: query via adapter
+    Source-->>GW: filtered results
+    GW-->>Consumer: deltas matching rule
+    Note over GW,Source: Adapters are both<br/>sources and destinations`;
 
-const AGENT_FLOW = `sequenceDiagram
-    participant Agent as AI Agent
-    participant DB as Local SQLite
-    participant GW as Gateway
-    participant CW as CloudWatch Logs
-
-    Agent->>GW: "errors from last 24h"
-    Note over GW: Sync rule evaluates query
-    GW->>CW: query via adapter
-    CW-->>GW: filtered log entries
-    GW-->>DB: sync as deltas
-    Agent->>DB: SELECT * FROM errors
-    Note over Agent,DB: Local working copy<br/>Agent reasons over it`;
-
-const WEBAPP_FLOW = `sequenceDiagram
-    participant App as Web App (offline)
+const OFFLINE_SYNC = `sequenceDiagram
+    participant App as Consumer (offline)
     participant DB as Local SQLite
     participant Q as Outbox (IndexedDB)
     participant GW as Gateway
-    participant PG as Postgres
 
     App->>DB: Edit 1, Edit 2, Edit 3
     DB-->>Q: Deltas queued
     Note over App,Q: Fully functional offline
     Note over Q,GW: ← Connection restored →
     Q->>GW: Push all deltas
-    GW->>PG: Flush to database
-    GW-->>App: Pull remote changes
+    GW-->>Q: ACK
+    GW->>App: Pull remote changes
     Note over App,GW: Caught up ✓`;
 
 const CROSS_BACKEND = `sequenceDiagram
@@ -52,39 +36,37 @@ const CROSS_BACKEND = `sequenceDiagram
     participant ICE as Iceberg (S3/R2)
 
     Note over GW: Sync rules define flows
-    PG->>GW: read operational data
-    GW->>BQ: write for analytics
-    Note over BQ: Dashboards query here
-    PG->>GW: read data older than 90d
-    GW->>ICE: archive to data lake
-    Note over ICE: Long-term storage<br/>Open format`;
+    PG->>GW: read via DatabaseAdapter
+    GW->>BQ: write via DatabaseAdapter
+    PG->>GW: read via DatabaseAdapter
+    GW->>ICE: write via LakeAdapter
+    Note over GW: Any source → any destination<br/>via adapter interfaces`;
 
 const CONFLICT_RESOLUTION = `sequenceDiagram
-    participant A as Alice
+    participant A as Client A
     participant GW as Gateway
-    participant B as Bob
+    participant B as Client B
 
-    Note over A,B: Both editing the same todo
-    A->>A: title = "Buy oat milk"
-    B->>B: status = "done"
+    A->>A: UPDATE title = "Draft"
+    B->>B: UPDATE status = "done"
     A->>GW: push delta (title, HLC=100)
     B->>GW: push delta (status, HLC=101)
-    Note over GW: Column-level merge<br/>title ← Alice (HLC 100)<br/>status ← Bob (HLC 101)
+    Note over GW: Column-level merge<br/>title ← A (HLC 100)<br/>status ← B (HLC 101)
     GW->>A: pull → status = "done"
-    GW->>B: pull → title = "Buy oat milk"
+    GW->>B: pull → title = "Draft"
     Note over A,B: Both changes preserved ✓`;
 
 const SYNC_RULES = `sequenceDiagram
-    participant A as Alice (team=eng)
+    participant A as Consumer A
     participant GW as Gateway
-    participant B as Agent (role=ops)
+    participant B as Consumer B
 
-    Note over GW: Sync rules:<br/>filter by claims
+    Note over GW: Sync rules:<br/>bucket-based filtering
     A->>GW: pull (JWT: team=eng)
-    GW-->>A: eng data only
-    B->>GW: pull (role=ops, ts>24h ago)
-    GW-->>B: ops errors, last 24h
-    Note over A,B: Each consumer gets<br/>exactly what it needs`;
+    GW-->>A: deltas where team=eng
+    B->>GW: pull (JWT: role=ops)
+    GW-->>B: deltas where role=ops
+    Note over A,B: Each consumer syncs<br/>only matching data`;
 
 export default function HomePage() {
 	return (
@@ -103,10 +85,11 @@ export default function HomePage() {
 				</h1>
 
 				<p className="mx-auto mb-10 max-w-2xl text-center text-lg leading-relaxed text-fd-muted-foreground">
-					Your app or agent declares what it needs. The engine handles the
-					rest. Postgres, BigQuery, S3, CloudWatch &mdash; if you can read
-					from it, it&apos;s a data source. LakeSync syncs a filtered subset
-					to local SQLite so you can query it, display it, or reason over it.
+					LakeSync is an open-source TypeScript sync engine. Pluggable
+					adapters connect to any data source. Declarative sync rules
+					define what data flows where. Consumers get a local SQLite
+					working set with offline support and column-level conflict
+					resolution.
 				</p>
 
 				<div className="flex flex-wrap items-center justify-center gap-4">
@@ -135,95 +118,86 @@ export default function HomePage() {
 			{/* Core architecture */}
 			<DiagramSection
 				label="How it works"
-				title="Any source → Gateway → Local SQLite"
-				description="The gateway connects to data sources via pluggable adapters. Sync rules define what data flows to each consumer. Your app or agent gets a local SQLite working set — queryable, offline-capable, and always up to date."
+				title="Consumer ↔ Gateway ↔ Any Data Source"
+				description="Consumers push local deltas and pull filtered subsets from remote sources via the gateway. Adapters abstract the data source. Sync rules control what data each consumer receives."
 				chart={CORE_FLOW}
 				border
 			/>
 
-			{/* Agent use case */}
-			<DiagramSection
-				label="For AI agents"
-				title="Give your agents a synced working set"
-				description="An agent says &ldquo;I need the last 24 hours of errors.&rdquo; The gateway evaluates the sync rule, queries CloudWatch via its adapter, and syncs the result to local SQLite. The agent reasons over a local copy — no API calls per question."
-				chart={AGENT_FLOW}
-			/>
-
-			{/* Web app use case */}
-			<DiagramSection
-				label="For web apps"
-				title="Offline-first. Catches up when it reconnects."
-				description="The full working set lives in local SQLite. Edits queue in a persistent IndexedDB outbox that survives page refreshes and browser crashes. When connectivity returns, the outbox drains automatically and remote changes sync down."
-				chart={WEBAPP_FLOW}
-				border
-			/>
-
-			{/* The adapter story */}
+			{/* Adapters */}
 			<section className="w-full px-4 py-24">
 				<div className="mx-auto max-w-5xl">
 					<div className="mb-3 text-center text-xs font-medium uppercase tracking-wider text-fd-muted-foreground">
 						Pluggable adapters
 					</div>
 					<h2 className="mb-6 text-center text-3xl font-bold">
-						Any data source. Same interface.
+						Any readable source is an adapter
 					</h2>
 					<p className="mx-auto mb-16 max-w-2xl text-center leading-relaxed text-fd-muted-foreground">
-						If you can read from it, it can be a LakeSync adapter. The
-						adapter interface abstracts the source &mdash; consumers don&apos;t
-						know or care where the data lives. Adapters are both sources and
-						destinations, enabling cross-backend flows.
+						Two interfaces: <code className="rounded bg-fd-accent/50 px-1.5 py-0.5 text-xs">DatabaseAdapter</code> for
+						SQL-like sources and <code className="rounded bg-fd-accent/50 px-1.5 py-0.5 text-xs">LakeAdapter</code> for
+						object storage. Adapters are both sources and destinations,
+						enabling cross-backend data flows.
 					</p>
 
 					<div className="mx-auto grid max-w-5xl grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
 						<AdapterCard
 							name="Postgres / MySQL"
-							description="Operational OLTP data. Familiar SQL tooling. Low-latency reads and writes."
+							description="DatabaseAdapter. insertDeltas, queryDeltasSince, getLatestState, ensureSchema."
 						/>
 						<AdapterCard
 							name="BigQuery"
-							description="Analytics-scale queries. Managed, serverless. Connect BI tools directly."
+							description="DatabaseAdapter. Idempotent MERGE inserts. INT64 HLC precision. Clustered by table + hlc."
 						/>
 						<AdapterCard
 							name="S3 / R2 (Iceberg)"
-							description="Massive scale on object storage. Open format. Query with any engine."
+							description="LakeAdapter. putObject, getObject, listObjects, deleteObject. Parquet + Iceberg table format."
 						/>
 						<AdapterCard
-							name="Anything else"
-							description="CloudWatch, Stripe, custom APIs. Implement the adapter interface and it's a source."
+							name="Custom adapters"
+							description="Implement either interface for any data source. CompositeAdapter routes to multiple backends."
 							highlight
 						/>
 					</div>
 				</div>
 			</section>
 
-			{/* Cross-backend flows */}
-			<DiagramSection
-				label="Cross-backend"
-				title="Move data between any two backends"
-				description="Sync rules define directional flows. Archive old operational data from Postgres to Iceberg. Materialise query results from Iceberg into BigQuery. The gateway routes data between adapters based on rules you define."
-				chart={CROSS_BACKEND}
-				border
-			/>
-
 			{/* Sync rules */}
 			<DiagramSection
 				label="Sync rules"
-				title="Declarative rules define what flows where"
-				description="Sync rules are the core primitive. They define which data each consumer sees — filtered by JWT claims, temporal ranges, or any column predicate. A web app gets its team's data. An agent gets the errors it needs to analyse."
+				title="Declarative filtering via sync rules DSL"
+				description="Bucket-based filtering with eq/in operators and JWT claim references via jwt: prefix. The gateway evaluates rules at pull time and returns only matching deltas. Sync rules define what data each consumer receives."
 				chart={SYNC_RULES}
+				border
+			/>
+
+			{/* Cross-backend flows */}
+			<DiagramSection
+				label="Cross-backend"
+				title="Route data between any two adapters"
+				description="Adapters are bidirectional — they implement both read and write. Sync rules define directional flows between adapters. The gateway reads from one adapter and writes to another."
+				chart={CROSS_BACKEND}
+			/>
+
+			{/* Offline */}
+			<DiagramSection
+				label="Offline support"
+				title="Persistent outbox with automatic drain"
+				description="Deltas queue in an IndexedDB outbox that survives page refreshes and process crashes. When connectivity returns, the outbox drains automatically and remote changes sync down."
+				chart={OFFLINE_SYNC}
+				border
 			/>
 
 			{/* Conflict resolution */}
 			<DiagramSection
 				label="Conflict resolution"
-				title="Column-level merge, not row-level overwrite"
-				description="Concurrent edits to different fields of the same record are both preserved. Hybrid logical clocks provide causal ordering with deterministic client ID tiebreaking."
+				title="Column-level LWW with HLC ordering"
+				description="Concurrent edits to different columns of the same row are both preserved. Hybrid logical clocks (48-bit wall + 16-bit counter) provide causal ordering. Equal timestamps use deterministic clientId tiebreaking."
 				chart={CONFLICT_RESOLUTION}
-				border
 			/>
 
 			{/* Design decisions */}
-			<section className="w-full px-4 py-24">
+			<section className="w-full border-t border-fd-border px-4 py-24">
 				<div className="mx-auto max-w-5xl">
 					<div className="mb-3 text-center text-xs font-medium uppercase tracking-wider text-fd-muted-foreground">
 						Under the hood
@@ -233,8 +207,8 @@ export default function HomePage() {
 					</h2>
 					<div className="grid grid-cols-1 gap-6 md:grid-cols-3">
 						<Feature
-							title="Adapter = data source"
-							description="Any system you can read from becomes a LakeSync source. Postgres, BigQuery, Iceberg, CloudWatch, or your own custom adapter."
+							title="Adapter interfaces"
+							description="DatabaseAdapter for SQL-like sources (insertDeltas, queryDeltasSince). LakeAdapter for object storage (putObject, getObject). Both are bidirectional."
 						/>
 						<Feature
 							title="Hybrid Logical Clocks"
@@ -249,12 +223,12 @@ export default function HomePage() {
 							description="Public APIs never throw. Error paths are explicit, composable, and impossible to accidentally ignore."
 						/>
 						<Feature
-							title="Persistent outbox"
-							description="Deltas queue in IndexedDB. Survives page refreshes, browser crashes, and network outages. Drains automatically."
+							title="Deterministic delta IDs"
+							description="SHA-256 of stable-stringified payload. Same logical change always produces the same deltaId. Enables idempotent processing."
 						/>
 						<Feature
-							title="Sync rules as the product"
-							description="Declarative rules define what data flows to each consumer. Filter by claims, columns, time ranges. The DSL is the interface between consumers and data."
+							title="Sync rules DSL"
+							description="Declarative bucket-based filtering with eq/in operators and JWT claim references. Pure function evaluation — filterDeltas() has no side effects."
 						/>
 					</div>
 				</div>

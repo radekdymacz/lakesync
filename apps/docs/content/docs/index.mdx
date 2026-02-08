@@ -3,35 +3,33 @@ title: Introduction
 description: LakeSync — sync any data source to a local working set.
 ---
 
-LakeSync is an open-source sync engine for TypeScript apps. Your app or agent declares what data it needs, and LakeSync syncs a filtered subset to local SQLite — queryable, offline-capable, and always up to date. If you can read from a data source, it can be a LakeSync adapter.
+LakeSync is an open-source TypeScript sync engine. Pluggable adapters connect to any data source. Declarative sync rules define what data flows where. Consumers get a local SQLite working set with offline support and column-level conflict resolution.
 
 ## How It Works
 
-1. **Adapters** connect to data sources — Postgres, BigQuery, S3/R2, CloudWatch, or anything you write an adapter for
-2. **Sync rules** define what data flows to each consumer — filtered by JWT claims, columns, or temporal ranges
-3. **The gateway** evaluates rules and routes data between sources and consumers
-4. **Local SQLite** gives each consumer a queryable working set with zero-latency reads
-
-Web apps get offline support. AI agents get a local copy to reason over. Dashboards get exactly the slice they need. Same protocol, any source.
+1. **Adapters** connect to data sources — Postgres, BigQuery, S3/R2, or anything you implement the interface for
+2. **Sync rules** define what data flows to each consumer — bucket-based filtering with `eq`/`in` operators and JWT claim references
+3. **The gateway** evaluates rules and routes data between adapters
+4. **Local SQLite** gives each consumer a queryable working set with zero-latency reads and offline support
 
 ## Adapters
 
-| Adapter | Use case |
-|---------|----------|
-| **Postgres / MySQL** | Operational OLTP data, familiar SQL tooling |
-| **BigQuery** | Analytics-scale queries, managed and serverless |
-| **S3 / R2 (Iceberg)** | Massive scale on object storage, open format |
-| **Anything else** | Implement the adapter interface — CloudWatch, Stripe, custom APIs |
+Two interfaces abstract all data sources. Adapters are both sources and destinations.
 
-The `DatabaseAdapter` interface (`insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema`) handles SQL-like sources. The `LakeAdapter` interface (`putObject`, `getObject`, `listObjects`, `deleteObject`) handles object storage. Adapters are both sources and destinations, enabling cross-backend flows.
+| Adapter | Interface | Details |
+|---------|-----------|---------|
+| **Postgres / MySQL** | `DatabaseAdapter` | `insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema` |
+| **BigQuery** | `DatabaseAdapter` | Idempotent MERGE inserts, INT64 HLC precision, clustered by `table` + `hlc` |
+| **S3 / R2 (Iceberg)** | `LakeAdapter` | `putObject`, `getObject`, `listObjects`, `deleteObject` — Parquet + Iceberg table format |
+| **Custom** | Either | Implement the interface for any readable data source. `CompositeAdapter` routes to multiple backends. |
 
 ## Key Features
 
-- **Pluggable adapters** — Any data source you can read from becomes a LakeSync source. The adapter interface is the extension point.
-- **Sync rules** — Declarative rules define what data flows where. The DSL is the core primitive for both web apps and AI agents.
+- **Pluggable adapters** — `DatabaseAdapter` for SQL-like sources, `LakeAdapter` for object storage. Both are bidirectional. Cross-backend flows via sync rules.
+- **Sync rules DSL** — Declarative bucket-based filtering with `eq`/`in` operators and `jwt:` claim references. Pure function evaluation via `filterDeltas()`.
 - **Column-level LWW** — Conflicts resolved per-column, not per-row. Concurrent edits to different fields never overwrite each other.
-- **Offline-first** — The full working set lives in local SQLite (via sql.js WASM). Changes queue and push when connectivity returns.
-- **Hybrid Logical Clocks** — Every mutation timestamped with a branded `HLCTimestamp` (48-bit wall clock + 16-bit counter) for causal ordering.
+- **Offline support** — Local SQLite via sql.js WASM. Persistent IndexedDB outbox survives page refreshes and process crashes. Automatic drain on reconnect.
+- **Hybrid Logical Clocks** — Branded `HLCTimestamp` bigint (48-bit wall clock + 16-bit counter). Causal ordering with deterministic `clientId` tiebreaking.
 - **Result-based error handling** — Public APIs return `Result<T, E>` instead of throwing.
 
 ## Packages
