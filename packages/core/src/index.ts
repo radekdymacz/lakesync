@@ -1,3 +1,5 @@
+export { type AuthClaims, AuthError, verifyToken } from "./auth";
+export { BaseSourcePoller, type PushTarget } from "./base-poller";
 export * from "./conflict";
 export * from "./connector";
 export * from "./delta";

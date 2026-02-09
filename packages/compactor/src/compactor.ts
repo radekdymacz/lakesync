@@ -54,7 +54,6 @@ export class Compactor {
 		deltaFileKeys: string[],
 		outputPrefix: string,
 	): Promise<Result<CompactionResult, LakeSyncError>> {
-		// Skip if below minimum threshold
 		if (deltaFileKeys.length < this.config.minDeltaFiles) {
 			return Ok({
 				baseFilesWritten: 0,
@@ -65,10 +64,27 @@ export class Compactor {
 			});
 		}
 
-		// Limit to maxDeltaFiles
 		const keysToCompact = deltaFileKeys.slice(0, this.config.maxDeltaFiles);
 
-		// Step 1: Read all delta files and collect all deltas
+		const readResult = await this.readAndGroupDeltas(keysToCompact);
+		if (!readResult.ok) return readResult;
+
+		const { liveRows, deletedRows } = this.resolveRowGroups(readResult.value.rowGroups);
+
+		const writeResult = await this.writeOutputFiles(liveRows, deletedRows, outputPrefix);
+		if (!writeResult.ok) return writeResult;
+
+		return Ok({
+			...writeResult.value,
+			deltaFilesCompacted: keysToCompact.length,
+			bytesRead: readResult.value.bytesRead,
+		});
+	}
+
+	/** Read delta files and group the parsed deltas by row key. */
+	private async readAndGroupDeltas(
+		keysToCompact: string[],
+	): Promise<Result<{ rowGroups: Map<string, RowDelta[]>; bytesRead: number }, LakeSyncError>> {
 		const allDeltas: RowDelta[] = [];
 		let bytesRead = 0;
 
@@ -101,27 +117,31 @@ export class Compactor {
 			allDeltas.push(...parseResult.value);
 		}
 
-		// Step 2: Group deltas by row key
 		const rowGroups = new Map<string, RowDelta[]>();
 		for (const delta of allDeltas) {
-			const key = rowKey(delta.table, delta.rowId);
-			const group = rowGroups.get(key);
+			const k = rowKey(delta.table, delta.rowId);
+			const group = rowGroups.get(k);
 			if (group) {
 				group.push(delta);
 			} else {
-				rowGroups.set(key, [delta]);
+				rowGroups.set(k, [delta]);
 			}
 		}
 
-		// Step 3: For each row group, sort by HLC and apply deltas in order
+		return Ok({ rowGroups, bytesRead });
+	}
+
+	/** Resolve each row group into live rows (final state) or deleted rows. */
+	private resolveRowGroups(rowGroups: Map<string, RowDelta[]>): {
+		liveRows: RowDelta[];
+		deletedRows: Array<{ table: string; rowId: string }>;
+	} {
 		const liveRows: RowDelta[] = [];
 		const deletedRows: Array<{ table: string; rowId: string }> = [];
 
 		for (const [, deltas] of rowGroups) {
-			// Sort deltas by HLC ascending for deterministic resolution
 			deltas.sort((a, b) => HLC.compare(a.hlc, b.hlc));
 
-			// Apply deltas sequentially to resolve final state
 			let currentState: Record<string, unknown> | null = null;
 			let latestDelta: RowDelta | undefined;
 
@@ -133,7 +153,6 @@ export class Compactor {
 			if (!latestDelta) continue;
 
 			if (currentState !== null) {
-				// Live row: create an INSERT delta with the final materialised state
 				const columns: ColumnDelta[] = [];
 				for (const col of this.schema.columns) {
 					if (col.name in currentState) {
@@ -151,7 +170,6 @@ export class Compactor {
 					deltaId: latestDelta.deltaId,
 				});
 			} else {
-				// Deleted row: record table + rowId for the equality delete file
 				deletedRows.push({
 					table: latestDelta.table,
 					rowId: latestDelta.rowId,
@@ -159,7 +177,20 @@ export class Compactor {
 			}
 		}
 
-		// Step 4: Write base file(s) for live rows
+		return { liveRows, deletedRows };
+	}
+
+	/** Write base Parquet file(s) for live rows and equality delete file(s) for deleted rows. */
+	private async writeOutputFiles(
+		liveRows: RowDelta[],
+		deletedRows: Array<{ table: string; rowId: string }>,
+		outputPrefix: string,
+	): Promise<
+		Result<
+			{ baseFilesWritten: number; deleteFilesWritten: number; bytesWritten: number },
+			LakeSyncError
+		>
+	> {
 		let bytesWritten = 0;
 		let baseFilesWritten = 0;
 		let deleteFilesWritten = 0;
@@ -199,7 +230,6 @@ export class Compactor {
 			baseFilesWritten = 1;
 		}
 
-		// Step 5: Write equality delete file for deleted rows
 		if (deletedRows.length > 0) {
 			const writeResult = await writeEqualityDeletes(deletedRows, this.schema);
 			if (!writeResult.ok) {
@@ -235,13 +265,7 @@ export class Compactor {
 			deleteFilesWritten = 1;
 		}
 
-		return Ok({
-			baseFilesWritten,
-			deleteFilesWritten,
-			deltaFilesCompacted: keysToCompact.length,
-			bytesRead,
-			bytesWritten,
-		});
+		return Ok({ baseFilesWritten, deleteFilesWritten, bytesWritten });
 	}
 
 	/**

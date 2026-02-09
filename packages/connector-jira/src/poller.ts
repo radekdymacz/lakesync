@@ -2,9 +2,8 @@
 // JiraSourcePoller — polls Jira Cloud and pushes deltas to SyncGateway
 // ---------------------------------------------------------------------------
 
-import type { HLCTimestamp, RowDelta, SyncPush } from "@lakesync/core";
-import { extractDelta, HLC } from "@lakesync/core";
-import type { SyncGateway } from "@lakesync/gateway";
+import type { RowDelta } from "@lakesync/core";
+import { BaseSourcePoller, extractDelta, type PushTarget } from "@lakesync/core";
 import { JiraClient } from "./client";
 import { mapComment, mapIssue, mapProject } from "./mapping";
 import type { JiraConnectorConfig, JiraIngestConfig } from "./types";
@@ -13,21 +12,14 @@ const DEFAULT_INTERVAL_MS = 30_000;
 
 /**
  * Polls Jira Cloud for issues, comments, and projects and pushes
- * detected changes into a {@link SyncGateway} via `handlePush()`.
+ * detected changes into a gateway via `handlePush()`.
  *
- * Follows the same lifecycle contract as `SourcePoller`:
- * `start()`, `stop()`, `isRunning`, `poll()`.
+ * Extends {@link BaseSourcePoller} for lifecycle (start/stop/schedule)
+ * and push logic.
  */
-export class JiraSourcePoller {
+export class JiraSourcePoller extends BaseSourcePoller {
 	private readonly connectionConfig: JiraConnectorConfig;
-	private readonly intervalMs: number;
-	private readonly gateway: SyncGateway;
 	private readonly client: JiraClient;
-	private readonly hlc: HLC;
-	private readonly clientId: string;
-
-	private timer: ReturnType<typeof setTimeout> | null = null;
-	private running = false;
 
 	/** Cursor: max `fields.updated` value from the last issue poll. */
 	private lastUpdated: string | undefined;
@@ -42,36 +34,16 @@ export class JiraSourcePoller {
 		connectionConfig: JiraConnectorConfig,
 		ingestConfig: JiraIngestConfig | undefined,
 		name: string,
-		gateway: SyncGateway,
+		gateway: PushTarget,
 		client?: JiraClient,
 	) {
+		super({
+			name,
+			intervalMs: ingestConfig?.intervalMs ?? DEFAULT_INTERVAL_MS,
+			gateway,
+		});
 		this.connectionConfig = connectionConfig;
-		this.intervalMs = ingestConfig?.intervalMs ?? DEFAULT_INTERVAL_MS;
-		this.gateway = gateway;
 		this.client = client ?? new JiraClient(connectionConfig);
-		this.hlc = new HLC();
-		this.clientId = `ingest:${name}`;
-	}
-
-	/** Start the polling loop. */
-	start(): void {
-		if (this.running) return;
-		this.running = true;
-		this.schedulePoll();
-	}
-
-	/** Stop the polling loop. */
-	stop(): void {
-		this.running = false;
-		if (this.timer) {
-			clearTimeout(this.timer);
-			this.timer = null;
-		}
-	}
-
-	/** Whether the poller is currently running. */
-	get isRunning(): boolean {
-		return this.running;
 	}
 
 	/** Execute a single poll cycle across all entity types. */
@@ -102,32 +74,7 @@ export class JiraSourcePoller {
 			}
 		}
 
-		if (allDeltas.length === 0) return;
-
-		const push: SyncPush = {
-			clientId: this.clientId,
-			deltas: allDeltas,
-			lastSeenHlc: 0n as HLCTimestamp,
-		};
-
-		this.gateway.handlePush(push);
-	}
-
-	// -----------------------------------------------------------------------
-	// Poll scheduling (recursive setTimeout — no overlap)
-	// -----------------------------------------------------------------------
-
-	private schedulePoll(): void {
-		if (!this.running) return;
-
-		this.timer = setTimeout(async () => {
-			try {
-				await this.poll();
-			} catch {
-				// Swallow errors — a failed poll must never crash the server
-			}
-			this.schedulePoll();
-		}, this.intervalMs);
+		this.pushDeltas(allDeltas);
 	}
 
 	// -----------------------------------------------------------------------

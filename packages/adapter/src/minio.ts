@@ -7,16 +7,9 @@ import {
 	PutObjectCommand,
 	S3Client,
 } from "@aws-sdk/client-s3";
-import { AdapterError, Err, Ok, type Result } from "@lakesync/core";
+import { AdapterError, Ok, type Result } from "@lakesync/core";
+import { wrapAsync } from "./shared";
 import type { AdapterConfig, LakeAdapter, ObjectInfo } from "./types";
-
-/**
- * Normalise a caught value into an Error or undefined.
- * Used as the `cause` argument for AdapterError.
- */
-function toCause(error: unknown): Error | undefined {
-	return error instanceof Error ? error : undefined;
-}
 
 /**
  * MinIO/S3-compatible lake adapter.
@@ -39,34 +32,13 @@ export class MinIOAdapter implements LakeAdapter {
 		});
 	}
 
-	/**
-	 * Execute an S3 operation and wrap any thrown error into an AdapterError Result.
-	 * Every public method delegates here so error handling is consistent.
-	 * If the operation itself throws an AdapterError, it is returned directly
-	 * rather than being wrapped in a second layer.
-	 */
-	private async wrapS3Call<T>(
-		operation: () => Promise<T>,
-		errorMessage: string,
-	): Promise<Result<T, AdapterError>> {
-		try {
-			const value = await operation();
-			return Ok(value);
-		} catch (error) {
-			if (error instanceof AdapterError) {
-				return Err(error);
-			}
-			return Err(new AdapterError(errorMessage, toCause(error)));
-		}
-	}
-
 	/** Store an object in the lake */
 	async putObject(
 		path: string,
 		data: Uint8Array,
 		contentType?: string,
 	): Promise<Result<void, AdapterError>> {
-		return this.wrapS3Call(async () => {
+		return wrapAsync(async () => {
 			await this.client.send(
 				new PutObjectCommand({
 					Bucket: this.bucket,
@@ -80,7 +52,7 @@ export class MinIOAdapter implements LakeAdapter {
 
 	/** Retrieve an object from the lake */
 	async getObject(path: string): Promise<Result<Uint8Array, AdapterError>> {
-		return this.wrapS3Call(async () => {
+		return wrapAsync(async () => {
 			const response = await this.client.send(
 				new GetObjectCommand({
 					Bucket: this.bucket,
@@ -99,7 +71,7 @@ export class MinIOAdapter implements LakeAdapter {
 	async headObject(
 		path: string,
 	): Promise<Result<{ size: number; lastModified: Date }, AdapterError>> {
-		return this.wrapS3Call(async () => {
+		return wrapAsync(async () => {
 			const response = await this.client.send(
 				new HeadObjectCommand({
 					Bucket: this.bucket,
@@ -115,7 +87,7 @@ export class MinIOAdapter implements LakeAdapter {
 
 	/** List objects matching a given prefix */
 	async listObjects(prefix: string): Promise<Result<ObjectInfo[], AdapterError>> {
-		return this.wrapS3Call(async () => {
+		return wrapAsync(async () => {
 			const response = await this.client.send(
 				new ListObjectsV2Command({
 					Bucket: this.bucket,
@@ -132,7 +104,7 @@ export class MinIOAdapter implements LakeAdapter {
 
 	/** Delete a single object from the lake */
 	async deleteObject(path: string): Promise<Result<void, AdapterError>> {
-		return this.wrapS3Call(async () => {
+		return wrapAsync(async () => {
 			await this.client.send(
 				new DeleteObjectCommand({
 					Bucket: this.bucket,
@@ -148,7 +120,7 @@ export class MinIOAdapter implements LakeAdapter {
 			return Ok(undefined);
 		}
 
-		return this.wrapS3Call(async () => {
+		return wrapAsync(async () => {
 			await this.client.send(
 				new DeleteObjectsCommand({
 					Bucket: this.bucket,

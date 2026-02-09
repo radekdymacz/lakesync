@@ -33,19 +33,16 @@ export interface DatabaseAdapter {
 /**
  * Map a LakeSync column type to a BigQuery column definition.
  */
+const BIGQUERY_TYPE_MAP: Record<TableSchema["columns"][number]["type"], string> = {
+	string: "STRING",
+	number: "FLOAT64",
+	boolean: "BOOL",
+	json: "JSON",
+	null: "STRING",
+};
+
 export function lakeSyncTypeToBigQuery(type: TableSchema["columns"][number]["type"]): string {
-	switch (type) {
-		case "string":
-			return "STRING";
-		case "number":
-			return "FLOAT64";
-		case "boolean":
-			return "BOOL";
-		case "json":
-			return "JSON";
-		case "null":
-			return "STRING";
-	}
+	return BIGQUERY_TYPE_MAP[type];
 }
 
 /** Type guard to distinguish DatabaseAdapter from LakeAdapter at runtime. */

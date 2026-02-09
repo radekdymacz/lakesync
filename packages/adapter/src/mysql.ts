@@ -1,7 +1,5 @@
 import {
-	AdapterError,
-	type ColumnDelta,
-	Err,
+	type AdapterError,
 	type HLCTimestamp,
 	Ok,
 	type Result,
@@ -10,31 +8,21 @@ import {
 } from "@lakesync/core";
 import mysql from "mysql2/promise";
 import type { DatabaseAdapter, DatabaseAdapterConfig } from "./db-types";
-
-/**
- * Normalise a caught value into an Error or undefined.
- * Used as the `cause` argument for AdapterError.
- */
-function toCause(error: unknown): Error | undefined {
-	return error instanceof Error ? error : undefined;
-}
+import { mergeLatestState, wrapAsync } from "./shared";
 
 /**
  * Map a LakeSync column type to a MySQL column definition.
  */
+const MYSQL_TYPE_MAP: Record<TableSchema["columns"][number]["type"], string> = {
+	string: "TEXT",
+	number: "DOUBLE",
+	boolean: "TINYINT(1)",
+	json: "JSON",
+	null: "TEXT",
+};
+
 function lakeSyncTypeToMySQL(type: TableSchema["columns"][number]["type"]): string {
-	switch (type) {
-		case "string":
-			return "TEXT";
-		case "number":
-			return "DOUBLE";
-		case "boolean":
-			return "TINYINT(1)";
-		case "json":
-			return "JSON";
-		case "null":
-			return "TEXT";
-	}
+	return MYSQL_TYPE_MAP[type];
 }
 
 /**
@@ -53,25 +41,6 @@ export class MySQLAdapter implements DatabaseAdapter {
 	}
 
 	/**
-	 * Execute a database operation and wrap any thrown error into an AdapterError Result.
-	 * Every public method delegates here so error handling is consistent.
-	 */
-	private async wrap<T>(
-		operation: () => Promise<T>,
-		errorMessage: string,
-	): Promise<Result<T, AdapterError>> {
-		try {
-			const value = await operation();
-			return Ok(value);
-		} catch (error) {
-			if (error instanceof AdapterError) {
-				return Err(error);
-			}
-			return Err(new AdapterError(errorMessage, toCause(error)));
-		}
-	}
-
-	/**
 	 * Insert deltas into the database in a single batch.
 	 * Uses INSERT IGNORE for idempotent writes — duplicate deltaIds are silently skipped.
 	 */
@@ -80,7 +49,7 @@ export class MySQLAdapter implements DatabaseAdapter {
 			return Ok(undefined);
 		}
 
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			const sql = `INSERT IGNORE INTO lakesync_deltas (delta_id, \`table\`, row_id, columns, hlc, client_id, op) VALUES ${deltas.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ")}`;
 
 			const values: unknown[] = [];
@@ -108,7 +77,7 @@ export class MySQLAdapter implements DatabaseAdapter {
 		hlc: HLCTimestamp,
 		tables?: string[],
 	): Promise<Result<RowDelta[], AdapterError>> {
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			let sql =
 				"SELECT delta_id, `table`, row_id, columns, hlc, client_id, op FROM lakesync_deltas WHERE hlc > ?";
 			const params: unknown[] = [hlc.toString()];
@@ -133,42 +102,11 @@ export class MySQLAdapter implements DatabaseAdapter {
 		table: string,
 		rowId: string,
 	): Promise<Result<Record<string, unknown> | null, AdapterError>> {
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			const sql =
 				"SELECT columns, hlc, client_id, op FROM lakesync_deltas WHERE `table` = ? AND row_id = ? ORDER BY hlc ASC";
 			const [rows] = await this.pool.execute(sql, [table, rowId]);
-			const resultRows = rows as MySQLDeltaRow[];
-
-			if (resultRows.length === 0) {
-				return null;
-			}
-
-			// Check if the last delta is a DELETE — if so, the row is tombstoned
-			const lastRow = resultRows[resultRows.length - 1]!;
-			if (lastRow.op === "DELETE") {
-				return null;
-			}
-
-			// Merge columns using LWW: iterate in HLC order, later values overwrite
-			const state: Record<string, unknown> = {};
-
-			for (const row of resultRows) {
-				if (row.op === "DELETE") {
-					for (const key of Object.keys(state)) {
-						delete state[key];
-					}
-					continue;
-				}
-
-				const columns: ColumnDelta[] =
-					typeof row.columns === "string" ? JSON.parse(row.columns) : row.columns;
-
-				for (const col of columns) {
-					state[col.column] = col.value;
-				}
-			}
-
-			return state;
+			return mergeLatestState(rows as MySQLDeltaRow[]);
 		}, `Failed to get latest state for ${table}:${rowId}`);
 	}
 
@@ -177,7 +115,7 @@ export class MySQLAdapter implements DatabaseAdapter {
 	 * and a user table matching the given TableSchema definition.
 	 */
 	async ensureSchema(schema: TableSchema): Promise<Result<void, AdapterError>> {
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			// Create the deltas table
 			await this.pool.execute(`
 				CREATE TABLE IF NOT EXISTS lakesync_deltas (

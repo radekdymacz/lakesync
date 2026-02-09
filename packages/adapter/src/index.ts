@@ -16,4 +16,5 @@ export { MySQLAdapter } from "./mysql";
 export { PostgresAdapter } from "./postgres";
 export type { QueryFn } from "./query-fn";
 export { createQueryFn } from "./query-fn";
+export { mergeLatestState, toCause, wrapAsync } from "./shared";
 export type { AdapterConfig, LakeAdapter, ObjectInfo } from "./types";

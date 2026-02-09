@@ -1,7 +1,6 @@
 import {
-	AdapterError,
+	type AdapterError,
 	type ColumnDelta,
-	Err,
 	type HLCTimestamp,
 	Ok,
 	type Result,
@@ -10,14 +9,7 @@ import {
 } from "@lakesync/core";
 import { Pool, type PoolConfig } from "pg";
 import type { DatabaseAdapter, DatabaseAdapterConfig } from "./db-types";
-
-/**
- * Normalise a caught value into an Error or undefined.
- * Used as the `cause` argument for AdapterError.
- */
-function toCause(error: unknown): Error | undefined {
-	return error instanceof Error ? error : undefined;
-}
+import { mergeLatestState, wrapAsync } from "./shared";
 
 /**
  * PostgreSQL database adapter for LakeSync.
@@ -37,24 +29,6 @@ export class PostgresAdapter implements DatabaseAdapter {
 	}
 
 	/**
-	 * Execute a database operation and wrap any thrown error into an AdapterError Result.
-	 */
-	private async wrap<T>(
-		operation: () => Promise<T>,
-		errorMessage: string,
-	): Promise<Result<T, AdapterError>> {
-		try {
-			const value = await operation();
-			return Ok(value);
-		} catch (error) {
-			if (error instanceof AdapterError) {
-				return Err(error);
-			}
-			return Err(new AdapterError(errorMessage, toCause(error)));
-		}
-	}
-
-	/**
 	 * Insert deltas into the database in a single batch.
 	 * Idempotent via `ON CONFLICT (delta_id) DO NOTHING`.
 	 */
@@ -63,7 +37,7 @@ export class PostgresAdapter implements DatabaseAdapter {
 			return Ok(undefined);
 		}
 
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			// Build a multi-row INSERT with parameterised values
 			const values: unknown[] = [];
 			const rows: string[] = [];
@@ -100,7 +74,7 @@ ON CONFLICT (delta_id) DO NOTHING`;
 		hlc: HLCTimestamp,
 		tables?: string[],
 	): Promise<Result<RowDelta[], AdapterError>> {
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			let sql: string;
 			let params: unknown[];
 
@@ -131,45 +105,14 @@ ORDER BY hlc ASC`;
 		table: string,
 		rowId: string,
 	): Promise<Result<Record<string, unknown> | null, AdapterError>> {
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			const sql = `SELECT columns, hlc, client_id, op
 FROM lakesync_deltas
 WHERE "table" = $1 AND row_id = $2
 ORDER BY hlc ASC`;
 
 			const result = await this.pool.query(sql, [table, rowId]);
-
-			if (result.rows.length === 0) {
-				return null;
-			}
-
-			// Check if the last delta is a DELETE — if so, the row is tombstoned
-			const lastRow = result.rows[result.rows.length - 1]!;
-			if (lastRow.op === "DELETE") {
-				return null;
-			}
-
-			// Merge columns using LWW: iterate in HLC order, later values overwrite
-			const state: Record<string, unknown> = {};
-
-			for (const row of result.rows) {
-				if (row.op === "DELETE") {
-					// DELETE clears all state — subsequent inserts/updates rebuild
-					for (const key of Object.keys(state)) {
-						delete state[key];
-					}
-					continue;
-				}
-
-				const columns: ColumnDelta[] =
-					typeof row.columns === "string" ? JSON.parse(row.columns) : row.columns;
-
-				for (const col of columns) {
-					state[col.column] = col.value;
-				}
-			}
-
-			return state;
+			return mergeLatestState(result.rows);
 		}, `Failed to get latest state for ${table}:${rowId}`);
 	}
 
@@ -179,7 +122,7 @@ ORDER BY hlc ASC`;
 	 * internal table structure is fixed (deltas store column data as JSONB).
 	 */
 	async ensureSchema(_schema: TableSchema): Promise<Result<void, AdapterError>> {
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			await this.pool.query(`
 CREATE TABLE IF NOT EXISTS lakesync_deltas (
 	delta_id TEXT PRIMARY KEY,

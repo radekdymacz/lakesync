@@ -105,9 +105,9 @@ export class SyncCoordinator {
 	}
 
 	private emit<K extends keyof SyncEvents>(event: K, ...args: Parameters<SyncEvents[K]>): void {
-		for (const listener of this.listeners[event]) {
+		for (const fn of this.listeners[event]) {
 			try {
-				(listener as (...a: Parameters<SyncEvents[K]>) => void)(...args);
+				(fn as (...a: Parameters<SyncEvents[K]>) => void)(...args);
 			} catch {
 				// Swallow listener errors to avoid breaking sync
 			}
@@ -237,10 +237,8 @@ export class SyncCoordinator {
 	 * Synchronises (push + pull) on tab focus and every 10 seconds.
 	 */
 	startAutoSync(): void {
-		// Connect persistent transport (e.g. WebSocket)
 		this.transport.connect?.();
 
-		// When realtime is active, use a longer polling interval as heartbeat
 		const intervalMs = this.transport.supportsRealtime
 			? this.realtimeHeartbeatMs
 			: this.autoSyncIntervalMs;
@@ -249,12 +247,16 @@ export class SyncCoordinator {
 			void this.syncOnce();
 		}, intervalMs);
 
+		this.setupVisibilitySync();
+	}
+
+	/** Register a visibility change listener to sync on tab focus. */
+	private setupVisibilitySync(): void {
 		this.visibilityHandler = () => {
 			if (typeof document !== "undefined" && document.visibilityState === "visible") {
 				void this.syncOnce();
 			}
 		};
-
 		if (typeof document !== "undefined") {
 			document.addEventListener("visibilitychange", this.visibilityHandler);
 		}

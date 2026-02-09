@@ -12,19 +12,16 @@ type ColumnType = TableSchema["columns"][number]["type"];
  * @param colType - The LakeSync column type to convert
  * @returns The corresponding Apache Arrow data type
  */
+const ARROW_TYPE_MAP: Record<ColumnType, () => arrow.DataType> = {
+	string: () => new arrow.Utf8(),
+	number: () => new arrow.Float64(),
+	boolean: () => new arrow.Bool(),
+	json: () => new arrow.Utf8(),
+	null: () => new arrow.Utf8(),
+};
+
 function lakeSyncTypeToArrow(colType: ColumnType): arrow.DataType {
-	switch (colType) {
-		case "string":
-			return new arrow.Utf8();
-		case "number":
-			return new arrow.Float64();
-		case "boolean":
-			return new arrow.Bool();
-		case "json":
-			return new arrow.Utf8();
-		case "null":
-			return new arrow.Utf8();
-	}
+	return ARROW_TYPE_MAP[colType]();
 }
 
 /**

@@ -1,8 +1,7 @@
 import { BigQuery } from "@google-cloud/bigquery";
 import {
-	AdapterError,
+	type AdapterError,
 	type ColumnDelta,
-	Err,
 	type HLCTimestamp,
 	Ok,
 	type Result,
@@ -10,6 +9,7 @@ import {
 	type TableSchema,
 } from "@lakesync/core";
 import type { DatabaseAdapter } from "./db-types";
+import { mergeLatestState, wrapAsync } from "./shared";
 
 /**
  * Configuration for the BigQuery adapter.
@@ -24,14 +24,6 @@ export interface BigQueryAdapterConfig {
 	keyFilename?: string;
 	/** Dataset location (default: "US"). */
 	location?: string;
-}
-
-/**
- * Normalise a caught value into an Error or undefined.
- * Used as the `cause` argument for AdapterError.
- */
-function toCause(error: unknown): Error | undefined {
-	return error instanceof Error ? error : undefined;
 }
 
 /** Shape of a row returned from the lakesync_deltas table. */
@@ -100,24 +92,6 @@ export class BigQueryAdapter implements DatabaseAdapter {
 	}
 
 	/**
-	 * Execute a database operation and wrap any thrown error into an AdapterError Result.
-	 */
-	private async wrap<T>(
-		operation: () => Promise<T>,
-		errorMessage: string,
-	): Promise<Result<T, AdapterError>> {
-		try {
-			const value = await operation();
-			return Ok(value);
-		} catch (error) {
-			if (error instanceof AdapterError) {
-				return Err(error);
-			}
-			return Err(new AdapterError(errorMessage, toCause(error)));
-		}
-	}
-
-	/**
 	 * Insert deltas into the database in a single batch.
 	 * Idempotent via MERGE — existing deltaIds are silently skipped.
 	 */
@@ -126,7 +100,7 @@ export class BigQueryAdapter implements DatabaseAdapter {
 			return Ok(undefined);
 		}
 
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			// Build MERGE source from UNION ALL of parameterised SELECTs
 			const params: Record<string, string> = {};
 			const selects: string[] = [];
@@ -163,7 +137,7 @@ VALUES (source.delta_id, source.\`table\`, source.row_id, source.columns, source
 		hlc: HLCTimestamp,
 		tables?: string[],
 	): Promise<Result<RowDelta[], AdapterError>> {
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			let sql: string;
 			const params: Record<string, string | string[]> = {
 				sinceHlc: hlc.toString(),
@@ -199,7 +173,7 @@ ORDER BY hlc ASC`;
 		table: string,
 		rowId: string,
 	): Promise<Result<Record<string, unknown> | null, AdapterError>> {
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			const sql = `SELECT columns, hlc, client_id, op
 FROM \`${this.dataset}.lakesync_deltas\`
 WHERE \`table\` = @tbl AND row_id = @rid
@@ -210,38 +184,7 @@ ORDER BY hlc ASC`;
 				params: { tbl: table, rid: rowId },
 				location: this.location,
 			});
-			const resultRows = rows as BigQueryDeltaRow[];
-
-			if (resultRows.length === 0) {
-				return null;
-			}
-
-			// Check if the last delta is a DELETE — if so, the row is tombstoned
-			const lastRow = resultRows[resultRows.length - 1]!;
-			if (lastRow.op === "DELETE") {
-				return null;
-			}
-
-			// Merge columns using LWW: iterate in HLC order, later values overwrite
-			const state: Record<string, unknown> = {};
-
-			for (const row of resultRows) {
-				if (row.op === "DELETE") {
-					for (const key of Object.keys(state)) {
-						delete state[key];
-					}
-					continue;
-				}
-
-				const columns: ColumnDelta[] =
-					typeof row.columns === "string" ? JSON.parse(row.columns) : row.columns;
-
-				for (const col of columns) {
-					state[col.column] = col.value;
-				}
-			}
-
-			return state;
+			return mergeLatestState(rows as BigQueryDeltaRow[]);
 		}, `Failed to get latest state for ${table}:${rowId}`);
 	}
 
@@ -251,7 +194,7 @@ ORDER BY hlc ASC`;
 	 * internal table structure is fixed (deltas store column data as JSON).
 	 */
 	async ensureSchema(_schema: TableSchema): Promise<Result<void, AdapterError>> {
-		return this.wrap(async () => {
+		return wrapAsync(async () => {
 			// Create dataset if it doesn't exist
 			const datasetRef = this.client.dataset(this.dataset);
 			const [datasetExists] = await datasetRef.exists();

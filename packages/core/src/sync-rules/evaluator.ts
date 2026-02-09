@@ -107,6 +107,16 @@ function compareValues(
 	}
 }
 
+const FILTER_OPS: Record<string, (dv: string, rv: string[]) => boolean> = {
+	eq: (dv, rv) => rv.includes(dv),
+	in: (dv, rv) => rv.includes(dv),
+	neq: (dv, rv) => !rv.includes(dv),
+	gt: (dv, rv) => compareValues(dv, rv[0]!, "gt"),
+	lt: (dv, rv) => compareValues(dv, rv[0]!, "lt"),
+	gte: (dv, rv) => compareValues(dv, rv[0]!, "gte"),
+	lte: (dv, rv) => compareValues(dv, rv[0]!, "lte"),
+};
+
 /**
  * Check whether a single filter matches a delta's column values.
  */
@@ -129,21 +139,7 @@ function filterMatchesDelta(
 		return false;
 	}
 
-	switch (filter.op) {
-		case "eq":
-			return resolvedValues.includes(deltaValue);
-		case "in":
-			return resolvedValues.includes(deltaValue);
-		case "neq":
-			return !resolvedValues.includes(deltaValue);
-		case "gt":
-		case "lt":
-		case "gte":
-		case "lte":
-			return compareValues(deltaValue, resolvedValues[0]!, filter.op);
-		default:
-			return false;
-	}
+	return FILTER_OPS[filter.op]?.(deltaValue, resolvedValues) ?? false;
 }
 
 /**

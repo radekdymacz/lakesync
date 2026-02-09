@@ -2,9 +2,8 @@
 // SalesforceSourcePoller — polls Salesforce CRM and pushes deltas to SyncGateway
 // ---------------------------------------------------------------------------
 
-import type { HLCTimestamp, RowDelta, SyncPush } from "@lakesync/core";
-import { extractDelta, HLC } from "@lakesync/core";
-import type { SyncGateway } from "@lakesync/gateway";
+import type { RowDelta } from "@lakesync/core";
+import { BaseSourcePoller, extractDelta, type PushTarget } from "@lakesync/core";
 import { SalesforceClient } from "./client";
 import { mapAccount, mapContact, mapLead, mapOpportunity } from "./mapping";
 import type {
@@ -95,21 +94,14 @@ const LEAD_FIELDS = [
 
 /**
  * Polls Salesforce CRM for accounts, contacts, opportunities, and leads
- * and pushes detected changes into a {@link SyncGateway} via `handlePush()`.
+ * and pushes detected changes into a gateway via `handlePush()`.
  *
- * Follows the same lifecycle contract as `JiraSourcePoller`:
- * `start()`, `stop()`, `isRunning`, `poll()`.
+ * Extends {@link BaseSourcePoller} for lifecycle (start/stop/schedule)
+ * and push logic.
  */
-export class SalesforceSourcePoller {
+export class SalesforceSourcePoller extends BaseSourcePoller {
 	private readonly connectionConfig: SalesforceConnectorConfig;
-	private readonly intervalMs: number;
-	private readonly gateway: SyncGateway;
 	private readonly client: SalesforceClient;
-	private readonly hlc: HLC;
-	private readonly clientId: string;
-
-	private timer: ReturnType<typeof setTimeout> | null = null;
-	private running = false;
 
 	/** Per-entity cursors: max LastModifiedDate from the last poll. */
 	private cursors: Record<string, string | undefined> = {
@@ -123,36 +115,16 @@ export class SalesforceSourcePoller {
 		connectionConfig: SalesforceConnectorConfig,
 		ingestConfig: SalesforceIngestConfig | undefined,
 		name: string,
-		gateway: SyncGateway,
+		gateway: PushTarget,
 		client?: SalesforceClient,
 	) {
+		super({
+			name,
+			intervalMs: ingestConfig?.intervalMs ?? DEFAULT_INTERVAL_MS,
+			gateway,
+		});
 		this.connectionConfig = connectionConfig;
-		this.intervalMs = ingestConfig?.intervalMs ?? DEFAULT_INTERVAL_MS;
-		this.gateway = gateway;
 		this.client = client ?? new SalesforceClient(connectionConfig);
-		this.hlc = new HLC();
-		this.clientId = `ingest:${name}`;
-	}
-
-	/** Start the polling loop. */
-	start(): void {
-		if (this.running) return;
-		this.running = true;
-		this.schedulePoll();
-	}
-
-	/** Stop the polling loop. */
-	stop(): void {
-		this.running = false;
-		if (this.timer) {
-			clearTimeout(this.timer);
-			this.timer = null;
-		}
-	}
-
-	/** Whether the poller is currently running. */
-	get isRunning(): boolean {
-		return this.running;
 	}
 
 	/** Execute a single poll cycle across all enabled entity types. */
@@ -207,32 +179,7 @@ export class SalesforceSourcePoller {
 			for (const d of deltas) allDeltas.push(d);
 		}
 
-		if (allDeltas.length === 0) return;
-
-		const push: SyncPush = {
-			clientId: this.clientId,
-			deltas: allDeltas,
-			lastSeenHlc: 0n as HLCTimestamp,
-		};
-
-		this.gateway.handlePush(push);
-	}
-
-	// -----------------------------------------------------------------------
-	// Poll scheduling (recursive setTimeout — no overlap)
-	// -----------------------------------------------------------------------
-
-	private schedulePoll(): void {
-		if (!this.running) return;
-
-		this.timer = setTimeout(async () => {
-			try {
-				await this.poll();
-			} catch {
-				// Swallow errors — a failed poll must never crash the server
-			}
-			this.schedulePoll();
-		}, this.intervalMs);
+		this.pushDeltas(allDeltas);
 	}
 
 	// -----------------------------------------------------------------------
