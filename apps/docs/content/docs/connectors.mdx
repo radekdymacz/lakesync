@@ -1,0 +1,239 @@
+---
+title: Dynamic Connectors
+description: Add, remove, and list data sources at runtime via the admin API.
+---
+
+## Overview
+
+Connectors let you register external data sources at runtime — no server restart required. Each connector maps to a named source adapter in the gateway, and clients can pull data from it using the `source` query parameter.
+
+Supported connector types:
+
+| Type | Config Required |
+|------|----------------|
+| `postgres` | `connectionString` |
+| `mysql` | `connectionString` |
+| `bigquery` | `projectId`, `dataset` |
+
+Connectors can optionally include an ingest configuration that starts a poller to automatically detect changes in the source database and push them through the gateway. See [Source Polling Ingest](/docs/source-polling) for details on change detection strategies.
+
+All connector routes require a JWT with `role: "admin"`.
+
+## ConnectorConfig
+
+```ts
+interface ConnectorConfig {
+  /** Unique connector name (used as the source adapter key). */
+  name: string;
+  /** Connector type — determines which adapter to create. */
+  type: "postgres" | "mysql" | "bigquery";
+  /** PostgreSQL config (required when type is "postgres"). */
+  postgres?: { connectionString: string };
+  /** MySQL config (required when type is "mysql"). */
+  mysql?: { connectionString: string };
+  /** BigQuery config (required when type is "bigquery"). */
+  bigquery?: {
+    projectId: string;
+    dataset: string;
+    keyFilename?: string;
+    location?: string;
+  };
+  /** Optional ingest polling configuration. */
+  ingest?: {
+    tables: Array<{
+      table: string;
+      query: string;
+      rowIdColumn?: string;
+      strategy:
+        | { type: "cursor"; cursorColumn: string; lookbackMs?: number }
+        | { type: "diff" };
+    }>;
+    intervalMs?: number;
+  };
+}
+```
+
+Validation is performed server-side via `validateConnectorConfig()`. Missing or invalid fields return a `400` response with a descriptive error message.
+
+## API Reference
+
+### Register a Connector
+
+```
+POST /admin/connectors/:gatewayId
+```
+
+Registers a new data source. Creates a database adapter from the provided configuration, adds it as a named source on the gateway, and optionally starts an ingest poller.
+
+**Headers:** `Authorization: Bearer <admin JWT>`
+**Body:** `ConnectorConfig` JSON
+**Response:**
+
+```json
+{ "registered": true, "name": "analytics-db" }
+```
+
+**Example:**
+
+```bash
+curl -X POST https://gateway.example.com/admin/connectors/my-gw \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "analytics-db",
+    "type": "postgres",
+    "postgres": { "connectionString": "postgres://user:pass@host/analytics" }
+  }'
+```
+
+Registering a connector with a name that already exists returns a `409 Conflict` error.
+
+### List Connectors
+
+```
+GET /admin/connectors/:gatewayId
+```
+
+Returns all registered connectors. Connection strings and secrets are **never** included in the response.
+
+**Headers:** `Authorization: Bearer <admin JWT>`
+**Response:**
+
+```json
+[
+  {
+    "name": "analytics-db",
+    "type": "postgres",
+    "hasIngest": false,
+    "isPolling": false
+  },
+  {
+    "name": "bq-events",
+    "type": "bigquery",
+    "hasIngest": true,
+    "isPolling": true
+  }
+]
+```
+
+**Example:**
+
+```bash
+curl https://gateway.example.com/admin/connectors/my-gw \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+### Unregister a Connector
+
+```
+DELETE /admin/connectors/:gatewayId/:name
+```
+
+Removes a connector. If an ingest poller is running, it is stopped. The database connection is closed and the source adapter is removed from the gateway. Clients can no longer pull from this source.
+
+**Headers:** `Authorization: Bearer <admin JWT>`
+**Response:**
+
+```json
+{ "unregistered": true, "name": "analytics-db" }
+```
+
+**Example:**
+
+```bash
+curl -X DELETE https://gateway.example.com/admin/connectors/my-gw/analytics-db \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+Unregistering a connector that does not exist returns a `404 Not Found` error.
+
+## Examples
+
+### Adding a PostgreSQL Source
+
+Register a Postgres database, then pull data from it:
+
+```bash
+# Register the connector
+curl -X POST https://gateway.example.com/admin/connectors/my-gw \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "users-db",
+    "type": "postgres",
+    "postgres": { "connectionString": "postgres://user:pass@host/mydb" }
+  }'
+
+# Pull from the registered source
+curl "https://gateway.example.com/sync/my-gw/pull?since=0&clientId=app-1&source=users-db" \
+  -H "Authorization: Bearer $CLIENT_TOKEN"
+```
+
+### BigQuery with Ingest Polling
+
+Register a BigQuery source with automatic change detection that polls every 30 seconds using a cursor strategy:
+
+```bash
+curl -X POST https://gateway.example.com/admin/connectors/my-gw \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "bq-events",
+    "type": "bigquery",
+    "bigquery": { "projectId": "my-project", "dataset": "events_ds" },
+    "ingest": {
+      "intervalMs": 30000,
+      "tables": [{
+        "table": "events",
+        "query": "SELECT * FROM events",
+        "strategy": { "type": "cursor", "cursorColumn": "updated_at" }
+      }]
+    }
+  }'
+```
+
+Once registered, the poller starts immediately. Detected changes are pushed through the gateway and broadcast to all connected clients via the standard sync flow.
+
+### MySQL with Diff Strategy
+
+Register a MySQL source with diff-based change detection for a small reference table:
+
+```bash
+curl -X POST https://gateway.example.com/admin/connectors/my-gw \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "config-db",
+    "type": "mysql",
+    "mysql": { "connectionString": "mysql://user:pass@host/config" },
+    "ingest": {
+      "intervalMs": 60000,
+      "tables": [{
+        "table": "feature_flags",
+        "query": "SELECT id, flag_name, enabled FROM feature_flags",
+        "strategy": { "type": "diff" }
+      }]
+    }
+  }'
+```
+
+The diff strategy compares the full result set on each poll, detecting inserts, updates, and hard deletes. Use it for small tables where delete detection matters.
+
+## Gateway Server vs Worker
+
+| Capability | Gateway Server (self-hosted) | Gateway Worker (Cloudflare) |
+|-----------|-----------------------------|-----------------------------|
+| Database connections | Creates live connections | Stores config only |
+| Ingest polling | Starts pollers automatically | Not supported (no long-running processes) |
+| Connector storage | In-memory (lost on restart) | Durable Object storage (persistent) |
+
+**Gateway Server** (`@lakesync/gateway-server`) creates live database connections and starts ingest pollers when a connector is registered. The server must have network access to the source database.
+
+**Gateway Worker** (`gateway-worker` on Cloudflare Workers) stores connector configuration in the Durable Object but cannot create live database connections or run pollers — the Workers runtime does not support long-running processes or arbitrary TCP connections. Use the gateway server for connectors that require ingest polling.
+
+## Security
+
+- All connector routes require a JWT with `role: "admin"`.
+- Connection strings and credentials are **never** returned by the list endpoint.
+- Use environment variables or a secret manager for connection strings in production — avoid hardcoding credentials in requests.
+- Connector names are validated as non-empty strings. Names are used as source adapter keys internally and appear in pull request URLs.

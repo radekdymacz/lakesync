@@ -1,12 +1,19 @@
 import { DurableObject } from "cloudflare:workers";
 import type {
+	ConnectorConfig,
 	HLCTimestamp,
 	ResolvedClaims,
 	SyncRulesConfig,
 	SyncRulesContext,
 	TableSchema,
 } from "@lakesync/core";
-import { bigintReplacer, bigintReviver, filterDeltas, validateSyncRules } from "@lakesync/core";
+import {
+	bigintReplacer,
+	bigintReviver,
+	filterDeltas,
+	validateConnectorConfig,
+	validateSyncRules,
+} from "@lakesync/core";
 import { SyncGateway, type SyncPull, type SyncPush, type SyncResponse } from "@lakesync/gateway";
 import {
 	type CodecError,
@@ -208,6 +215,14 @@ export class SyncGatewayDO extends DurableObject<Env> {
 
 		const url = new URL(request.url);
 
+		// Handle DELETE /admin/connectors/:name
+		if (url.pathname.startsWith("/admin/connectors/")) {
+			const name = url.pathname.slice("/admin/connectors/".length);
+			if (name && request.method === "DELETE") {
+				return this.handleUnregisterConnector(name);
+			}
+		}
+
 		switch (url.pathname) {
 			case "/push":
 				return this.handlePush(request);
@@ -219,6 +234,8 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				return this.handleSaveSchema(request);
 			case "/admin/sync-rules":
 				return this.handleSaveSyncRules(request);
+			case "/admin/connectors":
+				return this.handleConnectors(request);
 			case "/checkpoint":
 				return this.handleCheckpoint(request);
 			default:
@@ -446,6 +463,92 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			bucketCount: (config as SyncRulesConfig).buckets.length,
 		});
 		return jsonResponse({ saved: true });
+	}
+
+	/**
+	 * Route connector admin requests by method.
+	 */
+	private async handleConnectors(request: Request): Promise<Response> {
+		if (request.method === "POST") {
+			return this.handleRegisterConnector(request);
+		}
+		if (request.method === "GET") {
+			return this.handleListConnectors();
+		}
+		return errorResponse("Method not allowed", 405);
+	}
+
+	/**
+	 * Handle `POST /admin/connectors` -- register a connector configuration.
+	 *
+	 * Validates the body with {@link validateConnectorConfig}, checks for
+	 * duplicate names, and persists the config to Durable Storage.
+	 */
+	private async handleRegisterConnector(request: Request): Promise<Response> {
+		let body: unknown;
+		try {
+			body = await request.json();
+		} catch {
+			return errorResponse("Invalid JSON body", 400);
+		}
+
+		const validation = validateConnectorConfig(body);
+		if (!validation.ok) {
+			return errorResponse(validation.error.message, 400);
+		}
+
+		const config = validation.value;
+		const connectors =
+			(await this.ctx.storage.get<Record<string, ConnectorConfig>>("connectors")) ?? {};
+
+		if (connectors[config.name]) {
+			return errorResponse(`Connector "${config.name}" already exists`, 409);
+		}
+
+		connectors[config.name] = config;
+		await this.ctx.storage.put("connectors", connectors);
+
+		logger.info("connector_registered", { name: config.name, type: config.type });
+		return jsonResponse({ registered: true, name: config.name });
+	}
+
+	/**
+	 * Handle `DELETE /admin/connectors/:name` -- unregister a connector.
+	 *
+	 * Removes the named connector from Durable Storage. Returns 404 if the
+	 * connector does not exist.
+	 */
+	private async handleUnregisterConnector(name: string): Promise<Response> {
+		const connectors =
+			(await this.ctx.storage.get<Record<string, ConnectorConfig>>("connectors")) ?? {};
+
+		if (!connectors[name]) {
+			return errorResponse(`Connector "${name}" not found`, 404);
+		}
+
+		delete connectors[name];
+		await this.ctx.storage.put("connectors", connectors);
+
+		logger.info("connector_unregistered", { name });
+		return jsonResponse({ unregistered: true, name });
+	}
+
+	/**
+	 * Handle `GET /admin/connectors` -- list registered connectors.
+	 *
+	 * Returns a sanitised list (connection strings are never exposed).
+	 */
+	private async handleListConnectors(): Promise<Response> {
+		const connectors =
+			(await this.ctx.storage.get<Record<string, ConnectorConfig>>("connectors")) ?? {};
+
+		const list = Object.values(connectors).map((c) => ({
+			name: c.name,
+			type: c.type,
+			hasIngest: c.ingest !== undefined,
+		}));
+
+		return jsonResponse(list);
 	}
 
 	/**

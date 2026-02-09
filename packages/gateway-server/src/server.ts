@@ -1,6 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
+import {
+	createDatabaseAdapter,
+	createQueryFn,
+	type DatabaseAdapter,
+	type LakeAdapter,
+} from "@lakesync/adapter";
 import type {
+	ConnectorConfig,
 	HLCTimestamp,
 	ResolvedClaims,
 	RowDelta,
@@ -8,7 +14,13 @@ import type {
 	SyncRulesContext,
 	TableSchema,
 } from "@lakesync/core";
-import { bigintReplacer, bigintReviver, filterDeltas, validateSyncRules } from "@lakesync/core";
+import {
+	bigintReplacer,
+	bigintReviver,
+	filterDeltas,
+	validateConnectorConfig,
+	validateSyncRules,
+} from "@lakesync/core";
 import { SyncGateway, type SyncPull, type SyncPush } from "@lakesync/gateway";
 import {
 	decodeSyncPull,
@@ -75,6 +87,8 @@ const VALID_COLUMN_TYPES = new Set(["string", "number", "boolean", "json", "null
 interface RouteMatch {
 	gatewayId: string;
 	action: string;
+	/** Extra route parameters (e.g. connector name from DELETE path). */
+	connectorName?: string;
 }
 
 function matchRoute(pathname: string, method: string): RouteMatch | null {
@@ -111,6 +125,27 @@ function matchRoute(pathname: string, method: string): RouteMatch | null {
 		const match = pathname.match(/^\/admin\/sync-rules\/([^/]+)$/);
 		if (match && method === "POST") {
 			return { gatewayId: match[1]!, action: "sync-rules" };
+		}
+	}
+	// POST /admin/connectors/:gatewayId
+	{
+		const match = pathname.match(/^\/admin\/connectors\/([^/]+)$/);
+		if (match && method === "POST") {
+			return { gatewayId: match[1]!, action: "register-connector" };
+		}
+	}
+	// GET /admin/connectors/:gatewayId
+	{
+		const match = pathname.match(/^\/admin\/connectors\/([^/]+)$/);
+		if (match && method === "GET") {
+			return { gatewayId: match[1]!, action: "list-connectors" };
+		}
+	}
+	// DELETE /admin/connectors/:gatewayId/:name
+	{
+		const match = pathname.match(/^\/admin\/connectors\/([^/]+)\/([^/]+)$/);
+		if (match && method === "DELETE") {
+			return { gatewayId: match[1]!, action: "unregister-connector", connectorName: match[2]! };
 		}
 	}
 	// WebSocket /sync/:gatewayId/ws
@@ -197,6 +232,9 @@ export class GatewayServer {
 	private wss: WebSocketServer | null = null;
 	private wsClients = new Map<WsWebSocket, { clientId: string; claims: Record<string, unknown> }>();
 	private pollers: SourcePoller[] = [];
+	private connectorConfigs = new Map<string, ConnectorConfig>();
+	private connectorAdapters = new Map<string, DatabaseAdapter>();
+	private connectorPollers = new Map<string, SourcePoller>();
 
 	constructor(config: GatewayServerConfig) {
 		this.config = {
@@ -465,6 +503,18 @@ export class GatewayServer {
 
 	/** Stop the server and clear the flush timer. */
 	async stop(): Promise<void> {
+		// Stop dynamic connector pollers and close adapters
+		for (const [, poller] of this.connectorPollers) {
+			poller.stop();
+		}
+		this.connectorPollers.clear();
+
+		for (const [, adapter] of this.connectorAdapters) {
+			await adapter.close();
+		}
+		this.connectorAdapters.clear();
+		this.connectorConfigs.clear();
+
 		// Stop ingest pollers
 		for (const poller of this.pollers) {
 			poller.stop();
@@ -569,7 +619,14 @@ export class GatewayServer {
 			}
 
 			// Admin route protection
-			if (route.action === "flush" || route.action === "schema" || route.action === "sync-rules") {
+			if (
+				route.action === "flush" ||
+				route.action === "schema" ||
+				route.action === "sync-rules" ||
+				route.action === "register-connector" ||
+				route.action === "unregister-connector" ||
+				route.action === "list-connectors"
+			) {
 				if (auth.role !== "admin") {
 					sendError(res, "Admin role required", 403, corsH);
 					return;
@@ -592,6 +649,15 @@ export class GatewayServer {
 				break;
 			case "sync-rules":
 				await this.handleSaveSyncRules(req, res, corsH);
+				break;
+			case "register-connector":
+				await this.handleRegisterConnector(req, res, corsH);
+				break;
+			case "unregister-connector":
+				await this.handleUnregisterConnector(route.connectorName!, res, corsH);
+				break;
+			case "list-connectors":
+				this.handleListConnectors(res, corsH);
 				break;
 			default:
 				sendError(res, "Not found", 404, corsH);
@@ -805,6 +871,120 @@ export class GatewayServer {
 	}
 
 	// -----------------------------------------------------------------------
+	// Connector management
+	// -----------------------------------------------------------------------
+
+	/** Handle `POST /admin/connectors/:gatewayId` -- register a new connector. */
+	private async handleRegisterConnector(
+		req: IncomingMessage,
+		res: ServerResponse,
+		corsH: Record<string, string>,
+	): Promise<void> {
+		let body: unknown;
+		try {
+			const raw = await readBody(req);
+			body = JSON.parse(raw);
+		} catch {
+			sendError(res, "Invalid JSON body", 400, corsH);
+			return;
+		}
+
+		const validation = validateConnectorConfig(body);
+		if (!validation.ok) {
+			sendError(res, validation.error.message, 400, corsH);
+			return;
+		}
+
+		const config = validation.value;
+
+		if (this.connectorConfigs.has(config.name)) {
+			sendError(res, `Connector "${config.name}" already exists`, 409, corsH);
+			return;
+		}
+
+		// Create the database adapter
+		const adapterResult = createDatabaseAdapter(config);
+		if (!adapterResult.ok) {
+			sendError(res, adapterResult.error.message, 500, corsH);
+			return;
+		}
+
+		const adapter = adapterResult.value;
+
+		// Register with the gateway
+		this.gateway.registerSource(config.name, adapter);
+		this.connectorConfigs.set(config.name, config);
+		this.connectorAdapters.set(config.name, adapter);
+
+		// Start ingest poller if configured
+		if (config.ingest) {
+			const queryFn = await createQueryFn(config);
+			if (queryFn) {
+				const pollerConfig: IngestSourceConfig = {
+					name: config.name,
+					queryFn,
+					tables: config.ingest.tables.map((t) => ({
+						table: t.table,
+						query: t.query,
+						rowIdColumn: t.rowIdColumn,
+						strategy: t.strategy,
+					})),
+					intervalMs: config.ingest.intervalMs,
+				};
+				const poller = new SourcePoller(pollerConfig, this.gateway);
+				poller.start();
+				this.connectorPollers.set(config.name, poller);
+			}
+		}
+
+		sendJson(res, { registered: true, name: config.name }, 200, corsH);
+	}
+
+	/** Handle `DELETE /admin/connectors/:gatewayId/:name` -- unregister a connector. */
+	private async handleUnregisterConnector(
+		name: string,
+		res: ServerResponse,
+		corsH: Record<string, string>,
+	): Promise<void> {
+		if (!this.connectorConfigs.has(name)) {
+			sendError(res, `Connector "${name}" not found`, 404, corsH);
+			return;
+		}
+
+		// Stop poller if running
+		const poller = this.connectorPollers.get(name);
+		if (poller) {
+			poller.stop();
+			this.connectorPollers.delete(name);
+		}
+
+		// Close adapter
+		const adapter = this.connectorAdapters.get(name);
+		if (adapter) {
+			await adapter.close();
+			this.connectorAdapters.delete(name);
+		}
+
+		// Unregister from gateway
+		this.gateway.unregisterSource(name);
+		this.connectorConfigs.delete(name);
+
+		sendJson(res, { unregistered: true, name }, 200, corsH);
+	}
+
+	/** Handle `GET /admin/connectors/:gatewayId` -- list registered connectors. */
+	private handleListConnectors(res: ServerResponse, corsH: Record<string, string>): void {
+		const list = Array.from(this.connectorConfigs.values()).map((c) => ({
+			name: c.name,
+			type: c.type,
+			hasIngest: c.ingest !== undefined,
+			isPolling: this.connectorPollers.get(c.name)?.isRunning ?? false,
+		}));
+
+		sendJson(res, list, 200, corsH);
+	}
+
+	// -----------------------------------------------------------------------
 	// Periodic flush
 	// -----------------------------------------------------------------------
 
@@ -853,7 +1033,7 @@ export class GatewayServer {
 
 		return {
 			"Access-Control-Allow-Origin": allowOrigin,
-			"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+			"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 			"Access-Control-Allow-Headers": "Authorization, Content-Type",
 			"Access-Control-Max-Age": "86400",
 		};

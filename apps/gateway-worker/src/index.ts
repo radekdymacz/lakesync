@@ -109,6 +109,33 @@ const ROUTE_TABLE: RouteEntry[] = [
 			return { gatewayId, doPath: "/admin/sync-rules", doMethod: "POST", forwardBody: true };
 		},
 	},
+	{
+		// POST|GET /admin/connectors/:gatewayId
+		pattern: /^\/admin\/connectors\/([^/]+)$/,
+		extract: (match, method) => {
+			const gatewayId = match[1];
+			if (!gatewayId) return null;
+			if (method === "POST") {
+				return { gatewayId, doPath: "/admin/connectors", doMethod: "POST", forwardBody: true };
+			}
+			return { gatewayId, doPath: "/admin/connectors", doMethod: "GET", forwardBody: false };
+		},
+	},
+	{
+		// DELETE /admin/connectors/:gatewayId/:name
+		pattern: /^\/admin\/connectors\/([^/]+)\/([^/]+)$/,
+		extract: (match) => {
+			const gatewayId = match[1];
+			const name = match[2];
+			if (!gatewayId || !name) return null;
+			return {
+				gatewayId,
+				doPath: `/admin/connectors/${name}`,
+				doMethod: "DELETE",
+				forwardBody: false,
+			};
+		},
+	},
 ];
 
 function matchRoute(path: string, method: string): RouteMatch | null {
@@ -311,7 +338,7 @@ function corsHeaders(env: Env, origin?: string | null): Record<string, string> {
 
 	return {
 		"Access-Control-Allow-Origin": allowOrigin,
-		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+		"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 		"Access-Control-Allow-Headers": "Authorization, Content-Type, X-Client-Id, X-Auth-Claims",
 		"Access-Control-Expose-Headers": "X-Checkpoint-Hlc, X-Sync-Rules-Version",
 		"Access-Control-Max-Age": "86400",

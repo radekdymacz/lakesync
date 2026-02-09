@@ -4,6 +4,7 @@
 		"architecture",
 		"real-time",
 		"source-polling",
+		"connectors",
 		"...api"
 	]
 }

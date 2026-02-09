@@ -46,6 +46,10 @@ export class SyncGateway {
 
 	constructor(config: GatewayConfig, adapter?: LakeAdapter | DatabaseAdapter) {
 		this.config = config;
+		// Ensure sourceAdapters map always exists for dynamic registration
+		if (!this.config.sourceAdapters) {
+			this.config.sourceAdapters = {};
+		}
 		this.hlc = new HLC();
 		this.buffer = new DeltaBuffer();
 		this.adapter = config.adapter ?? adapter ?? null;
@@ -394,6 +398,34 @@ export class SyncGateway {
 			// On 409 conflict, retry once with fresh metadata
 			await catalogue.appendFiles(namespace, name, [dataFile]);
 		}
+	}
+
+	/**
+	 * Register a named source adapter for adapter-sourced pulls.
+	 *
+	 * @param name - Unique source name (used as the `source` parameter in pull requests).
+	 * @param adapter - The database adapter to register.
+	 */
+	registerSource(name: string, adapter: DatabaseAdapter): void {
+		this.config.sourceAdapters![name] = adapter;
+	}
+
+	/**
+	 * Unregister a named source adapter.
+	 *
+	 * @param name - The source name to remove.
+	 */
+	unregisterSource(name: string): void {
+		delete this.config.sourceAdapters![name];
+	}
+
+	/**
+	 * List all registered source adapter names.
+	 *
+	 * @returns Array of registered source adapter names.
+	 */
+	listSources(): string[] {
+		return Object.keys(this.config.sourceAdapters!);
 	}
 
 	/** Check if the buffer should be flushed based on config thresholds. */
