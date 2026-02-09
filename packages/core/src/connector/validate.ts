@@ -112,6 +112,43 @@ export function validateConnectorConfig(
 			}
 			break;
 		}
+		case "salesforce": {
+			const sf = obj.salesforce;
+			if (typeof sf !== "object" || sf === null) {
+				return Err(
+					new ConnectorValidationError(
+						'Connector type "salesforce" requires a salesforce config object',
+					),
+				);
+			}
+			const sfObj = sf as Record<string, unknown>;
+			if (typeof sfObj.instanceUrl !== "string" || sfObj.instanceUrl.length === 0) {
+				return Err(
+					new ConnectorValidationError("Salesforce connector requires a non-empty instanceUrl"),
+				);
+			}
+			if (typeof sfObj.clientId !== "string" || sfObj.clientId.length === 0) {
+				return Err(
+					new ConnectorValidationError("Salesforce connector requires a non-empty clientId"),
+				);
+			}
+			if (typeof sfObj.clientSecret !== "string" || sfObj.clientSecret.length === 0) {
+				return Err(
+					new ConnectorValidationError("Salesforce connector requires a non-empty clientSecret"),
+				);
+			}
+			if (typeof sfObj.username !== "string" || sfObj.username.length === 0) {
+				return Err(
+					new ConnectorValidationError("Salesforce connector requires a non-empty username"),
+				);
+			}
+			if (typeof sfObj.password !== "string" || sfObj.password.length === 0) {
+				return Err(
+					new ConnectorValidationError("Salesforce connector requires a non-empty password"),
+				);
+			}
+			break;
+		}
 	}
 
 	// --- optional ingest config ---
@@ -122,8 +159,8 @@ export function validateConnectorConfig(
 
 		const ingest = obj.ingest as Record<string, unknown>;
 
-		// Jira connectors define tables internally — only validate intervalMs
-		if (connectorType === "jira") {
+		// API-based connectors define tables internally — only validate intervalMs
+		if (connectorType === "jira" || connectorType === "salesforce") {
 			if (ingest.intervalMs !== undefined) {
 				if (typeof ingest.intervalMs !== "number" || ingest.intervalMs < 1) {
 					return Err(new ConnectorValidationError("Ingest intervalMs must be a positive number"));

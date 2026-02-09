@@ -1,5 +1,5 @@
 /** Supported connector types. */
-export const CONNECTOR_TYPES = ["postgres", "mysql", "bigquery", "jira"] as const;
+export const CONNECTOR_TYPES = ["postgres", "mysql", "bigquery", "jira", "salesforce"] as const;
 
 /** Union of supported connector type strings. */
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
@@ -38,6 +38,34 @@ export interface ConnectorIngestTable {
 	rowIdColumn?: string;
 	/** Change detection strategy. */
 	strategy: { type: "cursor"; cursorColumn: string; lookbackMs?: number } | { type: "diff" };
+}
+
+/** Connection configuration for a Salesforce CRM source. */
+export interface SalesforceConnectorConfig {
+	/** Salesforce instance URL (e.g. "https://mycompany.salesforce.com"). */
+	instanceUrl: string;
+	/** Connected App consumer key. */
+	clientId: string;
+	/** Connected App consumer secret. */
+	clientSecret: string;
+	/** Salesforce username. */
+	username: string;
+	/** Salesforce password + security token concatenated. */
+	password: string;
+	/** REST API version (default "v62.0"). */
+	apiVersion?: string;
+	/** Use test.salesforce.com for auth (default false). */
+	isSandbox?: boolean;
+	/** Optional WHERE clause fragment appended to all SOQL queries. */
+	soqlFilter?: string;
+	/** Whether to include Account objects (default true). */
+	includeAccounts?: boolean;
+	/** Whether to include Contact objects (default true). */
+	includeContacts?: boolean;
+	/** Whether to include Opportunity objects (default true). */
+	includeOpportunities?: boolean;
+	/** Whether to include Lead objects (default true). */
+	includeLeads?: boolean;
 }
 
 /** Connection configuration for a Jira Cloud source. */
@@ -84,6 +112,8 @@ export interface ConnectorConfig {
 	bigquery?: BigQueryConnectorConfig;
 	/** Jira Cloud connection configuration (required when type is "jira"). */
 	jira?: JiraConnectorConfig;
+	/** Salesforce CRM connection configuration (required when type is "salesforce"). */
+	salesforce?: SalesforceConnectorConfig;
 	/** Optional ingest polling configuration. */
 	ingest?: ConnectorIngestConfig;
 }

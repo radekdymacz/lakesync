@@ -930,6 +930,28 @@ export class GatewayServer {
 			return;
 		}
 
+		// Salesforce connectors use their own API-based poller — no DatabaseAdapter needed
+		if (config.type === "salesforce" && config.salesforce) {
+			try {
+				const { SalesforceSourcePoller } = await import("@lakesync/connector-salesforce");
+				const ingestConfig = config.ingest ? { intervalMs: config.ingest.intervalMs } : undefined;
+				const poller = new SalesforceSourcePoller(
+					config.salesforce,
+					ingestConfig,
+					config.name,
+					this.gateway,
+				);
+				poller.start();
+				this.connectorPollers.set(config.name, poller);
+				this.connectorConfigs.set(config.name, config);
+				sendJson(res, { registered: true, name: config.name }, 200, corsH);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				sendError(res, `Failed to load Salesforce connector: ${message}`, 500, corsH);
+			}
+			return;
+		}
+
 		// Create the database adapter
 		const adapterResult = createDatabaseAdapter(config);
 		if (!adapterResult.ok) {

@@ -8,6 +8,7 @@ export type {
 	JiraConnectorConfig,
 	MySQLConnectorConfig,
 	PostgresConnectorConfig,
+	SalesforceConnectorConfig,
 } from "./types";
 export { CONNECTOR_TYPES } from "./types";
 export { validateConnectorConfig } from "./validate";
