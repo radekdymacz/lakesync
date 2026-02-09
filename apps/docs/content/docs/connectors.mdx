@@ -7,7 +7,7 @@ description: Add, remove, and list data sources at runtime via the admin API.
 
 Connectors let you register external data sources at runtime — no server restart required. Every connector is managed programmatically via the admin REST API: register, list, and unregister connectors with simple HTTP calls. This makes it straightforward to automate connector management from scripts, CI/CD pipelines, or agent workflows.
 
-Each connector maps to a named source adapter in the gateway. Database connectors (Postgres, MySQL, BigQuery) let clients pull data using the `source` query parameter. API connectors (Jira) run their own pollers that push data into the gateway automatically.
+Each connector maps to a named source adapter in the gateway. Database connectors (Postgres, MySQL, BigQuery) let clients pull data using the `source` query parameter. API connectors (Jira, Salesforce) run their own pollers that push data into the gateway automatically.
 
 Supported connector types:
 
@@ -17,10 +17,11 @@ Supported connector types:
 | `mysql` | Database | `connectionString` |
 | `bigquery` | Database | `projectId`, `dataset` |
 | `jira` | REST API | `domain`, `email`, `apiToken` |
+| `salesforce` | REST API | `instanceUrl`, `clientId`, `clientSecret`, `username`, `password` |
 
 Database connectors can optionally include an ingest configuration that starts a poller to automatically detect changes in the source database and push them through the gateway. See [Source Polling Ingest](/docs/source-polling) for details on change detection strategies.
 
-API connectors like Jira define their own tables internally and poll automatically — no SQL queries or table configuration needed. Just provide the connection credentials and an optional poll interval.
+API connectors like Jira and Salesforce define their own tables internally and poll automatically — no SQL queries or table configuration needed. Just provide the connection credentials and an optional poll interval.
 
 All connector routes require a JWT with `role: "admin"`.
 
@@ -31,7 +32,7 @@ interface ConnectorConfig {
   /** Unique connector name (used as the source adapter key). */
   name: string;
   /** Connector type — determines which adapter to create. */
-  type: "postgres" | "mysql" | "bigquery" | "jira";
+  type: "postgres" | "mysql" | "bigquery" | "jira" | "salesforce";
   /** PostgreSQL config (required when type is "postgres"). */
   postgres?: { connectionString: string };
   /** MySQL config (required when type is "mysql"). */
@@ -52,6 +53,21 @@ interface ConnectorConfig {
     includeComments?: boolean; // default true
     includeProjects?: boolean; // default true
   };
+  /** Salesforce CRM config (required when type is "salesforce"). */
+  salesforce?: {
+    instanceUrl: string;        // e.g. "https://mycompany.salesforce.com"
+    clientId: string;           // Connected App consumer key
+    clientSecret: string;       // Connected App consumer secret
+    username: string;           // SF username
+    password: string;           // password + security token concatenated
+    apiVersion?: string;        // default "v62.0"
+    isSandbox?: boolean;        // use test.salesforce.com for auth
+    soqlFilter?: string;        // optional WHERE clause fragment
+    includeAccounts?: boolean;      // default true
+    includeContacts?: boolean;      // default true
+    includeOpportunities?: boolean; // default true
+    includeLeads?: boolean;         // default true
+  };
   /** Optional ingest polling configuration. */
   ingest?: {
     /** Tables to poll (required for database connectors, ignored for Jira). */
@@ -71,7 +87,7 @@ interface ConnectorConfig {
 
 Validation is performed server-side via `validateConnectorConfig()`. Missing or invalid fields return a `400` response with a descriptive error message.
 
-For Jira connectors, the `ingest.tables` field is not required — Jira defines its tables internally (`jira_issues`, `jira_comments`, `jira_projects`). Only `intervalMs` is used from the ingest config.
+For API connectors (Jira, Salesforce), the `ingest.tables` field is not required — they define their tables internally. Only `intervalMs` is used from the ingest config.
 
 ## API Reference
 
@@ -118,6 +134,26 @@ curl -X POST https://gateway.example.com/admin/connectors/my-gw \
       "email": "bot@mycompany.com",
       "apiToken": "ATATT3...",
       "jql": "project = ENG"
+    },
+    "ingest": { "intervalMs": 30000 }
+  }'
+```
+
+**Example (Salesforce connector):**
+
+```bash
+curl -X POST https://gateway.example.com/admin/connectors/my-gw \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "sf-crm",
+    "type": "salesforce",
+    "salesforce": {
+      "instanceUrl": "https://mycompany.salesforce.com",
+      "clientId": "3MVG9...",
+      "clientSecret": "ABC123...",
+      "username": "bot@mycompany.com",
+      "password": "mypasswordSECURITYTOKEN"
     },
     "ingest": { "intervalMs": 30000 }
   }'
@@ -311,6 +347,74 @@ All detected changes are pushed through the gateway and broadcast to connected c
 }
 ```
 
+### Salesforce CRM
+
+Register a Salesforce connector to sync accounts, contacts, opportunities, and leads into LakeSync. The Salesforce connector polls the Salesforce REST API via SOQL — no SQL or table configuration needed.
+
+```bash
+curl -X POST https://gateway.example.com/admin/connectors/my-gw \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "sf-crm",
+    "type": "salesforce",
+    "salesforce": {
+      "instanceUrl": "https://mycompany.salesforce.com",
+      "clientId": "3MVG9...",
+      "clientSecret": "ABC123...",
+      "username": "bot@mycompany.com",
+      "password": "mypasswordSECURITYTOKEN",
+      "includeAccounts": true,
+      "includeContacts": true,
+      "includeOpportunities": true,
+      "includeLeads": true
+    },
+    "ingest": { "intervalMs": 30000 }
+  }'
+```
+
+Once registered, the Salesforce poller starts immediately and syncs four tables:
+
+| Table | Row ID | Description |
+|-------|--------|-------------|
+| `sf_accounts` | Salesforce Id (e.g. `001ABC123`) | Name, type, industry, website, phone, billing address, annual revenue, employees, owner |
+| `sf_contacts` | Salesforce Id (e.g. `003ABC123`) | First/last name, email, phone, title, account, mailing address, owner |
+| `sf_opportunities` | Salesforce Id (e.g. `006ABC123`) | Name, stage, amount, close date, probability, account, type, lead source, is closed/won, owner |
+| `sf_leads` | Salesforce Id (e.g. `00QABC123`) | First/last name, company, email, phone, title, status, lead source, conversion fields, owner |
+
+**How it works:**
+
+- All four entity types use a **cursor strategy** via `LastModifiedDate` — on each poll, only records modified since the last poll are fetched via SOQL
+- First poll fetches all records (no cursor yet), subsequent polls are incremental
+- Authentication uses **OAuth 2.0 Username-Password flow** — the connector auto-authenticates and re-authenticates on token expiry (401)
+- Rate limiting (503) is handled with automatic retries using the `Retry-After` header
+
+**Authentication setup** — The `password` field must contain the Salesforce password concatenated with the security token (e.g. `mypasswordABCDEF123456`). Create a Connected App in Salesforce Setup to obtain the `clientId` and `clientSecret`. For sandbox environments, set `isSandbox: true` to authenticate against `test.salesforce.com`.
+
+**SOQL filtering** — The `soqlFilter` field appends a WHERE clause fragment to all SOQL queries. For example, `"Type = 'Customer'"` only syncs customer accounts. This applies across all entity types.
+
+**Selective polling** — Disable entity types you do not need with `includeAccounts`, `includeContacts`, `includeOpportunities`, and `includeLeads` (all default to `true`).
+
+**Pulling Salesforce data** — Once the connector is polling, clients receive CRM data through the standard sync flow. Apply sync rules to filter which data reaches each client:
+
+```json
+{
+  "buckets": [{
+    "name": "sales-pipeline",
+    "filters": [
+      { "column": "stage_name", "op": "neq", "value": "Closed Won" }
+    ],
+    "tables": ["sf_opportunities"]
+  }, {
+    "name": "my-accounts",
+    "filters": [
+      { "column": "owner_name", "op": "eq", "value": "jwt:name" }
+    ],
+    "tables": ["sf_accounts", "sf_contacts"]
+  }]
+}
+```
+
 ## Programmatic Connector Management
 
 All connector operations are available via the admin REST API, making it straightforward to automate from scripts, CI/CD, or agent workflows. No server restart or configuration file changes are needed.
@@ -324,11 +428,17 @@ curl -X POST $GATEWAY_URL/admin/connectors/$GW_ID \
   -H "Content-Type: application/json" \
   -d '{ "name": "my-pg", "type": "postgres", "postgres": { "connectionString": "..." } }'
 
-# API connector
+# API connector (Jira)
 curl -X POST $GATEWAY_URL/admin/connectors/$GW_ID \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{ "name": "my-jira", "type": "jira", "jira": { "domain": "co", "email": "...", "apiToken": "..." } }'
+
+# API connector (Salesforce)
+curl -X POST $GATEWAY_URL/admin/connectors/$GW_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "my-sf", "type": "salesforce", "salesforce": { "instanceUrl": "https://co.salesforce.com", "clientId": "...", "clientSecret": "...", "username": "...", "password": "..." } }'
 ```
 
 **List all registered connectors:**
@@ -356,6 +466,10 @@ curl -X POST $GATEWAY_URL/admin/sync-rules/$GW_ID \
       "name": "team-data",
       "filters": [{ "column": "project_key", "op": "eq", "value": "jwt:team" }],
       "tables": ["jira_issues", "jira_comments"]
+    }, {
+      "name": "my-pipeline",
+      "filters": [{ "column": "owner_name", "op": "eq", "value": "jwt:name" }],
+      "tables": ["sf_opportunities", "sf_accounts"]
     }]
   }'
 ```
@@ -383,11 +497,11 @@ The full admin API surface — connectors, sync rules, schemas, flush — is des
 | Capability | Gateway Server (self-hosted) | Gateway Worker (Cloudflare) |
 |-----------|-----------------------------|-----------------------------|
 | Database connections | Creates live connections | Stores config only |
-| API connectors (Jira) | Starts API pollers automatically | Not supported |
+| API connectors (Jira, Salesforce) | Starts API pollers automatically | Not supported |
 | Ingest polling | Starts pollers automatically | Not supported (no long-running processes) |
 | Connector storage | In-memory (lost on restart) | Durable Object storage (persistent) |
 
-**Gateway Server** (`@lakesync/gateway-server`) creates live database connections and starts ingest pollers when a connector is registered. For API connectors like Jira, it starts dedicated pollers that communicate with the external API. The server must have network access to the source database or API.
+**Gateway Server** (`@lakesync/gateway-server`) creates live database connections and starts ingest pollers when a connector is registered. For API connectors like Jira and Salesforce, it starts dedicated pollers that communicate with the external API. The server must have network access to the source database or API.
 
 **Gateway Worker** (`gateway-worker` on Cloudflare Workers) stores connector configuration in the Durable Object but cannot create live database connections, run pollers, or communicate with external APIs — the Workers runtime does not support long-running processes or arbitrary TCP connections. Use the gateway server for connectors that require ingest polling or API access.
 
