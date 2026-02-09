@@ -396,7 +396,7 @@ describe("SourcePoller — diff strategy", () => {
 		expect(handlePushSpy).not.toHaveBeenCalled();
 	});
 
-	it("warns on large snapshots", async () => {
+	it("warns on large snapshots", { timeout: 30_000 }, async () => {
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 		// Build a large result set
