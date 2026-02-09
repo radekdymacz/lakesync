@@ -40,6 +40,7 @@
 		"@lakesync/core": "workspace:*",
 		"@lakesync/adapter": "workspace:*",
 		"@lakesync/connector-jira": "workspace:*",
+		"@lakesync/connector-salesforce": "workspace:*",
 		"@lakesync/gateway": "workspace:*",
 		"@lakesync/proto": "workspace:*"
 	},
