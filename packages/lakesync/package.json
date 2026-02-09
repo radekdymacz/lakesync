@@ -49,6 +49,10 @@
 		"./gateway-server": {
 			"types": "./dist/gateway-server.d.ts",
 			"import": "./dist/gateway-server.js"
+		},
+		"./react": {
+			"types": "./dist/react.d.ts",
+			"import": "./dist/react.js"
 		}
 	},
 	"scripts": {
@@ -71,7 +75,8 @@
 		"pg": "^8.0.0",
 		"mysql2": "^3.0.0",
 		"@google-cloud/bigquery": "^8.0.0",
-		"better-sqlite3": "^11.0.0"
+		"better-sqlite3": "^11.0.0",
+		"react": ">=18.0.0"
 	},
 	"peerDependenciesMeta": {
 		"sql.js": {
@@ -105,6 +110,9 @@
 			"optional": true
 		},
 		"better-sqlite3": {
+			"optional": true
+		},
+		"react": {
 			"optional": true
 		}
 	}

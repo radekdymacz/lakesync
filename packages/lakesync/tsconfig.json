@@ -13,7 +13,8 @@
 			"@lakesync/parquet": ["../parquet/src/index.ts"],
 			"@lakesync/catalogue": ["../catalogue/src/index.ts"],
 			"@lakesync/compactor": ["../compactor/src/index.ts"],
-			"@lakesync/analyst": ["../analyst/src/index.ts"]
+			"@lakesync/analyst": ["../analyst/src/index.ts"],
+			"@lakesync/react": ["../react/src/index.ts"]
 		}
 	},
 	"include": [
@@ -26,6 +27,7 @@
 		"../parquet/src",
 		"../catalogue/src",
 		"../compactor/src",
-		"../analyst/src"
+		"../analyst/src",
+		"../react/src"
 	]
 }

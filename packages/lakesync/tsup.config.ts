@@ -12,6 +12,7 @@ export default defineConfig({
 		compactor: "src/compactor.ts",
 		analyst: "src/analyst.ts",
 		"gateway-server": "src/gateway-server.ts",
+		react: "src/react.ts",
 	},
 	format: ["esm"],
 	dts: { resolve: true },
@@ -30,5 +31,6 @@ export default defineConfig({
 		"mysql2",
 		"@google-cloud/bigquery",
 		"better-sqlite3",
+		"react",
 	],
 });
