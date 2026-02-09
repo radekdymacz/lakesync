@@ -26,4 +26,13 @@ export interface SyncTransport {
 	pull(msg: SyncPull): Promise<Result<SyncResponse, LakeSyncError>>;
 	/** Download checkpoint for initial sync. Returns null if no checkpoint available. */
 	checkpoint?(): Promise<Result<CheckpointResponse | null, LakeSyncError>>;
+
+	/** Whether this transport supports real-time server push. */
+	readonly supportsRealtime?: boolean;
+	/** Register callback for server-initiated broadcasts. */
+	onBroadcast?(callback: (deltas: RowDelta[], serverHlc: HLCTimestamp) => void): void;
+	/** Connect persistent transport (e.g. open WebSocket). */
+	connect?(): void;
+	/** Disconnect persistent transport (e.g. close WebSocket). */
+	disconnect?(): void;
 }

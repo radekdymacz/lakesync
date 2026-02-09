@@ -178,9 +178,11 @@
       "version": "0.1.0",
       "dependencies": {
         "better-sqlite3": "^12.6.2",
+        "ws": "^8.18.0",
       },
       "devDependencies": {
         "@types/better-sqlite3": "^7.6.13",
+        "@types/ws": "^8.5.14",
         "typescript": "^5.7.0",
         "vitest": "^3.0.0",
       },
@@ -188,6 +190,7 @@
         "@lakesync/adapter": "workspace:*",
         "@lakesync/core": "workspace:*",
         "@lakesync/gateway": "workspace:*",
+        "@lakesync/proto": "workspace:*",
       },
     },
     "packages/lakesync": {
@@ -203,6 +206,7 @@
         "@duckdb/duckdb-wasm": "^1.33.0",
         "@google-cloud/bigquery": "^8.0.0",
         "apache-arrow": "^18.0.0",
+        "better-sqlite3": "^11.0.0",
         "idb": "^8.0.3",
         "mysql2": "^3.0.0",
         "parquet-wasm": "^0.7.0",
@@ -215,6 +219,7 @@
         "@duckdb/duckdb-wasm",
         "@google-cloud/bigquery",
         "apache-arrow",
+        "better-sqlite3",
         "idb",
         "mysql2",
         "parquet-wasm",
@@ -992,6 +997,8 @@
     "@types/trusted-types": ["@types/trusted-types@2.0.7", "", {}, "sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw=="],
 
     "@types/unist": ["@types/unist@3.0.3", "", {}, "sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q=="],
+
+    "@types/ws": ["@types/ws@8.18.1", "", { "dependencies": { "@types/node": "*" } }, "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg=="],
 
     "@typescript/vfs": ["@typescript/vfs@1.6.2", "", { "dependencies": { "debug": "^4.1.1" }, "peerDependencies": { "typescript": "*" } }, "sha512-hoBwJwcbKHmvd2QVebiytN1aELvpk9B74B4L1mFm/XT1Q/VOYAWl2vQ9AWRFtQq8zmz6enTpfTV8WRc4ATjW/g=="],
 

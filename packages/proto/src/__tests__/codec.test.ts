@@ -3,14 +3,19 @@ import { HLC } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
 import type { SyncPullPayload, SyncPushPayload, SyncResponsePayload } from "../codec";
 import {
+	decodeBroadcastFrame,
 	decodeRowDelta,
 	decodeSyncPull,
 	decodeSyncPush,
 	decodeSyncResponse,
+	encodeBroadcastFrame,
 	encodeRowDelta,
 	encodeSyncPull,
 	encodeSyncPush,
 	encodeSyncResponse,
+	TAG_BROADCAST,
+	TAG_SYNC_PULL,
+	TAG_SYNC_PUSH,
 } from "../codec";
 
 // ---------------------------------------------------------------------------
@@ -286,5 +291,68 @@ describe("codec", () => {
 		const lastSeenComponents = HLC.decode(recoveredLastSeen);
 		expect(lastSeenComponents.wall).toBe(wall);
 		expect(lastSeenComponents.counter).toBe(counter);
+	});
+
+	it("broadcast frame roundtrip", () => {
+		const response: SyncResponsePayload = {
+			deltas: [makeRowDelta({ deltaId: "bc-1" }), makeRowDelta({ deltaId: "bc-2", op: "UPDATE" })],
+			serverHlc: HLC.encode(1_700_000_001_000, 3),
+			hasMore: false,
+		};
+
+		const encoded = encodeBroadcastFrame(response);
+		expect(encoded.ok).toBe(true);
+		if (!encoded.ok) return;
+
+		// First byte should be TAG_BROADCAST
+		expect(encoded.value[0]).toBe(TAG_BROADCAST);
+
+		const decoded = decodeBroadcastFrame(encoded.value);
+		expect(decoded.ok).toBe(true);
+		if (!decoded.ok) return;
+
+		expect(decoded.value.deltas).toHaveLength(2);
+		expect(decoded.value.deltas[0]?.deltaId).toBe("bc-1");
+		expect(decoded.value.deltas[1]?.deltaId).toBe("bc-2");
+		expect(decoded.value.serverHlc).toBe(response.serverHlc);
+		expect(decoded.value.hasMore).toBe(false);
+	});
+
+	it("broadcast frame rejects wrong tag", () => {
+		// Create a valid SyncResponse and manually set wrong tag
+		const response: SyncResponsePayload = {
+			deltas: [],
+			serverHlc: HLC.encode(1_700_000_000_000, 0),
+			hasMore: false,
+		};
+
+		const encoded = encodeSyncResponse(response);
+		expect(encoded.ok).toBe(true);
+		if (!encoded.ok) return;
+
+		// Prepend TAG_SYNC_PUSH instead of TAG_BROADCAST
+		const badFrame = new Uint8Array(1 + encoded.value.length);
+		badFrame[0] = TAG_SYNC_PUSH;
+		badFrame.set(encoded.value, 1);
+
+		const decoded = decodeBroadcastFrame(badFrame);
+		expect(decoded.ok).toBe(false);
+		if (!decoded.ok) {
+			expect(decoded.error.message).toContain("Expected broadcast tag 0x03");
+		}
+	});
+
+	it("broadcast frame rejects too-short input", () => {
+		const decoded = decodeBroadcastFrame(new Uint8Array([0x03]));
+		expect(decoded.ok).toBe(false);
+		if (!decoded.ok) {
+			expect(decoded.error.message).toContain("too short");
+		}
+	});
+
+	it("tag constants have correct values", () => {
+		expect(TAG_SYNC_PUSH).toBe(0x01);
+		expect(TAG_SYNC_PULL).toBe(0x02);
+		expect(TAG_BROADCAST).toBe(0x03);
 	});
 });

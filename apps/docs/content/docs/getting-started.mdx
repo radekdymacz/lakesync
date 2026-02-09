@@ -69,6 +69,17 @@ const transport = new HttpTransport({
 });
 ```
 
+For real-time sync, use `WebSocketTransport` instead:
+
+```ts
+import { WebSocketTransport } from "lakesync/client";
+
+const transport = new WebSocketTransport({
+  url: "wss://your-gateway.example.com/sync/gw-1/ws",
+  token: "your-jwt-token",
+});
+```
+
 ### 4. Create a Coordinator and Sync
 
 ```ts
@@ -98,5 +109,6 @@ await coordinator.tracker.delete("todos", "todo-1");
 ## Next Steps
 
 - [Architecture](/docs/architecture) — Understand HLCs, deltas, and conflict resolution
+- [Real-Time Sync](/docs/real-time) — Sub-second sync via WebSocket broadcasting
 - [Core API](/docs/api/core) — Explore the core package exports
 - [Client SDK](/docs/api/client) — LocalDB, SyncCoordinator, and transports

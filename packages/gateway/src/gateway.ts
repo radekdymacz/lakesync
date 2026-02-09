@@ -13,7 +13,6 @@ import {
 	FlushError,
 	filterDeltas,
 	HLC,
-	type HLCTimestamp,
 	Ok,
 	type Result,
 	type RowDelta,
@@ -29,7 +28,7 @@ import {
 import { writeDeltasToParquet } from "@lakesync/parquet";
 import { DeltaBuffer } from "./buffer";
 import { bigintReplacer } from "./json";
-import type { FlushEnvelope, GatewayConfig } from "./types";
+import type { FlushEnvelope, GatewayConfig, HandlePushResult } from "./types";
 
 export type { SyncPush, SyncPull, SyncResponse };
 
@@ -68,10 +67,9 @@ export class SyncGateway {
 	 * @returns A `Result` with the new server HLC and accepted count,
 	 *          or a `ClockDriftError` if the client clock is too far ahead.
 	 */
-	handlePush(
-		msg: SyncPush,
-	): Result<{ serverHlc: HLCTimestamp; accepted: number }, ClockDriftError | SchemaError> {
+	handlePush(msg: SyncPush): Result<HandlePushResult, ClockDriftError | SchemaError> {
 		let accepted = 0;
+		const ingested: RowDelta[] = [];
 
 		for (const delta of msg.deltas) {
 			// Check for idempotent re-push
@@ -102,17 +100,19 @@ export class SyncGateway {
 				const resolved = resolveLWW(existing, delta);
 				if (resolved.ok) {
 					this.buffer.append(resolved.value);
+					ingested.push(resolved.value);
 				}
 				// If resolution fails (should not happen with LWW on same row), skip
 			} else {
 				this.buffer.append(delta);
+				ingested.push(delta);
 			}
 
 			accepted++;
 		}
 
 		const serverHlc = this.hlc.now();
-		return Ok({ serverHlc, accepted });
+		return Ok({ serverHlc, accepted, deltas: ingested });
 	}
 
 	/**

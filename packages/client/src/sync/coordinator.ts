@@ -1,4 +1,4 @@
-import { HLC, LWWResolver } from "@lakesync/core";
+import { HLC, type HLCTimestamp, LWWResolver, type RowDelta } from "@lakesync/core";
 import type { LocalDB } from "../db/local-db";
 import { IDBQueue } from "../queue/idb-queue";
 import type { SyncQueue } from "../queue/types";
@@ -33,10 +33,15 @@ export interface SyncCoordinatorConfig {
 	syncMode?: SyncMode;
 	/** Auto-sync interval in milliseconds. Defaults to 10000 (10 seconds). */
 	autoSyncIntervalMs?: number;
+	/** Polling interval when realtime transport is active (heartbeat). Defaults to 60000 (60 seconds). */
+	realtimeHeartbeatMs?: number;
 }
 
 /** Auto-sync interval in milliseconds (every 10 seconds) */
 const AUTO_SYNC_INTERVAL_MS = 10_000;
+
+/** Auto-sync heartbeat interval when realtime is active (every 60 seconds) */
+const REALTIME_HEARTBEAT_MS = 60_000;
 
 /**
  * Coordinates local mutations (via SyncTracker) with gateway push/pull.
@@ -55,6 +60,7 @@ export class SyncCoordinator {
 	private readonly maxRetries: number;
 	private readonly syncMode: SyncMode;
 	private readonly autoSyncIntervalMs: number;
+	private readonly realtimeHeartbeatMs: number;
 	private lastSyncedHlc = HLC.encode(0, 0);
 	private _lastSyncTime: Date | null = null;
 	private syncIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -75,7 +81,15 @@ export class SyncCoordinator {
 		this.maxRetries = config?.maxRetries ?? 10;
 		this.syncMode = config?.syncMode ?? "full";
 		this.autoSyncIntervalMs = config?.autoSyncIntervalMs ?? AUTO_SYNC_INTERVAL_MS;
+		this.realtimeHeartbeatMs = config?.realtimeHeartbeatMs ?? REALTIME_HEARTBEAT_MS;
 		this.tracker = new SyncTracker(db, this.queue, this.hlc, this._clientId);
+
+		// Register broadcast handler for realtime transports
+		if (this.transport.onBroadcast) {
+			this.transport.onBroadcast((deltas, serverHlc) => {
+				void this.handleBroadcast(deltas, serverHlc);
+			});
+		}
 	}
 
 	/** Register an event listener */
@@ -176,6 +190,32 @@ export class SyncCoordinator {
 		return 0;
 	}
 
+	/**
+	 * Handle a server-initiated broadcast of deltas.
+	 *
+	 * Applies the deltas using the same conflict resolution and idempotency
+	 * logic as a regular pull. Advances `lastSyncedHlc` and emits `onChange`.
+	 */
+	private async handleBroadcast(deltas: RowDelta[], serverHlc: HLCTimestamp): Promise<void> {
+		if (deltas.length === 0) return;
+
+		try {
+			const applyResult = await applyRemoteDeltas(this.db, deltas, this.resolver, this.queue);
+
+			if (applyResult.ok) {
+				if (HLC.compare(serverHlc, this.lastSyncedHlc) > 0) {
+					this.lastSyncedHlc = serverHlc;
+				}
+				this._lastSyncTime = new Date();
+				if (applyResult.value > 0) {
+					this.emit("onChange", applyResult.value);
+				}
+			}
+		} catch (err) {
+			this.emit("onError", err instanceof Error ? err : new Error(String(err)));
+		}
+	}
+
 	/** Get the queue depth */
 	async queueDepth(): Promise<number> {
 		const result = await this.queue.depth();
@@ -197,9 +237,17 @@ export class SyncCoordinator {
 	 * Synchronises (push + pull) on tab focus and every 10 seconds.
 	 */
 	startAutoSync(): void {
+		// Connect persistent transport (e.g. WebSocket)
+		this.transport.connect?.();
+
+		// When realtime is active, use a longer polling interval as heartbeat
+		const intervalMs = this.transport.supportsRealtime
+			? this.realtimeHeartbeatMs
+			: this.autoSyncIntervalMs;
+
 		this.syncIntervalId = setInterval(() => {
 			void this.syncOnce();
-		}, this.autoSyncIntervalMs);
+		}, intervalMs);
 
 		this.visibilityHandler = () => {
 			if (typeof document !== "undefined" && document.visibilityState === "visible") {
@@ -267,5 +315,7 @@ export class SyncCoordinator {
 			}
 			this.visibilityHandler = null;
 		}
+		// Disconnect persistent transport (e.g. WebSocket)
+		this.transport.disconnect?.();
 	}
 }

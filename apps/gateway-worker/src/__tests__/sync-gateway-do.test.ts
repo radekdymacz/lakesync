@@ -130,7 +130,7 @@ describe("SyncGatewayDO", () => {
 			resetGatewayMocks();
 			mockHandlePush.mockReturnValue({
 				ok: true,
-				value: { accepted: 1, serverHlc: BigInt(1234567890) },
+				value: { accepted: 1, serverHlc: BigInt(1234567890), deltas: [] },
 			});
 
 			const DO = createDO();
@@ -538,7 +538,7 @@ describe("SyncGatewayDO", () => {
 
 			mockHandlePush.mockReturnValue({
 				ok: true,
-				value: { accepted: 0, serverHlc: BigInt(100) },
+				value: { accepted: 0, serverHlc: BigInt(100), deltas: [] },
 			});
 
 			const mockedEncodeSyncResponse = vi.mocked(encodeSyncResponse);
@@ -782,7 +782,7 @@ describe("SyncGatewayDO", () => {
 			const bigHlc = BigInt("281474976710656"); // a realistic HLC value
 			mockHandlePush.mockReturnValue({
 				ok: true,
-				value: { accepted: 1, serverHlc: bigHlc },
+				value: { accepted: 1, serverHlc: bigHlc, deltas: [] },
 			});
 
 			const DO = createDO();
@@ -826,7 +826,7 @@ describe("SyncGatewayDO", () => {
 				expect(typeof msg.lastSeenHlc).toBe("bigint");
 				return {
 					ok: true,
-					value: { accepted: 0, serverHlc: BigInt(0) },
+					value: { accepted: 0, serverHlc: BigInt(0), deltas: [] },
 				};
 			});
 

@@ -66,21 +66,28 @@ class SyncCoordinator {
 
 ```ts
 interface SyncCoordinatorConfig {
-  tracker: SyncTracker;
-  transport: SyncTransport;
+  queue?: SyncQueue;
+  hlc?: HLC;
+  clientId?: string;
+  maxRetries?: number;
   syncMode?: SyncMode;
-  intervalMs?: number;
+  autoSyncIntervalMs?: number;       // default 10000 (10s)
+  realtimeHeartbeatMs?: number;       // default 60000 (60s)
 }
 ```
+
+- **`autoSyncIntervalMs`** — Polling interval for HTTP transports. Default 10 seconds.
+- **`realtimeHeartbeatMs`** — Polling interval when a realtime transport is active. Default 60 seconds. Acts as a safety net for deltas missed during brief disconnects.
 
 ### `SyncMode`
 
 ```ts
-type SyncMode = "auto" | "manual";
+type SyncMode = "full" | "pushOnly" | "pullOnly";
 ```
 
-- **`auto`** — Syncs on a 10-second interval and on visibility change.
-- **`manual`** — Only syncs when `push()` or `pull()` are called explicitly.
+- **`full`** — Push and pull on each sync cycle (default).
+- **`pushOnly`** — Only push local deltas. Useful for write-only producers.
+- **`pullOnly`** — Only pull remote deltas. Useful for read-only consumers.
 
 ## Transports
 
@@ -88,11 +95,22 @@ type SyncMode = "auto" | "manual";
 
 ```ts
 interface SyncTransport {
-  push(deltas: Delta[]): Promise<Result<{ serverHlc: HLCTimestamp }, string>>;
-  pull(since: HLCTimestamp): Promise<Result<{ deltas: Delta[] }, string>>;
-  checkpoint?(): Promise<Result<CheckpointResponse, string>>;
+  push(msg: SyncPush): Promise<Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>>;
+  pull(msg: SyncPull): Promise<Result<SyncResponse, LakeSyncError>>;
+  checkpoint?(): Promise<Result<CheckpointResponse | null, LakeSyncError>>;
+
+  /** Whether this transport supports real-time server push. */
+  readonly supportsRealtime?: boolean;
+  /** Register callback for server-initiated broadcasts. */
+  onBroadcast?(callback: (deltas: RowDelta[], serverHlc: HLCTimestamp) => void): void;
+  /** Connect persistent transport (e.g. open WebSocket). */
+  connect?(): void;
+  /** Disconnect persistent transport (e.g. close WebSocket). */
+  disconnect?(): void;
 }
 ```
+
+The optional realtime members (`supportsRealtime`, `onBroadcast`, `connect`, `disconnect`) are implemented by `WebSocketTransport`. Polling transports (`HttpTransport`, `LocalTransport`) ignore them.
 
 ### `LocalTransport`
 
@@ -119,6 +137,41 @@ interface HttpTransportConfig {
   getToken: () => Promise<string>;
 }
 ```
+
+### `WebSocketTransport`
+
+Real-time transport using a persistent WebSocket connection. Supports server-initiated broadcast for sub-second sync latency.
+
+```ts
+class WebSocketTransport implements SyncTransport {
+  constructor(config: WebSocketTransportConfig);
+
+  /** Whether the WebSocket is currently connected. */
+  readonly connected: boolean;
+  /** Always true — this transport supports real-time. */
+  readonly supportsRealtime: boolean;
+
+  connect(): void;
+  disconnect(): void;
+  onBroadcast(callback: (deltas: RowDelta[], serverHlc: HLCTimestamp) => void): void;
+}
+
+interface WebSocketTransportConfig {
+  url: string;
+  token: string;
+  onBroadcast?: (deltas: RowDelta[], serverHlc: HLCTimestamp) => void;
+  reconnectBaseMs?: number;   // default 1000
+  reconnectMaxMs?: number;    // default 30000
+  httpConfig?: HttpTransportConfig;
+}
+```
+
+- **`url`** — WebSocket endpoint, e.g. `"wss://gateway.example.com/sync/gw-1/ws"`.
+- **`token`** — JWT token, passed as `?token=` query parameter (browser WebSocket cannot set headers).
+- **`httpConfig`** — When provided, `checkpoint()` delegates to an internal `HttpTransport`. Without it, checkpoint returns `null`.
+- **Auto-reconnect** — On disconnect, reconnects with exponential backoff (1s base, 30s max). Resets on successful connection.
+
+See [Real-Time Sync](/docs/real-time) for a full guide.
 
 ## Queues
 

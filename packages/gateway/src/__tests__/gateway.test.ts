@@ -643,6 +643,107 @@ describe("SyncGateway", () => {
 		}
 	});
 
+	it("handlePush returns ingested deltas", () => {
+		const gw = new SyncGateway(defaultConfig);
+		const delta = makeDelta({ hlc: hlcLow, deltaId: "delta-ingest" });
+
+		const result = gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta],
+			lastSeenHlc: hlcLow,
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.accepted).toBe(1);
+			expect(result.value.deltas).toHaveLength(1);
+			expect(result.value.deltas[0]?.deltaId).toBe("delta-ingest");
+		}
+	});
+
+	it("handlePush excludes idempotent re-pushes from returned deltas", () => {
+		const gw = new SyncGateway(defaultConfig);
+		const delta = makeDelta({ hlc: hlcLow, deltaId: "delta-idem" });
+
+		// First push
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta],
+			lastSeenHlc: hlcLow,
+		});
+
+		// Second push with same deltaId
+		const result = gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta],
+			lastSeenHlc: hlcLow,
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.accepted).toBe(1);
+			// Re-push should NOT appear in returned deltas
+			expect(result.value.deltas).toHaveLength(0);
+		}
+	});
+
+	it("handlePush returns resolved delta on LWW conflict", () => {
+		const gw = new SyncGateway(defaultConfig);
+
+		const d1 = makeDelta({
+			hlc: hlcLow,
+			rowId: "row-1",
+			clientId: "client-a",
+			deltaId: "delta-old",
+			columns: [{ column: "title", value: "Old" }],
+		});
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [d1],
+			lastSeenHlc: hlcLow,
+		});
+
+		const d2 = makeDelta({
+			hlc: hlcHigh,
+			rowId: "row-1",
+			clientId: "client-b",
+			deltaId: "delta-new",
+			columns: [{ column: "title", value: "New" }],
+		});
+		const result = gw.handlePush({
+			clientId: "client-b",
+			deltas: [d2],
+			lastSeenHlc: hlcHigh,
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.deltas).toHaveLength(1);
+			// The resolved delta should reflect the higher HLC winner
+			expect(result.value.deltas[0]?.hlc).toBe(hlcHigh);
+		}
+	});
+
+	it("handlePush returns multiple ingested deltas in batch", () => {
+		const gw = new SyncGateway(defaultConfig);
+
+		const d1 = makeDelta({ hlc: hlcLow, rowId: "row-1", deltaId: "d1" });
+		const d2 = makeDelta({ hlc: hlcMid, rowId: "row-2", deltaId: "d2" });
+		const d3 = makeDelta({ hlc: hlcHigh, rowId: "row-3", deltaId: "d3" });
+
+		const result = gw.handlePush({
+			clientId: "client-a",
+			deltas: [d1, d2, d3],
+			lastSeenHlc: hlcLow,
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.accepted).toBe(3);
+			expect(result.value.deltas).toHaveLength(3);
+		}
+	});
+
 	it("handlePush returns schema error mid-batch but earlier deltas remain in buffer", () => {
 		const schema: TableSchema = {
 			table: "todos",

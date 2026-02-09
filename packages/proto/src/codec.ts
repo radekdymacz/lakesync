@@ -175,6 +175,62 @@ export interface SyncResponsePayload {
 }
 
 // ---------------------------------------------------------------------------
+// Wire tags for binary framing
+// ---------------------------------------------------------------------------
+
+/** Tag byte for SyncPush frames. */
+export const TAG_SYNC_PUSH = 0x01;
+
+/** Tag byte for SyncPull frames. */
+export const TAG_SYNC_PULL = 0x02;
+
+/** Tag byte for server-initiated broadcast frames. */
+export const TAG_BROADCAST = 0x03;
+
+// ---------------------------------------------------------------------------
+// Broadcast frame encode / decode
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode a broadcast frame: tag `0x03` + SyncResponse proto bytes.
+ *
+ * Used by the server to push deltas to connected WebSocket clients.
+ *
+ * @param response - The SyncResponse payload to broadcast.
+ * @returns A `Result` containing the framed binary, or a `CodecError` on failure.
+ */
+export function encodeBroadcastFrame(
+	response: SyncResponsePayload,
+): Result<Uint8Array, CodecError> {
+	const encoded = encodeSyncResponse(response);
+	if (!encoded.ok) return encoded;
+	const frame = new Uint8Array(1 + encoded.value.length);
+	frame[0] = TAG_BROADCAST;
+	frame.set(encoded.value, 1);
+	return Ok(frame);
+}
+
+/**
+ * Decode a broadcast frame: strip tag `0x03` and decode the SyncResponse.
+ *
+ * @param frame - The full framed binary (tag byte + proto payload).
+ * @returns A `Result` containing the SyncResponse payload, or a `CodecError` on failure.
+ */
+export function decodeBroadcastFrame(frame: Uint8Array): Result<SyncResponsePayload, CodecError> {
+	if (frame.length < 2) {
+		return Err(new CodecError("Broadcast frame too short"));
+	}
+	if (frame[0] !== TAG_BROADCAST) {
+		return Err(
+			new CodecError(
+				`Expected broadcast tag 0x03, got 0x${frame[0]!.toString(16).padStart(2, "0")}`,
+			),
+		);
+	}
+	return decodeSyncResponse(frame.subarray(1));
+}
+
+// ---------------------------------------------------------------------------
 // RowDelta encode / decode
 // ---------------------------------------------------------------------------
 

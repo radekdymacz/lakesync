@@ -198,6 +198,26 @@ sequenceDiagram
     Note over A,B: Each client sees only their data
 ```
 
+## Real-Time Sync
+
+When a client pushes deltas, the gateway broadcasts them to all other connected WebSocket clients immediately — filtered by each client's sync rules. HTTP polling remains as a fallback.
+
+```mermaid
+sequenceDiagram
+    participant A as Client A (WS)
+    participant GW as Gateway
+    participant B as Client B (WS)
+
+    A->>GW: push delta
+    GW-->>A: SyncResponse
+    GW-->>B: broadcast (< 100ms)
+    Note over B: Applied via same LWW<br/>conflict resolution as pull
+```
+
+The `WebSocketTransport` uses the same binary protobuf protocol as HTTP with tag-based framing (`0x01` push, `0x02` pull, `0x03` broadcast). It reconnects automatically on disconnect with exponential backoff. When realtime is active, polling drops to a 60-second heartbeat to catch missed deltas.
+
+See [Real-Time Sync](/docs/real-time) for setup and configuration details.
+
 ## Checkpoints
 
 For initial sync (when `lastSyncedHlc === 0`), the client downloads a **checkpoint** — a complete snapshot of the current state. Checkpoints are:

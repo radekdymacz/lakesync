@@ -3,6 +3,16 @@ import type { NessieCatalogueClient } from "@lakesync/catalogue";
 import type { HLCTimestamp, RowDelta, TableSchema } from "@lakesync/core";
 import type { SchemaManager } from "./schema-manager";
 
+/** Result returned by {@link SyncGateway.handlePush}. */
+export interface HandlePushResult {
+	/** Server HLC after processing the push. */
+	serverHlc: HLCTimestamp;
+	/** Number of deltas accepted (including idempotent re-pushes). */
+	accepted: number;
+	/** Deltas actually ingested (excludes idempotent re-pushes). */
+	deltas: RowDelta[];
+}
+
 /** Configuration for the sync gateway */
 export interface GatewayConfig {
 	/** Unique gateway identifier */

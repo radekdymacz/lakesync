@@ -13,6 +13,7 @@ import {
 	decodeSyncPull,
 	decodeSyncPush,
 	decodeSyncResponse,
+	encodeBroadcastFrame,
 	encodeSyncResponse,
 } from "@lakesync/proto";
 import type { Env } from "./env";
@@ -293,6 +294,9 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		}
 
 		await this.scheduleFlushAlarm(gateway);
+
+		// Broadcast ingested deltas to other connected WebSocket clients
+		await this.broadcastDeltas(result.value.deltas, result.value.serverHlc, body.clientId);
 
 		return jsonResponse(result.value);
 	}
@@ -643,6 +647,13 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				hasMore: false,
 			};
 			this.sendSyncResponse(ws, response);
+
+			// Broadcast ingested deltas to other connected WebSocket clients
+			await this.broadcastDeltas(
+				pushResult.value.deltas,
+				pushResult.value.serverHlc,
+				decoded.value.clientId,
+			);
 		} else if (tag === 0x02) {
 			// SyncPull — apply sync rules using stored claims
 			const decoded = decodeSyncPull(payload);
@@ -689,6 +700,68 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 */
 	async webSocketError(_ws: WebSocket, _error: unknown): Promise<void> {
 		logger.error("ws_error", {});
+	}
+
+	// -----------------------------------------------------------------------
+	// WebSocket broadcast
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Broadcast ingested deltas to all connected WebSocket clients except the sender.
+	 *
+	 * For each connected socket, applies sync rules filtering based on the
+	 * stored claims, encodes a broadcast frame, and sends it. Errors on
+	 * individual sockets are silently caught (the socket may have closed).
+	 */
+	private async broadcastDeltas(
+		deltas: import("@lakesync/core").RowDelta[],
+		serverHlc: import("@lakesync/core").HLCTimestamp,
+		excludeClientId: string,
+	): Promise<void> {
+		if (deltas.length === 0) return;
+
+		const sockets = this.ctx.getWebSockets();
+		if (sockets.length === 0) return;
+
+		// Load sync rules once for all sockets
+		const rules = await this.loadSyncRules();
+
+		for (const ws of sockets) {
+			try {
+				const attachment = (
+					ws as unknown as {
+						deserializeAttachment: () => { claims?: ResolvedClaims; clientId?: string } | null;
+					}
+				).deserializeAttachment();
+
+				// Skip the sender
+				if (attachment?.clientId === excludeClientId) continue;
+
+				// Apply sync rules filtering per-client
+				let filtered = deltas;
+				if (rules && rules.buckets.length > 0) {
+					const context: SyncRulesContext = {
+						claims: attachment?.claims ?? {},
+						rules,
+					};
+					filtered = filterDeltas(deltas, context);
+				}
+
+				if (filtered.length === 0) continue;
+
+				const frame = encodeBroadcastFrame({
+					deltas: filtered,
+					serverHlc,
+					hasMore: false,
+				});
+
+				if (!frame.ok) continue;
+
+				ws.send(frame.value);
+			} catch {
+				// Socket may have closed — silently skip
+			}
+		}
 	}
 
 	// -----------------------------------------------------------------------

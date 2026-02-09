@@ -29,6 +29,7 @@ Two interfaces abstract all data sources. Adapters are both sources and destinat
 - **Adapter-sourced pull** — Pull data from named source adapters (BigQuery, Postgres, etc.) directly into local SQLite. The gateway queries the adapter and applies sync rules before returning filtered deltas.
 - **Sync rules DSL** — Declarative bucket-based filtering with `eq`/`in`/`neq`/`gt`/`lt`/`gte`/`lte` operators and `jwt:` claim references. Pure function evaluation via `filterDeltas()`.
 - **Column-level LWW** — Conflicts resolved per-column, not per-row. Concurrent edits to different fields never overwrite each other.
+- **Real-time sync** — WebSocket-based server-initiated broadcast. When any client pushes, others receive deltas in sub-100ms. Auto-reconnect with exponential backoff. HTTP polling as fallback.
 - **Offline support** — Local SQLite via sql.js WASM. Persistent IndexedDB outbox survives page refreshes and process crashes. Automatic drain on reconnect.
 - **Hybrid Logical Clocks** — Branded `HLCTimestamp` bigint (48-bit wall clock + 16-bit counter). Causal ordering with deterministic `clientId` tiebreaking.
 - **Result-based error handling** — Public APIs return `Result<T, E>` instead of throwing.
@@ -40,7 +41,8 @@ Two interfaces abstract all data sources. Adapters are both sources and destinat
 | `@lakesync/core` | HLC, Delta, Result, conflict resolution, sync rules, validation |
 | `@lakesync/client` | LocalDB (sql.js), SyncCoordinator, transports, queues |
 | `@lakesync/gateway` | In-memory sync gateway with push/pull protocol |
-| `@lakesync/proto` | Protocol Buffer encoding/decoding for deltas |
+| `@lakesync/gateway-server` | Self-hosted gateway server (Node.js/Bun) with HTTP + WebSocket |
+| `@lakesync/proto` | Protocol Buffer encoding/decoding for deltas and broadcast frames |
 | `@lakesync/adapter` | Storage adapters (S3/R2, Postgres, MySQL, BigQuery, Composite) |
 | `@lakesync/parquet` | Parquet file reader/writer |
 | `@lakesync/catalogue` | Iceberg catalogue management |

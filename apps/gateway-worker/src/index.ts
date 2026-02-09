@@ -74,6 +74,15 @@ const ROUTE_TABLE: RouteEntry[] = [
 		},
 	},
 	{
+		// WebSocket /sync/:gatewayId/ws
+		pattern: /^\/sync\/([^/]+)\/ws$/,
+		extract: (match) => {
+			const gatewayId = match[1];
+			if (!gatewayId) return null;
+			return { gatewayId, doPath: "/ws", doMethod: "GET", forwardBody: false };
+		},
+	},
+	{
 		// POST /admin/flush/:gatewayId
 		pattern: /^\/admin\/flush\/([^/]+)$/,
 		extract: (match) => {
@@ -130,7 +139,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 	}
 
 	// ── Authentication ──────────────────────────────────────────────
-	const token = extractBearerToken(request);
+	const token = extractBearerToken(request) ?? url.searchParams.get("token");
 	if (!token) {
 		logger.warn("auth_failed", { reason: "Missing Bearer token" });
 		return unauthorised("Missing Bearer token");
@@ -238,6 +247,20 @@ async function handleShardedRoute(
 	// Checkpoint — fan out to all shards (not yet implemented as sharded)
 	// For now, route to the default shard
 	if (route.doPath === "/checkpoint") {
+		const id = env.SYNC_GATEWAY.idFromName(config.default);
+		const stub = env.SYNC_GATEWAY.get(id);
+		const doUrl = new URL(request.url);
+		doUrl.pathname = route.doPath;
+		return stub.fetch(
+			new Request(doUrl.toString(), {
+				method: route.doMethod ?? request.method,
+				headers: request.headers,
+			}),
+		);
+	}
+
+	// WebSocket — route to default shard (cross-shard broadcasting is future work)
+	if (route.doPath === "/ws") {
 		const id = env.SYNC_GATEWAY.idFromName(config.default);
 		const stub = env.SYNC_GATEWAY.get(id);
 		const doUrl = new URL(request.url);
