@@ -218,6 +218,27 @@ The `WebSocketTransport` uses the same binary protobuf protocol as HTTP with tag
 
 See [Real-Time Sync](/docs/real-time) for setup and configuration details.
 
+## Source Polling Ingest
+
+External databases (Neon, Postgres, MySQL) may have data written by services outside LakeSync. The **Source Polling Ingest** system bridges that gap — it periodically queries source tables, detects changes, and pushes them through the gateway as deltas.
+
+```mermaid
+sequenceDiagram
+    participant DB as Source DB
+    participant SP as SourcePoller
+    participant GW as Gateway
+    participant C as Client
+
+    SP->>DB: poll every N seconds
+    DB-->>SP: changed rows
+    SP->>GW: handlePush (direct)
+    GW-->>C: broadcast / pull
+```
+
+Two change detection strategies are available: **cursor** (fast, requires a monotonically increasing column like `updated_at`) and **diff** (slower, detects hard deletes via full-table comparison). The poller runs inside `GatewayServer` — no HTTP hop, no auth needed. Detected changes flow through the same conflict resolution and sync rules as client-originated deltas.
+
+See [Source Polling Ingest](/docs/source-polling) for setup, configuration, and strategy comparison.
+
 ## Checkpoints
 
 For initial sync (when `lastSyncedHlc === 0`), the client downloads a **checkpoint** — a complete snapshot of the current state. Checkpoints are:

@@ -20,6 +20,8 @@ import {
 } from "@lakesync/proto";
 import { WebSocketServer, type WebSocket as WsWebSocket } from "ws";
 import { type AuthClaims, verifyToken } from "./auth";
+import { SourcePoller } from "./ingest/poller";
+import type { IngestSourceConfig } from "./ingest/types";
 import { type DeltaPersistence, MemoryPersistence, SqlitePersistence } from "./persistence";
 
 // ---------------------------------------------------------------------------
@@ -48,6 +50,8 @@ export interface GatewayServerConfig {
 	persistence?: "memory" | "sqlite";
 	/** Path to the SQLite file when `persistence` is "sqlite" (default "./lakesync-buffer.sqlite"). */
 	sqlitePath?: string;
+	/** Polling ingest sources. Each source is polled independently. */
+	ingestSources?: IngestSourceConfig[];
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +196,7 @@ export class GatewayServer {
 	private resolvedPort = 0;
 	private wss: WebSocketServer | null = null;
 	private wsClients = new Map<WsWebSocket, { clientId: string; claims: Record<string, unknown> }>();
+	private pollers: SourcePoller[] = [];
 
 	constructor(config: GatewayServerConfig) {
 		this.config = {
@@ -259,6 +264,15 @@ export class GatewayServer {
 		this.flushTimer = setInterval(() => {
 			this.periodicFlush();
 		}, this.config.flushIntervalMs);
+
+		// Start ingest pollers
+		if (this.config.ingestSources) {
+			for (const source of this.config.ingestSources) {
+				const poller = new SourcePoller(source, this.gateway);
+				poller.start();
+				this.pollers.push(poller);
+			}
+		}
 	}
 
 	/**
@@ -451,6 +465,12 @@ export class GatewayServer {
 
 	/** Stop the server and clear the flush timer. */
 	async stop(): Promise<void> {
+		// Stop ingest pollers
+		for (const poller of this.pollers) {
+			poller.stop();
+		}
+		this.pollers = [];
+
 		if (this.flushTimer) {
 			clearInterval(this.flushTimer);
 			this.flushTimer = null;

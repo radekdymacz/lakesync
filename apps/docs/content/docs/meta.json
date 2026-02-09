@@ -3,6 +3,7 @@
 		"getting-started",
 		"architecture",
 		"real-time",
+		"source-polling",
 		"...api"
 	]
 }
