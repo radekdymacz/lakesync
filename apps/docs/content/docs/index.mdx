@@ -7,7 +7,7 @@ LakeSync is an open-source TypeScript sync engine. Pluggable adapters connect to
 
 ## How It Works
 
-1. **Adapters** connect to data sources — Postgres, BigQuery, S3/R2, or anything you implement the interface for
+1. **Adapters** connect to data sources — Postgres, BigQuery, S3/R2, Jira, or anything you implement the interface for
 2. **Sync rules** define what data flows to each consumer — bucket-based filtering with `eq`/`in` operators and JWT claim references
 3. **The gateway** evaluates rules and routes data between adapters
 4. **Local SQLite** gives each consumer a queryable working set with zero-latency reads and offline support
@@ -21,6 +21,7 @@ Two interfaces abstract all data sources. Adapters are both sources and destinat
 | **Postgres / MySQL** | `DatabaseAdapter` | `insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema` |
 | **BigQuery** | `DatabaseAdapter` | Idempotent MERGE inserts, INT64 HLC precision, clustered by `table` + `hlc` |
 | **S3 / R2 (Iceberg)** | `LakeAdapter` | `putObject`, `getObject`, `listObjects`, `deleteObject` — Parquet + Iceberg table format |
+| **Jira Cloud** | API Connector | Issues, comments, and projects via `@lakesync/connector-jira` |
 | **Custom** | Either | Implement the interface for any readable data source. `CompositeAdapter` routes to multiple backends. |
 
 ## Key Features
@@ -44,6 +45,7 @@ Two interfaces abstract all data sources. Adapters are both sources and destinat
 | `@lakesync/gateway-server` | Self-hosted gateway server (Node.js/Bun) with HTTP + WebSocket |
 | `@lakesync/proto` | Protocol Buffer encoding/decoding for deltas and broadcast frames |
 | `@lakesync/adapter` | Storage adapters (S3/R2, Postgres, MySQL, BigQuery, Composite) |
+| `@lakesync/connector-jira` | Jira Cloud source connector — polls issues, comments, and projects |
 | `@lakesync/parquet` | Parquet file reader/writer |
 | `@lakesync/catalogue` | Iceberg catalogue management |
 | `@lakesync/compactor` | Compaction, maintenance, and checkpoint generation |

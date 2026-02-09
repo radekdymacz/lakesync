@@ -5,6 +5,7 @@ export type {
 	ConnectorIngestConfig,
 	ConnectorIngestTable,
 	ConnectorType,
+	JiraConnectorConfig,
 	MySQLConnectorConfig,
 	PostgresConnectorConfig,
 } from "./types";

@@ -198,6 +198,17 @@ function sendError(
 }
 
 // ---------------------------------------------------------------------------
+// Poller interface — shared lifecycle contract for all pollers
+// ---------------------------------------------------------------------------
+
+/** Common lifecycle interface for source pollers (SQL or API-based). */
+interface Poller {
+	start(): void;
+	stop(): void;
+	readonly isRunning: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // GatewayServer
 // ---------------------------------------------------------------------------
 
@@ -234,7 +245,7 @@ export class GatewayServer {
 	private pollers: SourcePoller[] = [];
 	private connectorConfigs = new Map<string, ConnectorConfig>();
 	private connectorAdapters = new Map<string, DatabaseAdapter>();
-	private connectorPollers = new Map<string, SourcePoller>();
+	private connectorPollers = new Map<string, Poller>();
 
 	constructor(config: GatewayServerConfig) {
 		this.config = {
@@ -899,6 +910,23 @@ export class GatewayServer {
 
 		if (this.connectorConfigs.has(config.name)) {
 			sendError(res, `Connector "${config.name}" already exists`, 409, corsH);
+			return;
+		}
+
+		// Jira connectors use their own API-based poller — no DatabaseAdapter needed
+		if (config.type === "jira" && config.jira) {
+			try {
+				const { JiraSourcePoller } = await import("@lakesync/connector-jira");
+				const ingestConfig = config.ingest ? { intervalMs: config.ingest.intervalMs } : undefined;
+				const poller = new JiraSourcePoller(config.jira, ingestConfig, config.name, this.gateway);
+				poller.start();
+				this.connectorPollers.set(config.name, poller);
+				this.connectorConfigs.set(config.name, config);
+				sendJson(res, { registered: true, name: config.name }, 200, corsH);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				sendError(res, `Failed to load Jira connector: ${message}`, 500, corsH);
+			}
 			return;
 		}
 

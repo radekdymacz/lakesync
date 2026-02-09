@@ -33,6 +33,7 @@ Any data source you can read from becomes a LakeSync adapter. Adapters are both 
 | **Postgres / MySQL** | `DatabaseAdapter` | Operational OLTP data, familiar SQL tooling |
 | **BigQuery** | `DatabaseAdapter` | Analytics-scale queries, managed and serverless |
 | **S3 / R2 (Iceberg)** | `LakeAdapter` | Massive scale on object storage, open format |
+| **Jira Cloud** | API Connector | Sync issues, comments, and projects from Jira |
 | **Anything else** | Either interface | CloudWatch, Stripe, custom APIs — implement the interface |
 
 The `DatabaseAdapter` interface (`insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema`) handles SQL-like sources. The `LakeAdapter` interface (`putObject`, `getObject`, `listObjects`, `deleteObject`) handles object storage. The `CompositeAdapter` routes data to multiple backends simultaneously.
@@ -220,7 +221,7 @@ See [Real-Time Sync](/docs/real-time) for setup and configuration details.
 
 ## Source Polling Ingest
 
-External databases (Neon, Postgres, MySQL) may have data written by services outside LakeSync. The **Source Polling Ingest** system bridges that gap — it periodically queries source tables, detects changes, and pushes them through the gateway as deltas.
+External databases (Neon, Postgres, MySQL) and APIs (Jira) may have data written by services outside LakeSync. The **Source Polling Ingest** system bridges that gap — it periodically queries source tables or APIs, detects changes, and pushes them through the gateway as deltas.
 
 ```mermaid
 sequenceDiagram
@@ -235,9 +236,9 @@ sequenceDiagram
     GW-->>C: broadcast / pull
 ```
 
-Two change detection strategies are available: **cursor** (fast, requires a monotonically increasing column like `updated_at`) and **diff** (slower, detects hard deletes via full-table comparison). The poller runs inside `GatewayServer` — no HTTP hop, no auth needed. Detected changes flow through the same conflict resolution and sync rules as client-originated deltas.
+Two change detection strategies are available for database sources: **cursor** (fast, requires a monotonically increasing column like `updated_at`) and **diff** (slower, detects hard deletes via full-table comparison). API connectors like Jira use their own strategies internally. All pollers run inside `GatewayServer` — no HTTP hop, no auth needed. Detected changes flow through the same conflict resolution and sync rules as client-originated deltas.
 
-See [Source Polling Ingest](/docs/source-polling) for setup, configuration, and strategy comparison.
+See [Source Polling Ingest](/docs/source-polling) for database polling setup and [Dynamic Connectors](/docs/connectors) for API connectors like Jira.
 
 ## Checkpoints
 

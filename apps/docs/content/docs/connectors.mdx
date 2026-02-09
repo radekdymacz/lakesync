@@ -5,17 +5,22 @@ description: Add, remove, and list data sources at runtime via the admin API.
 
 ## Overview
 
-Connectors let you register external data sources at runtime — no server restart required. Each connector maps to a named source adapter in the gateway, and clients can pull data from it using the `source` query parameter.
+Connectors let you register external data sources at runtime — no server restart required. Every connector is managed programmatically via the admin REST API: register, list, and unregister connectors with simple HTTP calls. This makes it straightforward to automate connector management from scripts, CI/CD pipelines, or agent workflows.
+
+Each connector maps to a named source adapter in the gateway. Database connectors (Postgres, MySQL, BigQuery) let clients pull data using the `source` query parameter. API connectors (Jira) run their own pollers that push data into the gateway automatically.
 
 Supported connector types:
 
-| Type | Config Required |
-|------|----------------|
-| `postgres` | `connectionString` |
-| `mysql` | `connectionString` |
-| `bigquery` | `projectId`, `dataset` |
+| Type | Kind | Config Required |
+|------|------|----------------|
+| `postgres` | Database | `connectionString` |
+| `mysql` | Database | `connectionString` |
+| `bigquery` | Database | `projectId`, `dataset` |
+| `jira` | REST API | `domain`, `email`, `apiToken` |
 
-Connectors can optionally include an ingest configuration that starts a poller to automatically detect changes in the source database and push them through the gateway. See [Source Polling Ingest](/docs/source-polling) for details on change detection strategies.
+Database connectors can optionally include an ingest configuration that starts a poller to automatically detect changes in the source database and push them through the gateway. See [Source Polling Ingest](/docs/source-polling) for details on change detection strategies.
+
+API connectors like Jira define their own tables internally and poll automatically — no SQL queries or table configuration needed. Just provide the connection credentials and an optional poll interval.
 
 All connector routes require a JWT with `role: "admin"`.
 
@@ -26,7 +31,7 @@ interface ConnectorConfig {
   /** Unique connector name (used as the source adapter key). */
   name: string;
   /** Connector type — determines which adapter to create. */
-  type: "postgres" | "mysql" | "bigquery";
+  type: "postgres" | "mysql" | "bigquery" | "jira";
   /** PostgreSQL config (required when type is "postgres"). */
   postgres?: { connectionString: string };
   /** MySQL config (required when type is "mysql"). */
@@ -38,9 +43,19 @@ interface ConnectorConfig {
     keyFilename?: string;
     location?: string;
   };
+  /** Jira Cloud config (required when type is "jira"). */
+  jira?: {
+    domain: string;        // e.g. "mycompany" for mycompany.atlassian.net
+    email: string;         // for Basic auth
+    apiToken: string;      // paired with email
+    jql?: string;          // JQL filter to scope issue polling
+    includeComments?: boolean; // default true
+    includeProjects?: boolean; // default true
+  };
   /** Optional ingest polling configuration. */
   ingest?: {
-    tables: Array<{
+    /** Tables to poll (required for database connectors, ignored for Jira). */
+    tables?: Array<{
       table: string;
       query: string;
       rowIdColumn?: string;
@@ -48,12 +63,15 @@ interface ConnectorConfig {
         | { type: "cursor"; cursorColumn: string; lookbackMs?: number }
         | { type: "diff" };
     }>;
+    /** Poll interval in milliseconds. */
     intervalMs?: number;
   };
 }
 ```
 
 Validation is performed server-side via `validateConnectorConfig()`. Missing or invalid fields return a `400` response with a descriptive error message.
+
+For Jira connectors, the `ingest.tables` field is not required — Jira defines its tables internally (`jira_issues`, `jira_comments`, `jira_projects`). Only `intervalMs` is used from the ingest config.
 
 ## API Reference
 
@@ -63,7 +81,7 @@ Validation is performed server-side via `validateConnectorConfig()`. Missing or 
 POST /admin/connectors/:gatewayId
 ```
 
-Registers a new data source. Creates a database adapter from the provided configuration, adds it as a named source on the gateway, and optionally starts an ingest poller.
+Registers a new data source. For database connectors, creates a database adapter and adds it as a named source on the gateway. For API connectors like Jira, starts a dedicated poller that pushes data into the gateway automatically.
 
 **Headers:** `Authorization: Bearer <admin JWT>`
 **Body:** `ConnectorConfig` JSON
@@ -73,7 +91,7 @@ Registers a new data source. Creates a database adapter from the provided config
 { "registered": true, "name": "analytics-db" }
 ```
 
-**Example:**
+**Example (database connector):**
 
 ```bash
 curl -X POST https://gateway.example.com/admin/connectors/my-gw \
@@ -83,6 +101,25 @@ curl -X POST https://gateway.example.com/admin/connectors/my-gw \
     "name": "analytics-db",
     "type": "postgres",
     "postgres": { "connectionString": "postgres://user:pass@host/analytics" }
+  }'
+```
+
+**Example (Jira connector):**
+
+```bash
+curl -X POST https://gateway.example.com/admin/connectors/my-gw \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "jira-eng",
+    "type": "jira",
+    "jira": {
+      "domain": "mycompany",
+      "email": "bot@mycompany.com",
+      "apiToken": "ATATT3...",
+      "jql": "project = ENG"
+    },
+    "ingest": { "intervalMs": 30000 }
   }'
 ```
 
@@ -219,17 +256,140 @@ curl -X POST https://gateway.example.com/admin/connectors/my-gw \
 
 The diff strategy compares the full result set on each poll, detecting inserts, updates, and hard deletes. Use it for small tables where delete detection matters.
 
+### Jira Cloud
+
+Register a Jira connector to sync issues, comments, and projects into LakeSync. The Jira connector polls the Jira Cloud REST API — no SQL or table configuration needed.
+
+```bash
+curl -X POST https://gateway.example.com/admin/connectors/my-gw \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "jira-eng",
+    "type": "jira",
+    "jira": {
+      "domain": "mycompany",
+      "email": "bot@mycompany.com",
+      "apiToken": "ATATT3xFfGF0...",
+      "jql": "project = ENG",
+      "includeComments": true,
+      "includeProjects": true
+    },
+    "ingest": { "intervalMs": 30000 }
+  }'
+```
+
+Once registered, the Jira poller starts immediately and syncs three tables:
+
+| Table | Row ID | Description |
+|-------|--------|-------------|
+| `jira_issues` | Issue key (e.g. `ENG-42`) | Summary, status, priority, assignee, reporter, labels, timestamps |
+| `jira_comments` | `{issueKey}:{commentId}` | Comment body, author, timestamps |
+| `jira_projects` | Project key (e.g. `ENG`) | Name, type, lead |
+
+**How it works:**
+
+- **Issues** use a cursor strategy — on each poll, only issues updated since the last poll are fetched (via JQL `updated >= "date"`)
+- **Comments** are fetched per-issue and compared against an in-memory snapshot (diff strategy) to detect inserts and updates
+- **Projects** use a full diff strategy — the complete project list is compared against a snapshot to detect inserts, updates, and deletes
+
+All detected changes are pushed through the gateway and broadcast to connected clients, just like any other connector.
+
+**JQL filtering** — The `jql` field scopes which issues are polled. For example, `"project = ENG AND status != Done"` only syncs active Engineering issues. When omitted, all issues in the Jira instance are polled.
+
+**Pulling Jira data** — Once the Jira connector is polling, clients receive Jira data through the standard sync flow. Apply sync rules to filter which Jira data reaches each client:
+
+```json
+{
+  "buckets": [{
+    "name": "eng-issues",
+    "filters": [
+      { "column": "project_key", "op": "eq", "value": "ENG" }
+    ],
+    "tables": ["jira_issues", "jira_comments"]
+  }]
+}
+```
+
+## Programmatic Connector Management
+
+All connector operations are available via the admin REST API, making it straightforward to automate from scripts, CI/CD, or agent workflows. No server restart or configuration file changes are needed.
+
+**Register any connector type with a single HTTP call:**
+
+```bash
+# Database connector
+curl -X POST $GATEWAY_URL/admin/connectors/$GW_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "my-pg", "type": "postgres", "postgres": { "connectionString": "..." } }'
+
+# API connector
+curl -X POST $GATEWAY_URL/admin/connectors/$GW_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "my-jira", "type": "jira", "jira": { "domain": "co", "email": "...", "apiToken": "..." } }'
+```
+
+**List all registered connectors:**
+
+```bash
+curl $GATEWAY_URL/admin/connectors/$GW_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+**Remove a connector (stops poller, closes connections):**
+
+```bash
+curl -X DELETE $GATEWAY_URL/admin/connectors/$GW_ID/my-pg \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+**Configure sync rules (filter which data reaches each client):**
+
+```bash
+curl -X POST $GATEWAY_URL/admin/sync-rules/$GW_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "buckets": [{
+      "name": "team-data",
+      "filters": [{ "column": "project_key", "op": "eq", "value": "jwt:team" }],
+      "tables": ["jira_issues", "jira_comments"]
+    }]
+  }'
+```
+
+**Register table schemas:**
+
+```bash
+curl -X POST $GATEWAY_URL/admin/schema/$GW_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table": "jira_issues",
+    "columns": [
+      { "name": "key", "type": "string" },
+      { "name": "summary", "type": "string" },
+      { "name": "status", "type": "string" }
+    ]
+  }'
+```
+
+The full admin API surface — connectors, sync rules, schemas, flush — is designed for programmatic use. The gateway can be fully configured at runtime without touching any configuration files.
+
 ## Gateway Server vs Worker
 
 | Capability | Gateway Server (self-hosted) | Gateway Worker (Cloudflare) |
 |-----------|-----------------------------|-----------------------------|
 | Database connections | Creates live connections | Stores config only |
+| API connectors (Jira) | Starts API pollers automatically | Not supported |
 | Ingest polling | Starts pollers automatically | Not supported (no long-running processes) |
 | Connector storage | In-memory (lost on restart) | Durable Object storage (persistent) |
 
-**Gateway Server** (`@lakesync/gateway-server`) creates live database connections and starts ingest pollers when a connector is registered. The server must have network access to the source database.
+**Gateway Server** (`@lakesync/gateway-server`) creates live database connections and starts ingest pollers when a connector is registered. For API connectors like Jira, it starts dedicated pollers that communicate with the external API. The server must have network access to the source database or API.
 
-**Gateway Worker** (`gateway-worker` on Cloudflare Workers) stores connector configuration in the Durable Object but cannot create live database connections or run pollers — the Workers runtime does not support long-running processes or arbitrary TCP connections. Use the gateway server for connectors that require ingest polling.
+**Gateway Worker** (`gateway-worker` on Cloudflare Workers) stores connector configuration in the Durable Object but cannot create live database connections, run pollers, or communicate with external APIs — the Workers runtime does not support long-running processes or arbitrary TCP connections. Use the gateway server for connectors that require ingest polling or API access.
 
 ## Security
 

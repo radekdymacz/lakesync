@@ -50,6 +50,28 @@ const validWithDiffIngest = {
 	},
 };
 
+const validJira = {
+	name: "my-jira",
+	type: "jira",
+	jira: {
+		domain: "mycompany",
+		email: "bot@mycompany.com",
+		apiToken: "tok-123",
+	},
+};
+
+const validJiraWithIngest = {
+	name: "jira-polled",
+	type: "jira",
+	jira: {
+		domain: "mycompany",
+		email: "bot@mycompany.com",
+		apiToken: "tok-123",
+		jql: "project = ENG",
+	},
+	ingest: { intervalMs: 30000 },
+};
+
 describe("validateConnectorConfig", () => {
 	it("accepts valid postgres config", () => {
 		const result = validateConnectorConfig(validPostgres);
@@ -278,6 +300,83 @@ describe("validateConnectorConfig", () => {
 				],
 				intervalMs: -1,
 			},
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.message).toContain("intervalMs");
+		}
+	});
+
+	// ----- Jira connector -----
+
+	it("accepts valid jira config", () => {
+		const result = validateConnectorConfig(validJira);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.name).toBe("my-jira");
+			expect(result.value.type).toBe("jira");
+			expect(result.value.jira).toBeDefined();
+		}
+	});
+
+	it("accepts jira config with ingest (intervalMs only, no tables)", () => {
+		const result = validateConnectorConfig(validJiraWithIngest);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.ingest).toBeDefined();
+		}
+	});
+
+	it("rejects jira type without jira config", () => {
+		const result = validateConnectorConfig({ name: "x", type: "jira" });
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.message).toContain("jira");
+		}
+	});
+
+	it("rejects jira with empty domain", () => {
+		const result = validateConnectorConfig({
+			name: "x",
+			type: "jira",
+			jira: { domain: "", email: "a@b.com", apiToken: "tok" },
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.message).toContain("domain");
+		}
+	});
+
+	it("rejects jira with empty email", () => {
+		const result = validateConnectorConfig({
+			name: "x",
+			type: "jira",
+			jira: { domain: "co", email: "", apiToken: "tok" },
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.message).toContain("email");
+		}
+	});
+
+	it("rejects jira with empty apiToken", () => {
+		const result = validateConnectorConfig({
+			name: "x",
+			type: "jira",
+			jira: { domain: "co", email: "a@b.com", apiToken: "" },
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.message).toContain("apiToken");
+		}
+	});
+
+	it("rejects jira ingest with invalid intervalMs", () => {
+		const result = validateConnectorConfig({
+			name: "x",
+			type: "jira",
+			jira: { domain: "co", email: "a@b.com", apiToken: "tok" },
+			ingest: { intervalMs: -5 },
 		});
 		expect(result.ok).toBe(false);
 		if (!result.ok) {

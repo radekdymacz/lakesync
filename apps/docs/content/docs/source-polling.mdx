@@ -7,6 +7,8 @@ description: Poll external databases for changes and sync them into LakeSync aut
 
 LakeSync captures mutations from its own clients, but external databases (Neon, Postgres, MySQL) may have data written by other services. Source Polling Ingest bridges that gap — it periodically queries source tables, detects changes, converts them to deltas, and pushes them through the gateway. All connected clients then receive external data via sync rules, just like any other delta.
 
+This page covers SQL-based database polling. For API-based connectors like Jira that have their own built-in pollers, see [Dynamic Connectors](/docs/connectors).
+
 ```mermaid
 sequenceDiagram
     participant DB as Source DB (Neon, Postgres, etc.)

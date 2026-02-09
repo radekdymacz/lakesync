@@ -1,5 +1,5 @@
 /** Supported connector types. */
-export const CONNECTOR_TYPES = ["postgres", "mysql", "bigquery"] as const;
+export const CONNECTOR_TYPES = ["postgres", "mysql", "bigquery", "jira"] as const;
 
 /** Union of supported connector type strings. */
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
@@ -40,6 +40,22 @@ export interface ConnectorIngestTable {
 	strategy: { type: "cursor"; cursorColumn: string; lookbackMs?: number } | { type: "diff" };
 }
 
+/** Connection configuration for a Jira Cloud source. */
+export interface JiraConnectorConfig {
+	/** Jira Cloud domain (e.g. "mycompany" for mycompany.atlassian.net). */
+	domain: string;
+	/** Email address for Basic auth. */
+	email: string;
+	/** API token paired with the email. */
+	apiToken: string;
+	/** Optional JQL filter to scope issue polling. */
+	jql?: string;
+	/** Whether to include comments (default true). */
+	includeComments?: boolean;
+	/** Whether to include projects (default true). */
+	includeProjects?: boolean;
+}
+
 /** Optional ingest polling configuration attached to a connector. */
 export interface ConnectorIngestConfig {
 	/** Tables to poll for changes. */
@@ -66,6 +82,8 @@ export interface ConnectorConfig {
 	mysql?: MySQLConnectorConfig;
 	/** BigQuery connection configuration (required when type is "bigquery"). */
 	bigquery?: BigQueryConnectorConfig;
+	/** Jira Cloud connection configuration (required when type is "jira"). */
+	jira?: JiraConnectorConfig;
 	/** Optional ingest polling configuration. */
 	ingest?: ConnectorIngestConfig;
 }

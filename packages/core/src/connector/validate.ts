@@ -93,6 +93,25 @@ export function validateConnectorConfig(
 			}
 			break;
 		}
+		case "jira": {
+			const jira = obj.jira;
+			if (typeof jira !== "object" || jira === null) {
+				return Err(
+					new ConnectorValidationError('Connector type "jira" requires a jira config object'),
+				);
+			}
+			const jiraObj = jira as Record<string, unknown>;
+			if (typeof jiraObj.domain !== "string" || jiraObj.domain.length === 0) {
+				return Err(new ConnectorValidationError("Jira connector requires a non-empty domain"));
+			}
+			if (typeof jiraObj.email !== "string" || jiraObj.email.length === 0) {
+				return Err(new ConnectorValidationError("Jira connector requires a non-empty email"));
+			}
+			if (typeof jiraObj.apiToken !== "string" || jiraObj.apiToken.length === 0) {
+				return Err(new ConnectorValidationError("Jira connector requires a non-empty apiToken"));
+			}
+			break;
+		}
 	}
 
 	// --- optional ingest config ---
@@ -102,6 +121,16 @@ export function validateConnectorConfig(
 		}
 
 		const ingest = obj.ingest as Record<string, unknown>;
+
+		// Jira connectors define tables internally — only validate intervalMs
+		if (connectorType === "jira") {
+			if (ingest.intervalMs !== undefined) {
+				if (typeof ingest.intervalMs !== "number" || ingest.intervalMs < 1) {
+					return Err(new ConnectorValidationError("Ingest intervalMs must be a positive number"));
+				}
+			}
+			return Ok(input as ConnectorConfig);
+		}
 
 		if (!Array.isArray(ingest.tables) || ingest.tables.length === 0) {
 			return Err(new ConnectorValidationError("Ingest config must have a non-empty tables array"));
