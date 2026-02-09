@@ -1,0 +1,217 @@
+---
+title: React
+description: API reference for @lakesync/react — hooks and provider for building reactive local-first React apps.
+---
+
+The `@lakesync/react` package provides React bindings for LakeSync. A thin reactive layer over the client SDK that re-runs queries automatically when data changes — locally or from remote sync.
+
+## Installation
+
+```bash
+npm install @lakesync/react @lakesync/client @lakesync/core react
+```
+
+Or via the unified package:
+
+```bash
+npm install lakesync react
+```
+
+```ts
+import { LakeSyncProvider, useQuery, useMutation, useSyncStatus } from "lakesync/react";
+```
+
+## LakeSyncProvider
+
+Wraps your app with LakeSync context. Takes an already-constructed `SyncCoordinator` — you control transport, config, and lifecycle.
+
+```tsx
+import { LakeSyncProvider } from "@lakesync/react";
+
+function App() {
+  return (
+    <LakeSyncProvider coordinator={coordinator}>
+      <TodoList />
+    </LakeSyncProvider>
+  );
+}
+```
+
+### Props
+
+```ts
+interface LakeSyncProviderProps {
+  /** An already-constructed SyncCoordinator instance. */
+  coordinator: SyncCoordinator;
+  children: React.ReactNode;
+}
+```
+
+Internally subscribes to `coordinator.on("onChange")` and maintains a `dataVersion` counter that increments on every remote delta application. This drives reactivity for all `useQuery` hooks in the tree.
+
+## useLakeSync
+
+Access raw SDK instances from context.
+
+```ts
+const { coordinator, tracker, dataVersion, invalidate } = useLakeSync();
+```
+
+### Return value
+
+```ts
+interface LakeSyncContextValue {
+  coordinator: SyncCoordinator;
+  tracker: SyncTracker;
+  /** Monotonically increasing counter — bumped on every data change. */
+  dataVersion: number;
+  /** Increment dataVersion to trigger query re-runs. */
+  invalidate: () => void;
+}
+```
+
+Throws if called outside a `<LakeSyncProvider>`.
+
+## useQuery
+
+Reactive SQL query. Re-runs automatically when data changes — remote sync, local mutations, or parameter changes.
+
+```ts
+const { data, error, isLoading, refetch } = useQuery<Todo>(
+  "SELECT * FROM todos WHERE done = ?",
+  [0]
+);
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `sql` | `string` | SQL query string |
+| `params` | `unknown[]` | Optional bind parameters |
+
+### Return value
+
+```ts
+interface UseQueryResult<T> {
+  data: T[];
+  error: DbError | null;
+  isLoading: boolean;
+  refetch: () => void;
+}
+```
+
+- **`data`** — Query results. Empty array until first load completes.
+- **`error`** — Database error from the last query, or `null`.
+- **`isLoading`** — `true` on first render until the query resolves.
+- **`refetch`** — Manually trigger a re-run.
+
+### Reactivity
+
+The query re-runs when any of these change:
+1. `sql` or `params` arguments
+2. `dataVersion` (incremented by remote sync via `onChange`)
+3. `dataVersion` (incremented by `useMutation` on successful writes)
+4. Manual `refetch()` call
+
+## useMutation
+
+Wraps `SyncTracker` mutations with automatic query invalidation. After each successful mutation, all active `useQuery` hooks re-run.
+
+```ts
+const { insert, update, remove } = useMutation();
+
+await insert("todos", crypto.randomUUID(), { text: "Buy milk", done: 0 });
+await update("todos", "row-1", { done: 1 });
+await remove("todos", "row-1");
+```
+
+### Return value
+
+```ts
+interface UseMutationResult {
+  insert: (
+    table: string,
+    rowId: string,
+    data: Record<string, unknown>,
+  ) => Promise<Result<void, LakeSyncError>>;
+  update: (
+    table: string,
+    rowId: string,
+    data: Record<string, unknown>,
+  ) => Promise<Result<void, LakeSyncError>>;
+  remove: (
+    table: string,
+    rowId: string,
+  ) => Promise<Result<void, LakeSyncError>>;
+}
+```
+
+- Named `remove` (not `delete`) to avoid JS reserved word issues.
+- Each returns `Result<void, LakeSyncError>` — check `.ok` before proceeding.
+- On success, `dataVersion` increments and all queries re-run.
+- On failure, no invalidation occurs.
+
+## useSyncStatus
+
+Observe the sync lifecycle.
+
+```ts
+const { isSyncing, lastSyncTime, queueDepth, error } = useSyncStatus();
+```
+
+### Return value
+
+```ts
+interface UseSyncStatusResult {
+  isSyncing: boolean;
+  lastSyncTime: Date | null;
+  queueDepth: number;
+  error: Error | null;
+}
+```
+
+- **`isSyncing`** — `true` during a sync cycle.
+- **`lastSyncTime`** — Timestamp of last successful sync, or `null` if never synced.
+- **`queueDepth`** — Number of pending deltas in the outbox queue.
+- **`error`** — Last sync error. Cleared on next successful sync.
+
+## Full Example
+
+```tsx
+import { LocalDB, SyncCoordinator, LocalTransport } from "@lakesync/client";
+import { LakeSyncProvider, useQuery, useMutation, useSyncStatus } from "@lakesync/react";
+
+// Setup (once, outside React)
+const db = await LocalDB.open({ name: "todos", backend: "memory" });
+const coordinator = new SyncCoordinator(db.value, transport);
+coordinator.startAutoSync();
+
+function App() {
+  return (
+    <LakeSyncProvider coordinator={coordinator}>
+      <TodoList />
+    </LakeSyncProvider>
+  );
+}
+
+function TodoList() {
+  const { data: todos, isLoading } = useQuery<Todo>("SELECT * FROM todos");
+  const { insert } = useMutation();
+  const { queueDepth } = useSyncStatus();
+
+  if (isLoading) return <p>Loading...</p>;
+
+  return (
+    <div>
+      <p>{queueDepth} pending</p>
+      <button onClick={() => insert("todos", crypto.randomUUID(), { text: "New", done: 0 })}>
+        Add
+      </button>
+      <ul>
+        {todos.map(t => <li key={t._rowId}>{t.text}</li>)}
+      </ul>
+    </div>
+  );
+}
+```
