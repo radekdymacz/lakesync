@@ -13,6 +13,8 @@ export default defineConfig({
 		analyst: "src/analyst.ts",
 		"gateway-server": "src/gateway-server.ts",
 		react: "src/react.ts",
+		"connector-jira": "src/connector-jira.ts",
+		"connector-salesforce": "src/connector-salesforce.ts",
 	},
 	format: ["esm"],
 	dts: { resolve: true },
