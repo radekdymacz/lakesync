@@ -39,6 +39,24 @@ Any data source you can read from becomes a LakeSync adapter. Adapters are both 
 
 The `DatabaseAdapter` interface (`insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema`) handles SQL-like sources. The `LakeAdapter` interface (`putObject`, `getObject`, `listObjects`, `deleteObject`) handles object storage. The `CompositeAdapter` routes data to multiple backends simultaneously.
 
+## The Delta as Universal Format
+
+`RowDelta` is the intermediate representation that makes any-to-any sync possible. Every source converts its native format into deltas. Every destination consumes deltas. This means N sources + M destinations = N + M adapters, not N × M connectors.
+
+```mermaid
+flowchart LR
+    PG[Postgres] --> D["RowDelta (universal format)"]
+    BQ_S[BigQuery] --> D
+    Jira[Jira API] --> D
+    SF[Salesforce API] --> D
+    D --> SQLite[Client SQLite]
+    D --> BQ_D[BigQuery]
+    D --> S3[S3 / Iceberg]
+    D --> PG_D[Postgres]
+```
+
+Adding a new source (e.g. CloudWatch, Stripe) automatically enables sync to every existing destination — no pairwise integration needed. The same applies in reverse: a new destination adapter immediately works with all existing sources.
+
 ## Hybrid Logical Clocks (HLC)
 
 Every mutation is timestamped with an `HLCTimestamp` — a branded `bigint` encoding 48 bits of wall-clock time and 16 bits of a monotonic counter. This provides:
