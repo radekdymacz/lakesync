@@ -8,6 +8,8 @@ import {
 } from "@lakesync/core";
 import mysql from "mysql2/promise";
 import type { DatabaseAdapter, DatabaseAdapterConfig } from "./db-types";
+import type { Materialisable } from "./materialise";
+import { buildSchemaIndex, groupDeltasByTable } from "./materialise";
 import { mergeLatestState, wrapAsync } from "./shared";
 
 /**
@@ -32,7 +34,7 @@ function lakeSyncTypeToMySQL(type: TableSchema["columns"][number]["type"]): stri
  * idempotent writes. All public methods return `Result` and never throw.
  * Uses mysql2/promise connection pool for async operations.
  */
-export class MySQLAdapter implements DatabaseAdapter {
+export class MySQLAdapter implements DatabaseAdapter, Materialisable {
 	/** @internal */
 	readonly pool: mysql.Pool;
 
@@ -137,9 +139,107 @@ export class MySQLAdapter implements DatabaseAdapter {
 				.join(", ");
 
 			await this.pool.execute(
-				`CREATE TABLE IF NOT EXISTS \`${schema.table}\` (row_id VARCHAR(255) PRIMARY KEY, ${columnDefs})`,
+				`CREATE TABLE IF NOT EXISTS \`${schema.table}\` (row_id VARCHAR(255) PRIMARY KEY, ${columnDefs}, props JSON NOT NULL DEFAULT ('{}'), synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
 			);
 		}, `Failed to ensure schema for table ${schema.table}`);
+	}
+
+	/**
+	 * Materialise deltas into destination tables.
+	 *
+	 * For each table with a matching schema, merges delta history into the
+	 * latest row state and upserts into the destination table. Tombstoned
+	 * rows are deleted. The `props` column is never touched.
+	 */
+	async materialise(
+		deltas: RowDelta[],
+		schemas: ReadonlyArray<TableSchema>,
+	): Promise<Result<void, AdapterError>> {
+		if (deltas.length === 0) {
+			return Ok(undefined);
+		}
+
+		return wrapAsync(async () => {
+			const grouped = groupDeltasByTable(deltas);
+			const schemaIndex = buildSchemaIndex(schemas);
+
+			for (const [tableName, rowIds] of grouped) {
+				const schema = schemaIndex.get(tableName);
+				if (!schema) continue;
+
+				// Ensure destination table exists
+				const typedCols = schema.columns
+					.map((col) => `\`${col.name}\` ${lakeSyncTypeToMySQL(col.type)}`)
+					.join(", ");
+
+				await this.pool.execute(
+					`CREATE TABLE IF NOT EXISTS \`${schema.table}\` (row_id VARCHAR(255) PRIMARY KEY, ${typedCols}, props JSON NOT NULL DEFAULT ('{}'), synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+				);
+
+				// Query delta history for affected rows
+				const rowIdArray = [...rowIds];
+				const placeholders = rowIdArray.map(() => "?").join(", ");
+				const [rows] = await this.pool.execute(
+					`SELECT row_id, columns, op FROM lakesync_deltas WHERE \`table\` = ? AND row_id IN (${placeholders}) ORDER BY hlc ASC`,
+					[tableName, ...rowIdArray],
+				);
+
+				// Group by row_id and merge
+				const byRow = new Map<string, Array<{ columns: string; op: string }>>();
+				for (const row of rows as Array<{ row_id: string; columns: string; op: string }>) {
+					let list = byRow.get(row.row_id);
+					if (!list) {
+						list = [];
+						byRow.set(row.row_id, list);
+					}
+					list.push(row);
+				}
+
+				const upserts: Array<{ rowId: string; state: Record<string, unknown> }> = [];
+				const deleteIds: string[] = [];
+
+				for (const [rowId, rowDeltas] of byRow) {
+					const state = mergeLatestState(rowDeltas);
+					if (state === null) {
+						deleteIds.push(rowId);
+					} else {
+						upserts.push({ rowId, state });
+					}
+				}
+
+				// UPSERT rows
+				if (upserts.length > 0) {
+					const cols = schema.columns.map((c) => c.name);
+					const valuePlaceholders = upserts
+						.map(() => `(?, ${cols.map(() => "?").join(", ")}, NOW())`)
+						.join(", ");
+
+					const values: unknown[] = [];
+					for (const { rowId, state } of upserts) {
+						values.push(rowId);
+						for (const col of cols) {
+							values.push(state[col] ?? null);
+						}
+					}
+
+					const updateCols = cols.map((c) => `\`${c}\` = VALUES(\`${c}\`)`).join(", ");
+
+					await this.pool.execute(
+						`INSERT INTO \`${schema.table}\` (row_id, ${cols.map((c) => `\`${c}\``).join(", ")}, synced_at) VALUES ${valuePlaceholders} ON DUPLICATE KEY UPDATE ${updateCols}, synced_at = VALUES(synced_at)`,
+						values,
+					);
+				}
+
+				// DELETE tombstoned rows
+				if (deleteIds.length > 0) {
+					const delPlaceholders = deleteIds.map(() => "?").join(", ");
+					await this.pool.execute(
+						`DELETE FROM \`${schema.table}\` WHERE row_id IN (${delPlaceholders})`,
+						deleteIds,
+					);
+				}
+			}
+		}, "Failed to materialise deltas");
 	}
 
 	/** Close the database connection pool and release resources. */

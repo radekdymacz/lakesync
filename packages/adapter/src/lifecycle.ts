@@ -8,6 +8,8 @@ import {
 } from "@lakesync/core";
 
 import type { DatabaseAdapter } from "./db-types";
+import type { Materialisable } from "./materialise";
+import { isMaterialisable } from "./materialise";
 
 /** Configuration for age-based tiered storage. */
 export interface LifecycleAdapterConfig {
@@ -34,7 +36,7 @@ export interface LifecycleAdapterConfig {
  * Use {@link migrateToTier} as a background job to copy aged-out deltas
  * from hot to cold.
  */
-export class LifecycleAdapter implements DatabaseAdapter {
+export class LifecycleAdapter implements DatabaseAdapter, Materialisable {
 	private readonly hot: DatabaseAdapter;
 	private readonly cold: DatabaseAdapter;
 	private readonly maxAgeMs: number;
@@ -104,6 +106,17 @@ export class LifecycleAdapter implements DatabaseAdapter {
 		if (!hotResult.ok) return hotResult;
 
 		return this.cold.ensureSchema(schema);
+	}
+
+	/** Materialise via hot tier only — cold tier stores archived deltas, not destination tables. */
+	async materialise(
+		deltas: RowDelta[],
+		schemas: ReadonlyArray<TableSchema>,
+	): Promise<Result<void, AdapterError>> {
+		if (isMaterialisable(this.hot)) {
+			return this.hot.materialise(deltas, schemas);
+		}
+		return Ok(undefined);
 	}
 
 	/** Close both hot and cold adapters. */

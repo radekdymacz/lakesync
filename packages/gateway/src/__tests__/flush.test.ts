@@ -544,3 +544,120 @@ describe("commitToCatalogue", () => {
 		expect(catalogue.appendFiles).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("flushEntries — materialisation", () => {
+	it("calls materialise when schemas and materialisable adapter are provided", async () => {
+		const materialiseCalls: Array<{ deltas: RowDelta[]; schemas: TableSchema[] }> = [];
+		const dbAdapter: DatabaseAdapter & { materialise: (...args: never) => unknown } = {
+			...createMockDbAdapter(),
+			materialise: async (deltas: RowDelta[], schemas: ReadonlyArray<TableSchema>) => {
+				materialiseCalls.push({ deltas: [...deltas], schemas: [...schemas] });
+				return Ok(undefined);
+			},
+		};
+
+		const schemas: TableSchema[] = [
+			{ table: "todos", columns: [{ name: "title", type: "string" }] },
+		];
+		const deps: FlushDeps = {
+			adapter: dbAdapter,
+			config: { gatewayId: "gw-mat" },
+			restoreEntries: vi.fn(),
+			schemas,
+		};
+		const entries = [makeDelta({ hlc: hlcLow })];
+
+		const result = await flushEntries(entries, 0, deps);
+		expect(result.ok).toBe(true);
+		expect(materialiseCalls).toHaveLength(1);
+		expect(materialiseCalls[0]!.deltas).toHaveLength(1);
+	});
+
+	it("does not call materialise when no schemas provided", async () => {
+		const materialise = vi.fn();
+		const dbAdapter = { ...createMockDbAdapter(), materialise };
+
+		const deps: FlushDeps = {
+			adapter: dbAdapter,
+			config: { gatewayId: "gw-no-schemas" },
+			restoreEntries: vi.fn(),
+		};
+		const entries = [makeDelta({ hlc: hlcLow })];
+
+		const result = await flushEntries(entries, 0, deps);
+		expect(result.ok).toBe(true);
+		expect(materialise).not.toHaveBeenCalled();
+	});
+
+	it("does not call materialise when adapter is not materialisable", async () => {
+		const dbAdapter = createMockDbAdapter();
+		const schemas: TableSchema[] = [
+			{ table: "todos", columns: [{ name: "title", type: "string" }] },
+		];
+
+		const deps: FlushDeps = {
+			adapter: dbAdapter,
+			config: { gatewayId: "gw-not-mat" },
+			restoreEntries: vi.fn(),
+			schemas,
+		};
+		const entries = [makeDelta({ hlc: hlcLow })];
+
+		const result = await flushEntries(entries, 0, deps);
+		expect(result.ok).toBe(true);
+	});
+
+	it("flush still succeeds when materialise fails", async () => {
+		const dbAdapter = {
+			...createMockDbAdapter(),
+			materialise: async () => {
+				return Err({ code: "ADAPTER_ERROR", message: "materialise exploded" } as AdapterError);
+			},
+		};
+
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const schemas: TableSchema[] = [
+			{ table: "todos", columns: [{ name: "title", type: "string" }] },
+		];
+
+		const deps: FlushDeps = {
+			adapter: dbAdapter,
+			config: { gatewayId: "gw-mat-fail" },
+			restoreEntries: vi.fn(),
+			schemas,
+		};
+		const entries = [makeDelta({ hlc: hlcLow })];
+
+		const result = await flushEntries(entries, 0, deps);
+		expect(result.ok).toBe(true);
+		expect(warnSpy).toHaveBeenCalled();
+		warnSpy.mockRestore();
+	});
+
+	it("flush still succeeds when materialise throws", async () => {
+		const dbAdapter = {
+			...createMockDbAdapter(),
+			materialise: async () => {
+				throw new Error("kaboom");
+			},
+		};
+
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const schemas: TableSchema[] = [
+			{ table: "todos", columns: [{ name: "title", type: "string" }] },
+		];
+
+		const deps: FlushDeps = {
+			adapter: dbAdapter,
+			config: { gatewayId: "gw-mat-throw" },
+			restoreEntries: vi.fn(),
+			schemas,
+		};
+		const entries = [makeDelta({ hlc: hlcLow })];
+
+		const result = await flushEntries(entries, 0, deps);
+		expect(result.ok).toBe(true);
+		expect(warnSpy).toHaveBeenCalled();
+		warnSpy.mockRestore();
+	});
+});

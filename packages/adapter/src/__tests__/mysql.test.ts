@@ -318,6 +318,8 @@ describe("MySQLAdapter", () => {
 			expect(userSql).toContain("CREATE TABLE IF NOT EXISTS `todos`");
 			expect(userSql).toContain("`title` TEXT");
 			expect(userSql).toContain("`done` TINYINT(1)");
+			expect(userSql).toContain("props JSON NOT NULL DEFAULT ('{}')");
+			expect(userSql).toContain("synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
 		});
 
 		it("returns Err(AdapterError) when CREATE TABLE fails", async () => {
@@ -340,6 +342,161 @@ describe("MySQLAdapter", () => {
 		it("calls pool.end()", async () => {
 			await adapter.close();
 			expect(mockEnd).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe("materialise", () => {
+		const schema: TableSchema = {
+			table: "todos",
+			columns: [
+				{ name: "title", type: "string" },
+				{ name: "done", type: "boolean" },
+			],
+		};
+
+		it("returns Ok without querying for empty deltas", async () => {
+			const result = await adapter.materialise([], [schema]);
+			expect(result.ok).toBe(true);
+			expect(mockExecute).not.toHaveBeenCalled();
+		});
+
+		it("creates destination table with props JSON and synced_at", async () => {
+			// CREATE TABLE, SELECT deltas (returns empty), no upsert/delete needed
+			mockExecute
+				.mockResolvedValueOnce([[], []]) // CREATE TABLE
+				.mockResolvedValueOnce([[], []]); // SELECT deltas
+
+			const delta = makeDelta();
+			const result = await adapter.materialise([delta], [schema]);
+
+			expect(result.ok).toBe(true);
+			const createSql = mockExecute.mock.calls[0]![0] as string;
+			expect(createSql).toContain("CREATE TABLE IF NOT EXISTS `todos`");
+			expect(createSql).toContain("props JSON NOT NULL DEFAULT ('{}')");
+			expect(createSql).toContain("synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+		});
+
+		it("generates UPSERT with ON DUPLICATE KEY UPDATE, excludes props, includes synced_at", async () => {
+			mockExecute
+				.mockResolvedValueOnce([[], []]) // CREATE TABLE
+				.mockResolvedValueOnce([
+					[
+						{
+							row_id: "row-1",
+							columns: JSON.stringify([
+								{ column: "title", value: "Buy milk" },
+								{ column: "done", value: false },
+							]),
+							op: "INSERT",
+						},
+					],
+					[],
+				]) // SELECT deltas
+				.mockResolvedValueOnce([[], []]); // INSERT ... ON DUPLICATE KEY UPDATE
+
+			const delta = makeDelta();
+			const result = await adapter.materialise([delta], [schema]);
+
+			expect(result.ok).toBe(true);
+			expect(mockExecute).toHaveBeenCalledTimes(3);
+
+			const [upsertSql, upsertParams] = mockExecute.mock.calls[2]!;
+			expect(upsertSql).toContain("INSERT INTO `todos`");
+			expect(upsertSql).toContain("ON DUPLICATE KEY UPDATE");
+			expect(upsertSql).toContain("`title` = VALUES(`title`)");
+			expect(upsertSql).toContain("`done` = VALUES(`done`)");
+			expect(upsertSql).toContain("synced_at = VALUES(synced_at)");
+			expect(upsertSql).not.toContain("props = VALUES(props)");
+			expect(upsertSql).not.toContain("`props`");
+			// params: row_id, title, done
+			expect(upsertParams).toEqual(["row-1", "Buy milk", false]);
+		});
+
+		it("generates DELETE for tombstoned rows", async () => {
+			mockExecute
+				.mockResolvedValueOnce([[], []]) // CREATE TABLE
+				.mockResolvedValueOnce([
+					[
+						{
+							row_id: "row-1",
+							columns: JSON.stringify([{ column: "title", value: "Buy milk" }]),
+							op: "INSERT",
+						},
+						{
+							row_id: "row-1",
+							columns: JSON.stringify([]),
+							op: "DELETE",
+						},
+					],
+					[],
+				]) // SELECT deltas
+				.mockResolvedValueOnce([[], []]); // DELETE
+
+			const delta = makeDelta({ op: "DELETE", columns: [] });
+			const result = await adapter.materialise([delta], [schema]);
+
+			expect(result.ok).toBe(true);
+
+			const [deleteSql, deleteParams] = mockExecute.mock.calls[2]!;
+			expect(deleteSql).toContain("DELETE FROM `todos`");
+			expect(deleteSql).toContain("WHERE row_id IN (?)");
+			expect(deleteParams).toEqual(["row-1"]);
+		});
+
+		it("skips tables without matching schema", async () => {
+			const delta = makeDelta({ table: "unknown_table" });
+			// CREATE TABLE should not be called for unmatched tables
+			const result = await adapter.materialise([delta], [schema]);
+
+			expect(result.ok).toBe(true);
+			expect(mockExecute).not.toHaveBeenCalled();
+		});
+
+		it("uses sourceTable mapping to match deltas to schemas", async () => {
+			const mappedSchema: TableSchema = {
+				table: "todo_items",
+				sourceTable: "todos",
+				columns: [{ name: "title", type: "string" }],
+			};
+
+			mockExecute
+				.mockResolvedValueOnce([[], []]) // CREATE TABLE
+				.mockResolvedValueOnce([
+					[
+						{
+							row_id: "row-1",
+							columns: JSON.stringify([{ column: "title", value: "Test" }]),
+							op: "INSERT",
+						},
+					],
+					[],
+				]) // SELECT deltas
+				.mockResolvedValueOnce([[], []]); // UPSERT
+
+			const delta = makeDelta();
+			const result = await adapter.materialise([delta], [mappedSchema]);
+
+			expect(result.ok).toBe(true);
+			// Should create destination table with the mapped name
+			const createSql = mockExecute.mock.calls[0]![0] as string;
+			expect(createSql).toContain("CREATE TABLE IF NOT EXISTS `todo_items`");
+
+			// Should upsert into the mapped destination table
+			const upsertSql = mockExecute.mock.calls[2]![0] as string;
+			expect(upsertSql).toContain("INSERT INTO `todo_items`");
+		});
+
+		it("returns Err(AdapterError) when materialise fails", async () => {
+			mockExecute.mockRejectedValueOnce(new Error("connection lost"));
+
+			const delta = makeDelta();
+			const result = await adapter.materialise([delta], [schema]);
+
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.error).toBeInstanceOf(AdapterError);
+				expect(result.error.message).toBe("Failed to materialise deltas");
+			}
 		});
 	});
 });

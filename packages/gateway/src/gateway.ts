@@ -288,6 +288,7 @@ export class SyncGateway implements IngestTarget {
 						catalogue: this.config.catalogue,
 					},
 					restoreEntries: (e) => this.restoreEntries(e),
+					schemas: this.config.schemas,
 				});
 			} finally {
 				this.flushing = false;
@@ -308,6 +309,7 @@ export class SyncGateway implements IngestTarget {
 					catalogue: this.config.catalogue,
 				},
 				restoreEntries: (e) => this.restoreEntries(e),
+				schemas: this.config.schemas,
 			});
 		} finally {
 			this.flushing = false;
@@ -348,6 +350,7 @@ export class SyncGateway implements IngestTarget {
 						catalogue: this.config.catalogue,
 					},
 					restoreEntries: (e) => this.restoreEntries(e),
+					schemas: this.config.schemas,
 				},
 				table,
 			);

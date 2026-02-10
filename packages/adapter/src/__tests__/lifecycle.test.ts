@@ -263,6 +263,53 @@ describe("LifecycleAdapter", () => {
 			expect(result.error.message).toBe("cold query failed");
 		}
 	});
+
+	describe("materialise", () => {
+		it("delegates to hot when materialisable", async () => {
+			const hot = createMockAdapter();
+			const materialiseCalls: unknown[] = [];
+			(hot as unknown as Record<string, unknown>).materialise = async (
+				deltas: RowDelta[],
+				schemas: ReadonlyArray<TableSchema>,
+			) => {
+				materialiseCalls.push({ deltas, schemas });
+				return Ok(undefined);
+			};
+			const cold = createMockAdapter();
+
+			const adapter = new LifecycleAdapter({
+				hot: { adapter: hot, maxAgeMs: ONE_HOUR_MS },
+				cold: { adapter: cold },
+			});
+
+			const deltas = [makeDelta({ table: "users", hlc: hlcFromWall(Date.now()) })];
+			const schemas: TableSchema[] = [
+				{ table: "users", columns: [{ name: "name", type: "string" }] },
+			];
+
+			const result = await adapter.materialise(deltas, schemas);
+			expect(result.ok).toBe(true);
+			expect(materialiseCalls).toHaveLength(1);
+		});
+
+		it("returns Ok when hot is not materialisable", async () => {
+			const hot = createMockAdapter();
+			const cold = createMockAdapter();
+
+			const adapter = new LifecycleAdapter({
+				hot: { adapter: hot, maxAgeMs: ONE_HOUR_MS },
+				cold: { adapter: cold },
+			});
+
+			const deltas = [makeDelta({ table: "users", hlc: hlcFromWall(Date.now()) })];
+			const schemas: TableSchema[] = [
+				{ table: "users", columns: [{ name: "name", type: "string" }] },
+			];
+
+			const result = await adapter.materialise(deltas, schemas);
+			expect(result.ok).toBe(true);
+		});
+	});
 });
 
 describe("migrateToTier", () => {

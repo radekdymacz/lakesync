@@ -50,6 +50,8 @@ export interface GatewayConfig extends BufferConfig {
 	sourceAdapters?: Record<string, DatabaseAdapter>;
 	/** Named action handlers for imperative action execution. */
 	actionHandlers?: Record<string, ActionHandler>;
+	/** Table schemas for materialisation after flush. */
+	schemas?: ReadonlyArray<TableSchema>;
 }
 
 /** Gateway runtime state */

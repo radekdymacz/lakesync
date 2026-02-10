@@ -1,4 +1,9 @@
-import { type DatabaseAdapter, isDatabaseAdapter, type LakeAdapter } from "@lakesync/adapter";
+import {
+	type DatabaseAdapter,
+	isDatabaseAdapter,
+	isMaterialisable,
+	type LakeAdapter,
+} from "@lakesync/adapter";
 import {
 	buildPartitionSpec,
 	type DataFile,
@@ -34,6 +39,7 @@ export interface FlushDeps {
 	adapter: LakeAdapter | DatabaseAdapter;
 	config: FlushConfig;
 	restoreEntries: (entries: RowDelta[]) => void;
+	schemas?: ReadonlyArray<TableSchema>;
 }
 
 /** Find the min and max HLC in a non-empty array of deltas. */
@@ -69,6 +75,23 @@ export async function flushEntries(
 				deps.restoreEntries(entries);
 				return Err(new FlushError(`Database flush failed: ${result.error.message}`));
 			}
+
+			// Materialise after successful delta insertion (non-fatal)
+			if (deps.schemas && deps.schemas.length > 0 && isMaterialisable(deps.adapter)) {
+				try {
+					const matResult = await deps.adapter.materialise(entries, deps.schemas);
+					if (!matResult.ok) {
+						console.warn(
+							`[lakesync] Materialisation failed (${entries.length} deltas): ${matResult.error.message}`,
+						);
+					}
+				} catch (error: unknown) {
+					console.warn(
+						`[lakesync] Materialisation error (${entries.length} deltas): ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
+
 			return Ok(undefined);
 		} catch (error: unknown) {
 			deps.restoreEntries(entries);

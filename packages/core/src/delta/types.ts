@@ -31,7 +31,10 @@ export interface RowDelta {
 
 /** Minimal schema for Phase 1. Column allow-list + type hints. */
 export interface TableSchema {
+	/** Destination table name (what gets created in the database). */
 	table: string;
+	/** Delta table name to match against. Defaults to `table` when omitted. Use to rename destination tables. */
+	sourceTable?: string;
 	columns: Array<{
 		name: string;
 		type: "string" | "number" | "boolean" | "json" | "null";

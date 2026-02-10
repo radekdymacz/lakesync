@@ -370,4 +370,177 @@ describe("BigQueryAdapter", () => {
 			await expect(adapter.close()).resolves.toBeUndefined();
 		});
 	});
+
+	describe("materialise", () => {
+		const todosSchema: TableSchema = {
+			table: "todos",
+			columns: [
+				{ name: "title", type: "string" },
+				{ name: "done", type: "boolean" },
+			],
+		};
+
+		it("returns Ok without querying when deltas are empty", async () => {
+			const result = await adapter.materialise([], [todosSchema]);
+			expect(result.ok).toBe(true);
+			expect(mockQuery).not.toHaveBeenCalled();
+		});
+
+		it("creates destination table with props JSON and synced_at TIMESTAMP", async () => {
+			// 1st call: CREATE TABLE
+			// 2nd call: SELECT delta history
+			mockQuery.mockResolvedValueOnce([[]]).mockResolvedValueOnce([[]]);
+
+			const delta = makeDelta();
+			await adapter.materialise([delta], [todosSchema]);
+
+			const createCall = mockQuery.mock.calls[0]![0];
+			const sql = createCall.query as string;
+			expect(sql).toContain("CREATE TABLE IF NOT EXISTS `test_dataset.todos`");
+			expect(sql).toContain("row_id STRING NOT NULL");
+			expect(sql).toContain("title STRING");
+			expect(sql).toContain("done BOOL");
+			expect(sql).toContain("props JSON DEFAULT '{}'");
+			expect(sql).toContain("synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()");
+		});
+
+		it("generates MERGE SQL that excludes props from UPDATE SET but includes synced_at", async () => {
+			// 1st: CREATE TABLE, 2nd: delta history query, 3rd: MERGE
+			mockQuery
+				.mockResolvedValueOnce([[]])
+				.mockResolvedValueOnce([
+					[
+						{
+							row_id: "row-1",
+							columns: JSON.stringify([
+								{ column: "title", value: "Buy milk" },
+								{ column: "done", value: false },
+							]),
+							op: "INSERT",
+						},
+					],
+				])
+				.mockResolvedValueOnce([[]]);
+
+			const delta = makeDelta();
+			await adapter.materialise([delta], [todosSchema]);
+
+			expect(mockQuery).toHaveBeenCalledTimes(3);
+			const mergeCall = mockQuery.mock.calls[2]![0];
+			const sql = mergeCall.query as string;
+
+			expect(sql).toContain("MERGE `test_dataset.todos` AS t");
+			expect(sql).toContain("ON t.row_id = s.row_id");
+			// UPDATE SET should contain columns + synced_at, but NOT props
+			expect(sql).toContain(
+				"WHEN MATCHED THEN UPDATE SET title = s.title, done = s.done, synced_at = s.synced_at",
+			);
+			// props should NOT appear in the UPDATE SET line
+			const updateLine = sql.split("\n").find((l) => l.includes("UPDATE SET"));
+			expect(updateLine).toBeDefined();
+			expect(updateLine).not.toContain("props");
+		});
+
+		it("INSERT includes props with default '{}' value", async () => {
+			mockQuery
+				.mockResolvedValueOnce([[]])
+				.mockResolvedValueOnce([
+					[
+						{
+							row_id: "row-1",
+							columns: JSON.stringify([
+								{ column: "title", value: "Buy milk" },
+								{ column: "done", value: false },
+							]),
+							op: "INSERT",
+						},
+					],
+				])
+				.mockResolvedValueOnce([[]]);
+
+			const delta = makeDelta();
+			await adapter.materialise([delta], [todosSchema]);
+
+			const mergeCall = mockQuery.mock.calls[2]![0];
+			const sql = mergeCall.query as string;
+
+			expect(sql).toContain("WHEN NOT MATCHED THEN INSERT (row_id, title, done, props, synced_at)");
+			expect(sql).toContain("VALUES (s.row_id, s.title, s.done, '{}', s.synced_at)");
+		});
+
+		it("issues DELETE for tombstoned rows using UNNEST", async () => {
+			// 1st: CREATE TABLE, 2nd: delta history, 3rd: DELETE
+			mockQuery
+				.mockResolvedValueOnce([[]])
+				.mockResolvedValueOnce([
+					[
+						{
+							row_id: "row-1",
+							columns: JSON.stringify([{ column: "title", value: "Test" }]),
+							op: "INSERT",
+						},
+						{
+							row_id: "row-1",
+							columns: JSON.stringify([]),
+							op: "DELETE",
+						},
+					],
+				])
+				.mockResolvedValueOnce([[]]);
+
+			const delta = makeDelta();
+			await adapter.materialise([delta], [todosSchema]);
+
+			expect(mockQuery).toHaveBeenCalledTimes(3);
+			const deleteCall = mockQuery.mock.calls[2]![0];
+			expect(deleteCall.query).toContain("DELETE FROM `test_dataset.todos`");
+			expect(deleteCall.query).toContain("WHERE row_id IN UNNEST(@rowIds)");
+			expect(deleteCall.params).toEqual({ rowIds: ["row-1"] });
+		});
+
+		it("skips tables without matching schema", async () => {
+			const delta = makeDelta({ table: "unknown_table" });
+			// No query calls expected beyond the early return
+			const result = await adapter.materialise([delta], [todosSchema]);
+			expect(result.ok).toBe(true);
+			expect(mockQuery).not.toHaveBeenCalled();
+		});
+
+		it("uses sourceTable for schema matching and destination table name", async () => {
+			const renamedSchema: TableSchema = {
+				table: "tasks",
+				sourceTable: "todos",
+				columns: [
+					{ name: "title", type: "string" },
+					{ name: "done", type: "boolean" },
+				],
+			};
+
+			// 1st: CREATE TABLE (for "tasks"), 2nd: delta history query
+			mockQuery.mockResolvedValueOnce([[]]).mockResolvedValueOnce([[]]);
+
+			const delta = makeDelta({ table: "todos" });
+			await adapter.materialise([delta], [renamedSchema]);
+
+			// CREATE TABLE should use the destination name "tasks"
+			const createCall = mockQuery.mock.calls[0]![0];
+			expect(createCall.query).toContain("CREATE TABLE IF NOT EXISTS `test_dataset.tasks`");
+
+			// Delta query should use sourceTable "todos"
+			const historyCall = mockQuery.mock.calls[1]![0];
+			expect(historyCall.params.sourceTable).toBe("todos");
+		});
+
+		it("returns Err(AdapterError) when query throws", async () => {
+			mockQuery.mockRejectedValueOnce(new Error("quota exceeded"));
+
+			const delta = makeDelta();
+			const result = await adapter.materialise([delta], [todosSchema]);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.error).toBeInstanceOf(AdapterError);
+				expect(result.error.message).toBe("Failed to materialise deltas");
+			}
+		});
+	});
 });

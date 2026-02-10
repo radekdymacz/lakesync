@@ -90,6 +90,10 @@ export interface ConnectorIngestConfig {
 	tables: ConnectorIngestTable[];
 	/** Poll interval in milliseconds (default 10 000). */
 	intervalMs?: number;
+	/** Deltas per push chunk (default 500). */
+	chunkSize?: number;
+	/** Approximate memory budget in bytes — triggers flush at 70%. */
+	memoryBudgetBytes?: number;
 }
 
 /**

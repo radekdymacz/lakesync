@@ -162,6 +162,17 @@ export class JiraClient {
 		return Ok(allProjects);
 	}
 
+	/**
+	 * Fetch the currently authenticated user.
+	 *
+	 * Calls `GET /rest/api/3/myself` — the cheapest auth-validating endpoint.
+	 */
+	async getCurrentUser(): Promise<
+		Result<{ displayName: string; emailAddress: string }, JiraApiError | JiraRateLimitError>
+	> {
+		return this.request("/rest/api/3/myself", "GET");
+	}
+
 	// -----------------------------------------------------------------------
 	// Internal HTTP helpers
 	// -----------------------------------------------------------------------

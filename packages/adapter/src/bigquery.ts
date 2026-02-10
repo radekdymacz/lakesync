@@ -9,6 +9,9 @@ import {
 	type TableSchema,
 } from "@lakesync/core";
 import type { DatabaseAdapter } from "./db-types";
+import { lakeSyncTypeToBigQuery } from "./db-types";
+import type { Materialisable } from "./materialise";
+import { buildSchemaIndex, groupDeltasByTable } from "./materialise";
 import { mergeLatestState, wrapAsync } from "./shared";
 
 /**
@@ -74,7 +77,7 @@ function rowToRowDelta(row: BigQueryDeltaRow): RowDelta {
  * on standard (non-partitioned) tables. Query latency is seconds, not
  * milliseconds — this adapter is designed for the analytics tier.
  */
-export class BigQueryAdapter implements DatabaseAdapter {
+export class BigQueryAdapter implements DatabaseAdapter, Materialisable {
 	/** @internal */
 	readonly client: BigQuery;
 	/** @internal */
@@ -219,6 +222,141 @@ CLUSTER BY \`table\`, hlc`,
 				location: this.location,
 			});
 		}, "Failed to ensure schema");
+	}
+
+	/**
+	 * Materialise deltas into destination tables.
+	 *
+	 * For each affected table, queries the full delta history for touched rows,
+	 * merges to latest state via column-level LWW, then upserts live rows and
+	 * deletes tombstoned rows. The consumer-owned `props` column is never
+	 * touched on UPDATE.
+	 */
+	async materialise(
+		deltas: RowDelta[],
+		schemas: ReadonlyArray<TableSchema>,
+	): Promise<Result<void, AdapterError>> {
+		if (deltas.length === 0) {
+			return Ok(undefined);
+		}
+
+		return wrapAsync(async () => {
+			const tableRowIds = groupDeltasByTable(deltas);
+			const schemaIndex = buildSchemaIndex(schemas);
+
+			for (const [sourceTable, rowIds] of tableRowIds) {
+				const schema = schemaIndex.get(sourceTable);
+				if (!schema) continue;
+
+				// Ensure destination table exists
+				const colDefs = schema.columns
+					.map((c) => `${c.name} ${lakeSyncTypeToBigQuery(c.type)}`)
+					.join(", ");
+				await this.client.query({
+					query: `CREATE TABLE IF NOT EXISTS \`${this.dataset}.${schema.table}\` (
+	row_id STRING NOT NULL,
+	${colDefs},
+	props JSON DEFAULT '{}',
+	synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()
+)`,
+					location: this.location,
+				});
+
+				// Query delta history for affected rows
+				const rowIdArray = [...rowIds];
+				const [deltaRows] = await this.client.query({
+					query: `SELECT row_id, columns, op FROM \`${this.dataset}.lakesync_deltas\`
+WHERE \`table\` = @sourceTable AND row_id IN UNNEST(@rowIds)
+ORDER BY hlc ASC`,
+					params: { sourceTable, rowIds: rowIdArray },
+					location: this.location,
+				});
+
+				// Group by row_id and merge to latest state
+				const rowGroups = new Map<string, Array<{ columns: string | ColumnDelta[]; op: string }>>();
+				for (const row of deltaRows as Array<{
+					row_id: string;
+					columns: string | ColumnDelta[];
+					op: string;
+				}>) {
+					let group = rowGroups.get(row.row_id);
+					if (!group) {
+						group = [];
+						rowGroups.set(row.row_id, group);
+					}
+					group.push({ columns: row.columns, op: row.op });
+				}
+
+				const upserts: Array<{ rowId: string; state: Record<string, unknown> }> = [];
+				const deleteRowIds: string[] = [];
+
+				for (const [rowId, group] of rowGroups) {
+					const state = mergeLatestState(group);
+					if (state === null) {
+						deleteRowIds.push(rowId);
+					} else {
+						upserts.push({ rowId, state });
+					}
+				}
+
+				// MERGE upserts
+				if (upserts.length > 0) {
+					const params: Record<string, unknown> = {};
+					const selects: string[] = [];
+
+					for (let i = 0; i < upserts.length; i++) {
+						const u = upserts[i]!;
+						params[`rid_${i}`] = u.rowId;
+						for (const col of schema.columns) {
+							params[`c${schema.columns.indexOf(col)}_${i}`] = u.state[col.name] ?? null;
+						}
+
+						const colSelects = schema.columns
+							.map((col, ci) => `@c${ci}_${i} AS ${col.name}`)
+							.join(", ");
+						selects.push(
+							`SELECT @rid_${i} AS row_id, ${colSelects}, CURRENT_TIMESTAMP() AS synced_at`,
+						);
+					}
+
+					const updateSet = schema.columns.map((col) => `${col.name} = s.${col.name}`).join(", ");
+					const insertCols = [
+						"row_id",
+						...schema.columns.map((c) => c.name),
+						"props",
+						"synced_at",
+					].join(", ");
+					const insertVals = [
+						"s.row_id",
+						...schema.columns.map((c) => `s.${c.name}`),
+						"'{}'",
+						"s.synced_at",
+					].join(", ");
+
+					const mergeSql = `MERGE \`${this.dataset}.${schema.table}\` AS t
+USING (${selects.join(" UNION ALL ")}) AS s
+ON t.row_id = s.row_id
+WHEN MATCHED THEN UPDATE SET ${updateSet}, synced_at = s.synced_at
+WHEN NOT MATCHED THEN INSERT (${insertCols})
+VALUES (${insertVals})`;
+
+					await this.client.query({
+						query: mergeSql,
+						params,
+						location: this.location,
+					});
+				}
+
+				// DELETE tombstoned rows
+				if (deleteRowIds.length > 0) {
+					await this.client.query({
+						query: `DELETE FROM \`${this.dataset}.${schema.table}\` WHERE row_id IN UNNEST(@rowIds)`,
+						params: { rowIds: deleteRowIds },
+						location: this.location,
+					});
+				}
+			}
+		}, "Failed to materialise deltas");
 	}
 
 	/**

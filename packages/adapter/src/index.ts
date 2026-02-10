@@ -9,6 +9,8 @@ export type { FanOutAdapterConfig } from "./fan-out";
 export { FanOutAdapter } from "./fan-out";
 export type { LifecycleAdapterConfig } from "./lifecycle";
 export { LifecycleAdapter, migrateToTier } from "./lifecycle";
+export type { Materialisable } from "./materialise";
+export { buildSchemaIndex, groupDeltasByTable, isMaterialisable } from "./materialise";
 export type { MigrateOptions, MigrateProgress, MigrateResult } from "./migrate";
 export { migrateAdapter } from "./migrate";
 export { MinIOAdapter } from "./minio";

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DatabaseAdapter } from "../db-types";
 import { FanOutAdapter } from "../fan-out";
+import type { Materialisable } from "../materialise";
 
 function hlc(n: number): HLCTimestamp {
 	return BigInt(n) as HLCTimestamp;
@@ -265,5 +266,67 @@ describe("FanOutAdapter", () => {
 
 		await fanOut.close();
 		expect(primary.closeCalled).toBe(true);
+	});
+
+	describe("materialise", () => {
+		it("delegates to primary when materialisable", async () => {
+			const primary = createMockAdapter();
+			const materialiseCalls: Array<{ deltas: RowDelta[]; schemas: TableSchema[] }> = [];
+			(primary as unknown as Materialisable).materialise = async (deltas, schemas) => {
+				materialiseCalls.push({ deltas: [...deltas], schemas: [...schemas] });
+				return Ok(undefined);
+			};
+			const secondary = createMockAdapter();
+
+			const fanOut = new FanOutAdapter({ primary, secondaries: [secondary] });
+			const deltas = [makeDelta({ table: "users", hlc: hlc(1) })];
+			const schemas: TableSchema[] = [
+				{ table: "users", columns: [{ name: "name", type: "string" }] },
+			];
+
+			const result = await fanOut.materialise(deltas, schemas);
+			expect(result.ok).toBe(true);
+			expect(materialiseCalls).toHaveLength(1);
+			expect(materialiseCalls[0]!.deltas).toEqual(deltas);
+		});
+
+		it("no-op when primary is not materialisable", async () => {
+			const primary = createMockAdapter();
+			const secondary = createMockAdapter();
+			const fanOut = new FanOutAdapter({ primary, secondaries: [secondary] });
+
+			const deltas = [makeDelta({ table: "users", hlc: hlc(1) })];
+			const schemas: TableSchema[] = [
+				{ table: "users", columns: [{ name: "name", type: "string" }] },
+			];
+
+			const result = await fanOut.materialise(deltas, schemas);
+			expect(result.ok).toBe(true);
+		});
+
+		it("delegates to materialisable secondaries (fire-and-forget)", async () => {
+			const primary = createMockAdapter();
+			(primary as unknown as Materialisable).materialise = async () => Ok(undefined);
+
+			const secondary = createMockAdapter();
+			const secCalls: unknown[] = [];
+			(secondary as unknown as Materialisable).materialise = async (
+				deltas: RowDelta[],
+				schemas: ReadonlyArray<TableSchema>,
+			) => {
+				secCalls.push({ deltas, schemas });
+				return Ok(undefined);
+			};
+
+			const fanOut = new FanOutAdapter({ primary, secondaries: [secondary] });
+			const deltas = [makeDelta({ table: "users", hlc: hlc(1) })];
+			const schemas: TableSchema[] = [
+				{ table: "users", columns: [{ name: "name", type: "string" }] },
+			];
+
+			await fanOut.materialise(deltas, schemas);
+			await new Promise((r) => setTimeout(r, 10));
+			expect(secCalls).toHaveLength(1);
+		});
 	});
 });

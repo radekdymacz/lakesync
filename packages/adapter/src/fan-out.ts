@@ -8,6 +8,8 @@ import {
 } from "@lakesync/core";
 
 import type { DatabaseAdapter } from "./db-types";
+import type { Materialisable } from "./materialise";
+import { isMaterialisable } from "./materialise";
 
 /** Configuration for the FanOutAdapter. */
 export interface FanOutAdapterConfig {
@@ -24,7 +26,7 @@ export interface FanOutAdapterConfig {
  * Secondary failures are silently caught and never affect the return value.
  * Use case: write to Postgres (fast, operational), replicate to BigQuery (analytics).
  */
-export class FanOutAdapter implements DatabaseAdapter {
+export class FanOutAdapter implements DatabaseAdapter, Materialisable {
 	private readonly primary: DatabaseAdapter;
 	private readonly secondaries: ReadonlyArray<DatabaseAdapter>;
 
@@ -72,6 +74,27 @@ export class FanOutAdapter implements DatabaseAdapter {
 
 		for (const secondary of this.secondaries) {
 			secondary.ensureSchema(schema).catch(() => {});
+		}
+
+		return Ok(undefined);
+	}
+
+	/** Materialise via primary, then replicate to materialisable secondaries (fire-and-forget). */
+	async materialise(
+		deltas: RowDelta[],
+		schemas: ReadonlyArray<TableSchema>,
+	): Promise<Result<void, AdapterError>> {
+		if (isMaterialisable(this.primary)) {
+			const result = await this.primary.materialise(deltas, schemas);
+			if (!result.ok) {
+				return result;
+			}
+		}
+
+		for (const secondary of this.secondaries) {
+			if (isMaterialisable(secondary)) {
+				secondary.materialise(deltas, schemas).catch(() => {});
+			}
 		}
 
 		return Ok(undefined);
