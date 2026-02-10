@@ -22,18 +22,23 @@ export interface JiraConnectorConfig {
 export interface JiraIngestConfig {
 	/** Poll interval in milliseconds (default 30 000). */
 	intervalMs?: number;
+	/** Number of deltas per push chunk (default 500). */
+	chunkSize?: number;
+	/** Approximate memory budget in bytes — triggers flush at 70%. */
+	memoryBudgetBytes?: number;
 }
 
 // ---------------------------------------------------------------------------
 // Jira REST API v3 — Minimal Response Types
 // ---------------------------------------------------------------------------
 
-/** Issue search response from POST /rest/api/3/search. */
+/** Issue search response from POST /rest/api/3/search/jql. */
 export interface JiraSearchResponse {
-	startAt: number;
-	maxResults: number;
-	total: number;
 	issues: JiraIssue[];
+	/** Opaque token for fetching the next page (absent on last page). */
+	nextPageToken?: string;
+	/** True when this is the final page. */
+	isLast?: boolean;
 }
 
 /** A single Jira issue. */

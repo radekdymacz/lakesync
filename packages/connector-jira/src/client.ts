@@ -51,11 +51,17 @@ export class JiraClient {
 	/**
 	 * Search for issues via JQL with auto-pagination.
 	 *
+	 * Uses the `/rest/api/3/search/jql` endpoint with token-based pagination.
 	 * When `updatedSince` is provided, appends `AND updated >= "date"` to the JQL.
+	 * Empty JQL is replaced with `project is not EMPTY` (the new endpoint
+	 * rejects unbounded queries).
+	 *
+	 * @param limit — optional cap on the total number of issues returned.
 	 */
 	async searchIssues(
 		jql: string,
 		updatedSince?: string,
+		limit?: number,
 	): Promise<Result<JiraIssue[], JiraApiError | JiraRateLimitError>> {
 		let effectiveJql = jql || "";
 
@@ -64,17 +70,26 @@ export class JiraClient {
 			effectiveJql = effectiveJql.length > 0 ? `(${effectiveJql}) AND ${clause}` : clause;
 		}
 
-		const allIssues: JiraIssue[] = [];
-		let startAt = 0;
+		// The /search/jql endpoint rejects unbounded queries
+		if (effectiveJql.length === 0) {
+			effectiveJql = "project is not EMPTY";
+		}
 
-		// eslint-disable-next-line no-constant-condition
+		const allIssues: JiraIssue[] = [];
+		let nextPageToken: string | undefined;
+		const pageSize = limit !== undefined ? Math.min(limit, MAX_RESULTS) : MAX_RESULTS;
+
 		while (true) {
-			const result = await this.request<JiraSearchResponse>("/rest/api/3/search", "POST", {
+			const body: Record<string, unknown> = {
 				jql: effectiveJql,
-				startAt,
-				maxResults: MAX_RESULTS,
+				maxResults: pageSize,
 				fields: ISSUE_FIELDS,
-			});
+			};
+			if (nextPageToken) {
+				body.nextPageToken = nextPageToken;
+			}
+
+			const result = await this.request<JiraSearchResponse>("/rest/api/3/search/jql", "POST", body);
 
 			if (!result.ok) return result;
 
@@ -83,11 +98,12 @@ export class JiraClient {
 				allIssues.push(issue);
 			}
 
-			startAt += page.maxResults;
-			if (startAt >= page.total) break;
+			if (limit !== undefined && allIssues.length >= limit) break;
+			if (page.isLast || !page.nextPageToken) break;
+			nextPageToken = page.nextPageToken;
 		}
 
-		return Ok(allIssues);
+		return Ok(limit !== undefined ? allIssues.slice(0, limit) : allIssues);
 	}
 
 	/**

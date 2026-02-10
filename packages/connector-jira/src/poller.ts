@@ -2,7 +2,6 @@
 // JiraSourcePoller — polls Jira Cloud and pushes deltas to SyncGateway
 // ---------------------------------------------------------------------------
 
-import type { RowDelta } from "@lakesync/core";
 import { BaseSourcePoller, extractDelta, type PushTarget } from "@lakesync/core";
 import { JiraClient } from "./client";
 import { mapComment, mapIssue, mapProject } from "./mapping";
@@ -12,10 +11,10 @@ const DEFAULT_INTERVAL_MS = 30_000;
 
 /**
  * Polls Jira Cloud for issues, comments, and projects and pushes
- * detected changes into a gateway via `handlePush()`.
+ * detected changes into a gateway via streaming accumulation.
  *
- * Extends {@link BaseSourcePoller} for lifecycle (start/stop/schedule)
- * and push logic.
+ * Uses {@link BaseSourcePoller.accumulateDelta} to push deltas in
+ * memory-bounded chunks instead of collecting all deltas in a single array.
  */
 export class JiraSourcePoller extends BaseSourcePoller {
 	private readonly connectionConfig: JiraConnectorConfig;
@@ -41,6 +40,10 @@ export class JiraSourcePoller extends BaseSourcePoller {
 			name,
 			intervalMs: ingestConfig?.intervalMs ?? DEFAULT_INTERVAL_MS,
 			gateway,
+			memory: {
+				chunkSize: ingestConfig?.chunkSize,
+				memoryBudgetBytes: ingestConfig?.memoryBudgetBytes,
+			},
 		});
 		this.connectionConfig = connectionConfig;
 		this.client = client ?? new JiraClient(connectionConfig);
@@ -48,55 +51,43 @@ export class JiraSourcePoller extends BaseSourcePoller {
 
 	/** Execute a single poll cycle across all entity types. */
 	async poll(): Promise<void> {
-		const allDeltas: RowDelta[] = [];
-
 		// 1. Issues (cursor strategy via `updated` field)
-		const issueDeltas = await this.pollIssues();
-		for (const d of issueDeltas.deltas) {
-			allDeltas.push(d);
-		}
+		const issueKeys = await this.pollIssues();
 
 		// 2. Comments (diff per-issue, only for issues returned in this poll)
 		const includeComments = this.connectionConfig.includeComments ?? true;
-		if (includeComments && issueDeltas.issueKeys.length > 0) {
-			const commentDeltas = await this.pollComments(issueDeltas.issueKeys);
-			for (const d of commentDeltas) {
-				allDeltas.push(d);
-			}
+		if (includeComments && issueKeys.length > 0) {
+			await this.pollComments(issueKeys);
 		}
 
 		// 3. Projects (full diff)
 		const includeProjects = this.connectionConfig.includeProjects ?? true;
 		if (includeProjects) {
-			const projectDeltas = await this.pollProjects();
-			for (const d of projectDeltas) {
-				allDeltas.push(d);
-			}
+			await this.pollProjects();
 		}
 
-		this.pushDeltas(allDeltas);
+		await this.flushAccumulator();
 	}
 
 	// -----------------------------------------------------------------------
 	// Issues — cursor strategy via JQL `updated` field
 	// -----------------------------------------------------------------------
 
-	private async pollIssues(): Promise<{ deltas: RowDelta[]; issueKeys: string[] }> {
+	private async pollIssues(): Promise<string[]> {
 		const result = await this.client.searchIssues(
 			this.connectionConfig.jql ?? "",
 			this.lastUpdated,
 		);
 
 		if (!result.ok) {
-			return { deltas: [], issueKeys: [] };
+			return [];
 		}
 
 		const issues = result.value;
 		if (issues.length === 0) {
-			return { deltas: [], issueKeys: [] };
+			return [];
 		}
 
-		const deltas: RowDelta[] = [];
 		const issueKeys: string[] = [];
 		let maxUpdated = this.lastUpdated;
 
@@ -112,7 +103,7 @@ export class JiraSourcePoller extends BaseSourcePoller {
 			});
 
 			if (delta) {
-				deltas.push(delta);
+				await this.accumulateDelta(delta);
 			}
 
 			// Track max updated timestamp for cursor advancement
@@ -123,16 +114,14 @@ export class JiraSourcePoller extends BaseSourcePoller {
 		}
 
 		this.lastUpdated = maxUpdated;
-		return { deltas, issueKeys };
+		return issueKeys;
 	}
 
 	// -----------------------------------------------------------------------
 	// Comments — diff per-issue
 	// -----------------------------------------------------------------------
 
-	private async pollComments(issueKeys: string[]): Promise<RowDelta[]> {
-		const deltas: RowDelta[] = [];
-
+	private async pollComments(issueKeys: string[]): Promise<void> {
 		for (const issueKey of issueKeys) {
 			const result = await this.client.getComments(issueKey);
 			if (!result.ok) continue;
@@ -152,7 +141,7 @@ export class JiraSourcePoller extends BaseSourcePoller {
 				});
 
 				if (delta) {
-					deltas.push(delta);
+					await this.accumulateDelta(delta);
 				}
 			}
 
@@ -161,17 +150,15 @@ export class JiraSourcePoller extends BaseSourcePoller {
 				this.commentSnapshot.set(rowId, row);
 			}
 		}
-
-		return deltas;
 	}
 
 	// -----------------------------------------------------------------------
 	// Projects — full diff
 	// -----------------------------------------------------------------------
 
-	private async pollProjects(): Promise<RowDelta[]> {
+	private async pollProjects(): Promise<void> {
 		const result = await this.client.getProjects();
-		if (!result.ok) return [];
+		if (!result.ok) return;
 
 		const currentMap = new Map<string, Record<string, unknown>>();
 
@@ -181,7 +168,6 @@ export class JiraSourcePoller extends BaseSourcePoller {
 		}
 
 		const previousMap = this.projectSnapshot;
-		const deltas: RowDelta[] = [];
 
 		// Detect inserts and updates
 		for (const [rowId, currentRow] of currentMap) {
@@ -195,7 +181,7 @@ export class JiraSourcePoller extends BaseSourcePoller {
 			});
 
 			if (delta) {
-				deltas.push(delta);
+				await this.accumulateDelta(delta);
 			}
 		}
 
@@ -210,14 +196,12 @@ export class JiraSourcePoller extends BaseSourcePoller {
 				});
 
 				if (delta) {
-					deltas.push(delta);
+					await this.accumulateDelta(delta);
 				}
 			}
 		}
 
 		// Replace snapshot
 		this.projectSnapshot = currentMap;
-
-		return deltas;
 	}
 }

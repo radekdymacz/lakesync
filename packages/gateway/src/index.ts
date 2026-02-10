@@ -1,3 +1,4 @@
+export { type IngestTarget, isIngestTarget } from "@lakesync/core";
 export { DeltaBuffer } from "./buffer";
 export {
 	SyncGateway,

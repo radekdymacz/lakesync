@@ -37,10 +37,8 @@ describe("JiraClient", () => {
 	describe("auth header", () => {
 		it("sends correct Basic auth header", async () => {
 			const page: JiraSearchResponse = {
-				startAt: 0,
-				maxResults: 100,
-				total: 0,
 				issues: [],
+				isLast: true,
 			};
 			mockFetch.mockResolvedValueOnce(jsonResponse(page));
 
@@ -58,9 +56,6 @@ describe("JiraClient", () => {
 	describe("searchIssues", () => {
 		it("returns issues from a single page", async () => {
 			const page: JiraSearchResponse = {
-				startAt: 0,
-				maxResults: 100,
-				total: 1,
 				issues: [
 					{
 						id: "1",
@@ -80,6 +75,7 @@ describe("JiraClient", () => {
 						},
 					},
 				],
+				isLast: true,
 			};
 			mockFetch.mockResolvedValueOnce(jsonResponse(page));
 
@@ -95,9 +91,6 @@ describe("JiraClient", () => {
 
 		it("paginates across multiple pages", async () => {
 			const page1: JiraSearchResponse = {
-				startAt: 0,
-				maxResults: 1,
-				total: 2,
 				issues: [
 					{
 						id: "1",
@@ -117,11 +110,10 @@ describe("JiraClient", () => {
 						},
 					},
 				],
+				nextPageToken: "page-2-token",
+				isLast: false,
 			};
 			const page2: JiraSearchResponse = {
-				startAt: 1,
-				maxResults: 1,
-				total: 2,
 				issues: [
 					{
 						id: "2",
@@ -141,6 +133,7 @@ describe("JiraClient", () => {
 						},
 					},
 				],
+				isLast: true,
 			};
 			mockFetch.mockResolvedValueOnce(jsonResponse(page1));
 			mockFetch.mockResolvedValueOnce(jsonResponse(page2));
@@ -154,14 +147,17 @@ describe("JiraClient", () => {
 				expect(result.value[0]!.key).toBe("ENG-1");
 				expect(result.value[1]!.key).toBe("ENG-2");
 			}
+
+			// Second request should include nextPageToken
+			const [, init2] = mockFetch.mock.calls[1]!;
+			const body2 = JSON.parse((init2 as RequestInit).body as string);
+			expect(body2.nextPageToken).toBe("page-2-token");
 		});
 
 		it("appends updatedSince to JQL", async () => {
 			const page: JiraSearchResponse = {
-				startAt: 0,
-				maxResults: 100,
-				total: 0,
 				issues: [],
+				isLast: true,
 			};
 			mockFetch.mockResolvedValueOnce(jsonResponse(page));
 
@@ -172,6 +168,21 @@ describe("JiraClient", () => {
 			const body = JSON.parse((init as RequestInit).body as string);
 			expect(body.jql).toContain("updated >=");
 			expect(body.jql).toContain("project = ENG");
+		});
+
+		it("uses bounded JQL when empty string is passed", async () => {
+			const page: JiraSearchResponse = {
+				issues: [],
+				isLast: true,
+			};
+			mockFetch.mockResolvedValueOnce(jsonResponse(page));
+
+			const client = new JiraClient(config);
+			await client.searchIssues("");
+
+			const [, init] = mockFetch.mock.calls[0]!;
+			const body = JSON.parse((init as RequestInit).body as string);
+			expect(body.jql).toBe("project is not EMPTY");
 		});
 
 		it("returns error on HTTP failure", async () => {
@@ -194,10 +205,8 @@ describe("JiraClient", () => {
 				headers: { "Retry-After": "0" },
 			});
 			const page: JiraSearchResponse = {
-				startAt: 0,
-				maxResults: 100,
-				total: 0,
 				issues: [],
+				isLast: true,
 			};
 
 			mockFetch.mockResolvedValueOnce(rateLimited);

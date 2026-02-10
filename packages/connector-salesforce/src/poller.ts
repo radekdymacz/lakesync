@@ -2,7 +2,6 @@
 // SalesforceSourcePoller — polls Salesforce CRM and pushes deltas to SyncGateway
 // ---------------------------------------------------------------------------
 
-import type { RowDelta } from "@lakesync/core";
 import { BaseSourcePoller, extractDelta, type PushTarget } from "@lakesync/core";
 import { SalesforceClient } from "./client";
 import { mapAccount, mapContact, mapLead, mapOpportunity } from "./mapping";
@@ -94,10 +93,10 @@ const LEAD_FIELDS = [
 
 /**
  * Polls Salesforce CRM for accounts, contacts, opportunities, and leads
- * and pushes detected changes into a gateway via `handlePush()`.
+ * and pushes detected changes into a gateway via streaming accumulation.
  *
- * Extends {@link BaseSourcePoller} for lifecycle (start/stop/schedule)
- * and push logic.
+ * Uses {@link BaseSourcePoller.accumulateDelta} to push deltas in
+ * memory-bounded chunks instead of collecting all deltas in a single array.
  */
 export class SalesforceSourcePoller extends BaseSourcePoller {
 	private readonly connectionConfig: SalesforceConnectorConfig;
@@ -122,6 +121,10 @@ export class SalesforceSourcePoller extends BaseSourcePoller {
 			name,
 			intervalMs: ingestConfig?.intervalMs ?? DEFAULT_INTERVAL_MS,
 			gateway,
+			memory: {
+				chunkSize: ingestConfig?.chunkSize,
+				memoryBudgetBytes: ingestConfig?.memoryBudgetBytes,
+			},
 		});
 		this.connectionConfig = connectionConfig;
 		this.client = client ?? new SalesforceClient(connectionConfig);
@@ -129,57 +132,45 @@ export class SalesforceSourcePoller extends BaseSourcePoller {
 
 	/** Execute a single poll cycle across all enabled entity types. */
 	async poll(): Promise<void> {
-		const allDeltas: RowDelta[] = [];
-
 		const includeAccounts = this.connectionConfig.includeAccounts ?? true;
 		if (includeAccounts) {
-			const deltas = await this.pollEntity<SfAccount>(
+			await this.pollEntity<SfAccount>(
 				"Account",
 				ACCOUNT_FIELDS,
 				"accounts",
 				"sf_accounts",
 				mapAccount,
 			);
-			for (const d of deltas) allDeltas.push(d);
 		}
 
 		const includeContacts = this.connectionConfig.includeContacts ?? true;
 		if (includeContacts) {
-			const deltas = await this.pollEntity<SfContact>(
+			await this.pollEntity<SfContact>(
 				"Contact",
 				CONTACT_FIELDS,
 				"contacts",
 				"sf_contacts",
 				mapContact,
 			);
-			for (const d of deltas) allDeltas.push(d);
 		}
 
 		const includeOpportunities = this.connectionConfig.includeOpportunities ?? true;
 		if (includeOpportunities) {
-			const deltas = await this.pollEntity<SfOpportunity>(
+			await this.pollEntity<SfOpportunity>(
 				"Opportunity",
 				OPPORTUNITY_FIELDS,
 				"opportunities",
 				"sf_opportunities",
 				mapOpportunity,
 			);
-			for (const d of deltas) allDeltas.push(d);
 		}
 
 		const includeLeads = this.connectionConfig.includeLeads ?? true;
 		if (includeLeads) {
-			const deltas = await this.pollEntity<SfLead>(
-				"Lead",
-				LEAD_FIELDS,
-				"leads",
-				"sf_leads",
-				mapLead,
-			);
-			for (const d of deltas) allDeltas.push(d);
+			await this.pollEntity<SfLead>("Lead", LEAD_FIELDS, "leads", "sf_leads", mapLead);
 		}
 
-		this.pushDeltas(allDeltas);
+		await this.flushAccumulator();
 	}
 
 	// -----------------------------------------------------------------------
@@ -192,17 +183,16 @@ export class SalesforceSourcePoller extends BaseSourcePoller {
 		cursorKey: string,
 		table: string,
 		mapFn: (record: T) => { rowId: string; row: Record<string, unknown> },
-	): Promise<RowDelta[]> {
+	): Promise<void> {
 		const cursor = this.cursors[cursorKey];
 		const soql = this.buildSoql(sObjectType, fields, cursor);
 
 		const result = await this.client.query<T>(soql);
-		if (!result.ok) return [];
+		if (!result.ok) return;
 
 		const records = result.value;
-		if (records.length === 0) return [];
+		if (records.length === 0) return;
 
-		const deltas: RowDelta[] = [];
 		let maxLastModified = cursor;
 
 		for (const record of records) {
@@ -216,7 +206,7 @@ export class SalesforceSourcePoller extends BaseSourcePoller {
 			});
 
 			if (delta) {
-				deltas.push(delta);
+				await this.accumulateDelta(delta);
 			}
 
 			const lastModified = record.LastModifiedDate;
@@ -226,7 +216,6 @@ export class SalesforceSourcePoller extends BaseSourcePoller {
 		}
 
 		this.cursors[cursorKey] = maxLastModified;
-		return deltas;
 	}
 
 	// -----------------------------------------------------------------------

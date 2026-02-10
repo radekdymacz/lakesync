@@ -34,6 +34,10 @@ export interface SalesforceConnectorConfig {
 export interface SalesforceIngestConfig {
 	/** Poll interval in milliseconds (default 30 000). */
 	intervalMs?: number;
+	/** Number of deltas per push chunk (default 500). */
+	chunkSize?: number;
+	/** Approximate memory budget in bytes — triggers flush at 70%. */
+	memoryBudgetBytes?: number;
 }
 
 // ---------------------------------------------------------------------------

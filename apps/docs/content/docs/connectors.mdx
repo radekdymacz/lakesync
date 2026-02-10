@@ -87,7 +87,7 @@ interface ConnectorConfig {
 
 Validation is performed server-side via `validateConnectorConfig()`. Missing or invalid fields return a `400` response with a descriptive error message.
 
-For API connectors (Jira, Salesforce), the `ingest.tables` field is not required — they define their tables internally. Only `intervalMs` is used from the ingest config.
+For API connectors (Jira, Salesforce), the `ingest.tables` field is not required — they define their tables internally. Only `intervalMs`, `chunkSize`, and `memoryBudgetBytes` are used from the ingest config.
 
 ## API Reference
 
@@ -504,6 +504,122 @@ The full admin API surface — connectors, sync rules, schemas, flush — is des
 **Gateway Server** (`@lakesync/gateway-server`) creates live database connections and starts ingest pollers when a connector is registered. For API connectors like Jira and Salesforce, it starts dedicated pollers that communicate with the external API. The server must have network access to the source database or API.
 
 **Gateway Worker** (`gateway-worker` on Cloudflare Workers) stores connector configuration in the Durable Object but cannot create live database connections, run pollers, or communicate with external APIs — the Workers runtime does not support long-running processes or arbitrary TCP connections. Use the gateway server for connectors that require ingest polling or API access.
+
+## E2E Testing
+
+Each API connector includes an E2E test suite that runs against a real service account. Tests are skipped automatically when credentials are not present, so unit tests always pass in CI without secrets.
+
+### Jira Cloud
+
+1. Create an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) for your Atlassian account.
+2. Copy the `.env.example` in `packages/connector-jira/` to `.env` and fill in your credentials:
+
+```bash
+JIRA_DOMAIN=mycompany          # for mycompany.atlassian.net
+JIRA_EMAIL=you@company.com
+JIRA_API_TOKEN=ATATT3xFfGF0...
+# Optional: scope to a specific project
+JIRA_JQL=project = ENG
+```
+
+3. Run the E2E tests:
+
+```bash
+cd packages/connector-jira
+bun vitest run -t "Jira E2E"
+```
+
+The test suite verifies: issue search, comment fetching, project listing, empty-result handling, and a full poll-to-gateway roundtrip.
+
+### Salesforce CRM
+
+1. Create a **Connected App** in Salesforce Setup (**App Manager** > **New Connected App**):
+   - Enable OAuth Settings
+   - Add scopes: `Full access (full)`
+   - Note the **Consumer Key** and **Consumer Secret**
+2. Get your **Security Token** from **Setup** > **My Personal Information** > **Reset My Security Token**.
+3. Copy the `.env.example` in `packages/connector-salesforce/` to `.env` and fill in your credentials:
+
+```bash
+SF_INSTANCE_URL=https://your-dev-ed.develop.my.salesforce.com
+SF_CLIENT_ID=your-connected-app-consumer-key
+SF_CLIENT_SECRET=your-connected-app-consumer-secret
+SF_USERNAME=your-email@example.com
+# Password + Security Token concatenated (no separator)
+SF_PASSWORD=YourPassword123ABCSecurityToken
+SF_IS_SANDBOX=false
+```
+
+4. Run the E2E tests:
+
+```bash
+cd packages/connector-salesforce
+bun vitest run -t "Salesforce E2E"
+```
+
+The test suite verifies: OAuth authentication, account and contact queries, empty-result handling, and a full poll-to-gateway roundtrip.
+
+### How It Works
+
+Both test suites follow the same pattern:
+
+- Credentials are read from `process.env` (loaded via vitest's built-in `.env` support)
+- When any required variable is missing, `describe.skipIf` skips the entire suite
+- `.env` files are gitignored — only `.env.example` is committed
+- Tests exercise the real HTTP client (no mocks) against live API endpoints
+
+## Memory-Managed Ingestion
+
+API connectors (Jira, Salesforce) use a **streaming accumulation** pipeline that pushes deltas in bounded chunks instead of collecting every delta in a single in-memory array. This keeps memory usage constant regardless of how many records are returned by the external API — critical for Cloudflare Workers with a 128 MB limit.
+
+### How It Works
+
+1. Each record from the external API is converted to a delta and **accumulated** one at a time
+2. When the accumulator reaches `chunkSize` (default 500), the chunk is pushed to the gateway
+3. Before each push, the poller checks the gateway's buffer — if it signals backpressure or exceeds the `memoryBudgetBytes` threshold (at 70%), the poller triggers a **flush** first
+4. If a push is rejected due to backpressure, the poller flushes and retries once
+5. At the end of each poll cycle, any remaining deltas are flushed
+
+### Configuration
+
+Both Jira and Salesforce connectors accept optional memory tuning in their ingest config:
+
+```bash
+curl -X POST $GATEWAY_URL/admin/connectors/$GW_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "jira-eng",
+    "type": "jira",
+    "jira": { "domain": "co", "email": "...", "apiToken": "..." },
+    "ingest": {
+      "intervalMs": 30000,
+      "chunkSize": 200,
+      "memoryBudgetBytes": 67108864
+    }
+  }'
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `chunkSize` | 500 | Number of deltas per push chunk |
+| `memoryBudgetBytes` | No limit | Triggers a gateway flush when buffer reaches 70% of this value |
+
+### IngestTarget Interface
+
+The streaming pipeline works with any gateway that implements the `IngestTarget` interface (exported from `@lakesync/core`):
+
+```ts
+interface IngestTarget extends PushTarget {
+  flush(): Promise<Result<void, FlushError>>;
+  shouldFlush(): boolean;
+  readonly bufferStats: { logSize: number; indexSize: number; byteSize: number };
+}
+```
+
+`SyncGateway` implements `IngestTarget` automatically. Plain `PushTarget` gateways degrade gracefully — chunks are pushed without flush checks.
+
+Use `isIngestTarget(target)` to check at runtime whether a target supports flush.
 
 ## Security
 

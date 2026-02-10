@@ -15,6 +15,7 @@ import {
 	filterDeltas,
 	HLC,
 	type HLCTimestamp,
+	type IngestTarget,
 	Ok,
 	type Result,
 	type RowDelta,
@@ -51,7 +52,7 @@ function hlcRange(entries: RowDelta[]): { min: HLCTimestamp; max: HLCTimestamp }
  *
  * Phase 1: plain TypeScript class (Phase 2 wraps in Cloudflare Durable Object).
  */
-export class SyncGateway {
+export class SyncGateway implements IngestTarget {
 	private hlc: HLC;
 	private buffer: DeltaBuffer;
 	private config: GatewayConfig;

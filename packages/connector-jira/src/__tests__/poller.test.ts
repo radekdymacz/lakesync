@@ -1,9 +1,23 @@
-import { Ok } from "@lakesync/core";
+import { Ok, type RowDelta, type SyncPush } from "@lakesync/core";
 import { SyncGateway } from "@lakesync/gateway";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JiraClient } from "../client";
 import { JiraSourcePoller } from "../poller";
 import type { JiraComment, JiraIssue, JiraProject } from "../types";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Collect all deltas across all handlePush calls. */
+function collectDeltas(spy: { mock: { calls: unknown[][] } }): RowDelta[] {
+	const all: RowDelta[] = [];
+	for (const call of spy.mock.calls) {
+		const push = call[0] as SyncPush;
+		for (const d of push.deltas) all.push(d);
+	}
+	return all;
+}
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -106,13 +120,11 @@ describe("JiraSourcePoller", () => {
 		const handlePushSpy = vi.spyOn(gateway, "handlePush");
 		await poller.poll();
 
-		expect(handlePushSpy).toHaveBeenCalledOnce();
-		const push = handlePushSpy.mock.calls[0]![0]!;
-		expect(push.clientId).toBe("ingest:jira-test");
-		expect(push.deltas.length).toBeGreaterThan(0);
+		expect(handlePushSpy).toHaveBeenCalled();
+		const allDeltas = collectDeltas(handlePushSpy);
+		expect(allDeltas.length).toBeGreaterThan(0);
 
-		// Should have issue deltas
-		const issueDelta = push.deltas.find((d) => d.table === "jira_issues");
+		const issueDelta = allDeltas.find((d) => d.table === "jira_issues");
 		expect(issueDelta).toBeDefined();
 		expect(issueDelta!.rowId).toBe("ENG-1");
 	});
@@ -167,8 +179,8 @@ describe("JiraSourcePoller", () => {
 		const handlePushSpy = vi.spyOn(gateway, "handlePush");
 		await poller.poll();
 
-		const push = handlePushSpy.mock.calls[0]![0]!;
-		const commentDelta = push.deltas.find((d) => d.table === "jira_comments");
+		const allDeltas = collectDeltas(handlePushSpy);
+		const commentDelta = allDeltas.find((d) => d.table === "jira_comments");
 		expect(commentDelta).toBeDefined();
 		expect(commentDelta!.rowId).toBe("ENG-1:c1");
 	});
@@ -191,16 +203,22 @@ describe("JiraSourcePoller", () => {
 
 		// First poll — inserts project
 		await poller.poll();
-		expect(handlePushSpy).toHaveBeenCalledOnce();
+		const firstCallCount = handlePushSpy.mock.calls.length;
+		expect(firstCallCount).toBeGreaterThan(0);
 
 		// Second poll — project disappears
 		(client.getProjects as ReturnType<typeof vi.fn>).mockResolvedValueOnce(Ok([]));
 		(client.searchIssues as ReturnType<typeof vi.fn>).mockResolvedValueOnce(Ok([]));
 		await poller.poll();
 
-		expect(handlePushSpy).toHaveBeenCalledTimes(2);
-		const push = handlePushSpy.mock.calls[1]![0]!;
-		const deleteDelta = push.deltas.find((d) => d.table === "jira_projects" && d.op === "DELETE");
+		// Collect deltas only from calls after the first poll
+		const laterDeltas: RowDelta[] = [];
+		for (let i = firstCallCount; i < handlePushSpy.mock.calls.length; i++) {
+			const push = handlePushSpy.mock.calls[i]![0] as SyncPush;
+			for (const d of push.deltas) laterDeltas.push(d);
+		}
+
+		const deleteDelta = laterDeltas.find((d) => d.table === "jira_projects" && d.op === "DELETE");
 		expect(deleteDelta).toBeDefined();
 		expect(deleteDelta!.rowId).toBe("ENG");
 	});

@@ -1,9 +1,23 @@
-import { Ok } from "@lakesync/core";
+import { Ok, type RowDelta, type SyncPush } from "@lakesync/core";
 import { SyncGateway } from "@lakesync/gateway";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SalesforceClient } from "../client";
 import { SalesforceSourcePoller } from "../poller";
 import type { SfAccount, SfContact, SfLead, SfOpportunity } from "../types";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Collect all deltas across all handlePush calls. */
+function collectDeltas(spy: { mock: { calls: unknown[][] } }): RowDelta[] {
+	const all: RowDelta[] = [];
+	for (const call of spy.mock.calls) {
+		const push = call[0] as SyncPush;
+		for (const d of push.deltas) all.push(d);
+	}
+	return all;
+}
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -163,12 +177,11 @@ describe("SalesforceSourcePoller", () => {
 		const handlePushSpy = vi.spyOn(gateway, "handlePush");
 		await poller.poll();
 
-		expect(handlePushSpy).toHaveBeenCalledOnce();
-		const push = handlePushSpy.mock.calls[0]![0]!;
-		expect(push.clientId).toBe("ingest:sf-test");
-		expect(push.deltas.length).toBeGreaterThan(0);
+		expect(handlePushSpy).toHaveBeenCalled();
+		const allDeltas = collectDeltas(handlePushSpy);
+		expect(allDeltas.length).toBeGreaterThan(0);
 
-		const accountDelta = push.deltas.find((d) => d.table === "sf_accounts");
+		const accountDelta = allDeltas.find((d) => d.table === "sf_accounts");
 		expect(accountDelta).toBeDefined();
 		expect(accountDelta!.rowId).toBe("001A");
 	});
@@ -198,10 +211,10 @@ describe("SalesforceSourcePoller", () => {
 		const handlePushSpy = vi.spyOn(gateway, "handlePush");
 		await poller.poll();
 
-		expect(handlePushSpy).toHaveBeenCalledOnce();
-		const push = handlePushSpy.mock.calls[0]![0]!;
+		expect(handlePushSpy).toHaveBeenCalled();
+		const allDeltas = collectDeltas(handlePushSpy);
 
-		const tables = new Set(push.deltas.map((d) => d.table));
+		const tables = new Set(allDeltas.map((d) => d.table));
 		expect(tables.has("sf_accounts")).toBe(true);
 		expect(tables.has("sf_contacts")).toBe(true);
 		expect(tables.has("sf_opportunities")).toBe(true);
@@ -291,8 +304,8 @@ describe("SalesforceSourcePoller", () => {
 		const handlePushSpy = vi.spyOn(gateway, "handlePush");
 		await poller.poll();
 
-		const push = handlePushSpy.mock.calls[0]![0]!;
-		const tables = new Set(push.deltas.map((d) => d.table));
+		const allDeltas = collectDeltas(handlePushSpy);
+		const tables = new Set(allDeltas.map((d) => d.table));
 		expect(tables.has("sf_accounts")).toBe(false);
 		expect(tables.has("sf_leads")).toBe(false);
 		expect(tables.has("sf_contacts")).toBe(true);
