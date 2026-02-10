@@ -3,6 +3,7 @@ import type {
 	ConnectorConfig,
 	HLCTimestamp,
 	ResolvedClaims,
+	RowDelta,
 	SyncRulesConfig,
 	SyncRulesContext,
 	TableSchema,
@@ -96,6 +97,9 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	/** Consecutive flush failure count for exponential backoff. Reset on success. */
 	private flushRetryCount = 0;
 
+	/** High-water mark for buffer byte usage. */
+	private peakBufferBytes = 0;
+
 	/**
 	 * Return the gateway instance, creating it on first access.
 	 *
@@ -115,7 +119,9 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		this.gateway = new SyncGateway(
 			{
 				gatewayId: this.ctx.id.toString(),
-				maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
+				maxBufferBytes: this.env.MAX_BUFFER_BYTES
+					? Number(this.env.MAX_BUFFER_BYTES)
+					: DEFAULT_MAX_BUFFER_BYTES,
 				maxBufferAgeMs: DEFAULT_MAX_BUFFER_AGE_MS,
 				flushFormat: tableSchema ? "parquet" : "json",
 				tableSchema,
@@ -238,6 +244,10 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				return this.handleConnectors(request);
 			case "/checkpoint":
 				return this.handleCheckpoint(request);
+			case "/admin/metrics":
+				return this.handleMetrics();
+			case "/internal/broadcast":
+				return this.handleInternalBroadcast(request);
 			default:
 				return errorResponse("Not found", 404);
 		}
@@ -307,7 +317,19 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			if (err.code === "SCHEMA_MISMATCH") {
 				return errorResponse(err.message, 422);
 			}
+			if (err.code === "BACKPRESSURE") {
+				return errorResponse(err.message, 503);
+			}
 			return errorResponse(err.message, 500);
+		}
+
+		// Track peak buffer usage
+		this.peakBufferBytes = Math.max(this.peakBufferBytes, gateway.bufferStats.byteSize);
+
+		// Auto-flush tables that exceed per-table budget
+		const hotTables = gateway.getTablesExceedingBudget();
+		for (const table of hotTables) {
+			await gateway.flushTable(table);
 		}
 
 		await this.scheduleFlushAlarm(gateway);
@@ -552,13 +574,10 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	}
 
 	/**
-	 * Handle `GET /checkpoint` -- serve checkpoint chunks with serve-time filtering.
+	 * Stream checkpoint chunks as length-prefixed proto frames.
 	 *
-	 * Reads checkpoint manifest and chunks from R2, filters each chunk by
-	 * the client's sync rules and JWT claims, and returns a single proto
-	 * SyncResponse containing all matching deltas.
-	 *
-	 * Peak memory: one decoded chunk at a time.
+	 * Each frame is: 4-byte big-endian length prefix + proto-encoded SyncResponse bytes.
+	 * Only chunks with deltas surviving sync-rules filtering are emitted.
 	 */
 	private async handleCheckpoint(request: Request): Promise<Response> {
 		const adapter = new R2Adapter(this.env.LAKE_BUCKET);
@@ -578,54 +597,97 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			return errorResponse("Corrupt checkpoint manifest", 500);
 		}
 
-		// Build sync rules context for filtering
 		const context = await this.buildSyncRulesContext(request);
-
-		// Process chunks one at a time, collect filtered deltas
-		const allFilteredDeltas: import("@lakesync/core").RowDelta[] = [];
-
-		for (const chunkName of manifest.chunks) {
-			const chunkKey = `checkpoints/${gatewayId}/${chunkName}`;
-			const chunkResult = await adapter.getObject(chunkKey);
-			if (!chunkResult.ok) {
-				continue; // Skip missing chunks
-			}
-
-			const decoded = decodeSyncResponse(chunkResult.value);
-			if (!decoded.ok) {
-				continue; // Skip corrupt chunks
-			}
-
-			const deltas = context ? filterDeltas(decoded.value.deltas, context) : decoded.value.deltas;
-
-			allFilteredDeltas.push(...deltas);
-		}
-
-		// Encode all filtered deltas as a single SyncResponse
 		const snapshotHlc = BigInt(manifest.snapshotHlc) as HLCTimestamp;
-		const responsePayload = encodeSyncResponse({
-			deltas: allFilteredDeltas,
-			serverHlc: snapshotHlc,
-			hasMore: false,
-		});
 
-		if (!responsePayload.ok) {
-			return errorResponse("Failed to encode checkpoint response", 500);
-		}
+		const { readable, writable } = new TransformStream<Uint8Array>();
+		const writer = writable.getWriter();
 
-		logger.info("checkpoint", {
-			chunkCount: manifest.chunks.length,
-			deltaCount: allFilteredDeltas.length,
-			filtered: !!context,
-		});
+		// Process chunks in the background — the stream handles backpressure
+		const processChunks = async () => {
+			try {
+				for (const chunkName of manifest.chunks) {
+					const chunkKey = `checkpoints/${gatewayId}/${chunkName}`;
+					const chunkResult = await adapter.getObject(chunkKey);
+					if (!chunkResult.ok) continue;
 
-		return new Response(responsePayload.value, {
+					const decoded = decodeSyncResponse(chunkResult.value);
+					if (!decoded.ok) continue;
+
+					const deltas = context
+						? filterDeltas(decoded.value.deltas, context)
+						: decoded.value.deltas;
+					if (deltas.length === 0) continue;
+
+					// Encode filtered deltas as a SyncResponse frame
+					const frame = encodeSyncResponse({
+						deltas,
+						serverHlc: snapshotHlc,
+						hasMore: false,
+					});
+					if (!frame.ok) continue;
+
+					// Write 4-byte BE length prefix + frame bytes
+					const lengthPrefix = new Uint8Array(4);
+					new DataView(lengthPrefix.buffer).setUint32(0, frame.value.byteLength, false);
+					await writer.write(lengthPrefix);
+					await writer.write(frame.value);
+				}
+			} finally {
+				await writer.close();
+			}
+		};
+
+		// Fire and forget — the stream will handle backpressure
+		processChunks();
+
+		return new Response(readable, {
 			status: 200,
 			headers: {
-				"Content-Type": "application/octet-stream",
+				"Content-Type": "application/x-lakesync-checkpoint-stream",
 				"X-Checkpoint-Hlc": manifest.snapshotHlc,
 			},
 		});
+	}
+
+	/**
+	 * Handle `GET /admin/metrics` -- return buffer statistics.
+	 */
+	private async handleMetrics(): Promise<Response> {
+		const gateway = await this.getGateway();
+		return jsonResponse({
+			...gateway.bufferStats,
+			peakBufferBytes: this.peakBufferBytes,
+		});
+	}
+
+	/**
+	 * Handle `POST /internal/broadcast` -- broadcast deltas from another shard's push.
+	 *
+	 * This is an internal DO-to-DO endpoint, not exposed to the public internet.
+	 * The worker entry point never routes to this path; only other DOs call it
+	 * via stub.fetch().
+	 */
+	private async handleInternalBroadcast(request: Request): Promise<Response> {
+		if (request.method !== "POST") {
+			return errorResponse("Method not allowed", 405);
+		}
+
+		let body: { deltas: RowDelta[]; serverHlc: HLCTimestamp; excludeClientId: string };
+		try {
+			const raw = await request.text();
+			body = JSON.parse(raw, bigintReviver) as typeof body;
+		} catch {
+			return errorResponse("Invalid JSON body", 400);
+		}
+
+		if (!Array.isArray(body.deltas) || body.deltas.length === 0) {
+			return jsonResponse({ broadcast: true, clients: 0 });
+		}
+
+		await this.broadcastDeltas(body.deltas, body.serverHlc, body.excludeClientId);
+
+		return jsonResponse({ broadcast: true });
 	}
 
 	// -----------------------------------------------------------------------
@@ -890,6 +952,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 
 		logger.info("flush_start", { bufferSize: stats.logSize });
 
+		const startMs = Date.now();
 		const result = await gateway.flush();
 
 		if (!result.ok) {
@@ -910,7 +973,11 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		}
 
 		// Flush succeeded — reset retry counter and log metrics
-		logger.info("flush_success", { bufferSize: stats.logSize });
+		logger.info("flush_success", {
+			bufferSize: stats.logSize,
+			bufferBytes: stats.byteSize,
+			flushDurationMs: Date.now() - startMs,
+		});
 		this.flushRetryCount = 0;
 
 		// If the buffer still has data (e.g. pushes arrived during flush),

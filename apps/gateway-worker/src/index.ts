@@ -2,7 +2,9 @@ import { verifyToken } from "./auth";
 import type { Env } from "./env";
 import { logger } from "./logger";
 import {
+	allShardGatewayIds,
 	handleShardedAdmin,
+	handleShardedCheckpoint,
 	handleShardedPull,
 	handleShardedPush,
 	parseShardConfig,
@@ -134,6 +136,15 @@ const ROUTE_TABLE: RouteEntry[] = [
 				doMethod: "DELETE",
 				forwardBody: false,
 			};
+		},
+	},
+	{
+		// GET /admin/metrics/:gatewayId
+		pattern: /^\/admin\/metrics\/([^/]+)$/,
+		extract: (match) => {
+			const gatewayId = match[1];
+			if (!gatewayId) return null;
+			return { gatewayId, doPath: "/admin/metrics", doMethod: "GET", forwardBody: false };
 		},
 	},
 ];
@@ -271,19 +282,9 @@ async function handleShardedRoute(
 		return handleShardedPull(config, request, url, env.SYNC_GATEWAY);
 	}
 
-	// Checkpoint — fan out to all shards (not yet implemented as sharded)
-	// For now, route to the default shard
+	// Checkpoint — fan out to all shards and merge
 	if (route.doPath === "/checkpoint") {
-		const id = env.SYNC_GATEWAY.idFromName(config.default);
-		const stub = env.SYNC_GATEWAY.get(id);
-		const doUrl = new URL(request.url);
-		doUrl.pathname = route.doPath;
-		return stub.fetch(
-			new Request(doUrl.toString(), {
-				method: route.doMethod ?? request.method,
-				headers: request.headers,
-			}),
-		);
+		return handleShardedCheckpoint(config, request, env.SYNC_GATEWAY);
 	}
 
 	// WebSocket — route to default shard (cross-shard broadcasting is future work)
@@ -297,6 +298,47 @@ async function handleShardedRoute(
 				method: route.doMethod ?? request.method,
 				headers: request.headers,
 			}),
+		);
+	}
+
+	// Metrics — fan out to all shards and sum stats
+	if (route.doPath === "/admin/metrics") {
+		const gatewayIds = allShardGatewayIds(config);
+		const responses = await Promise.all(
+			gatewayIds.map(async (gatewayId) => {
+				const id = env.SYNC_GATEWAY.idFromName(gatewayId);
+				const stub = env.SYNC_GATEWAY.get(id);
+				const doUrl = new URL(request.url);
+				doUrl.pathname = "/admin/metrics";
+				return stub.fetch(
+					new Request(doUrl.toString(), { method: "GET", headers: request.headers }),
+				);
+			}),
+		);
+
+		let totalLogSize = 0;
+		let totalIndexSize = 0;
+		let totalByteSize = 0;
+		for (const resp of responses) {
+			if (resp.ok) {
+				const stats = (await resp.json()) as {
+					logSize: number;
+					indexSize: number;
+					byteSize: number;
+				};
+				totalLogSize += stats.logSize;
+				totalIndexSize += stats.indexSize;
+				totalByteSize += stats.byteSize;
+			}
+		}
+
+		return new Response(
+			JSON.stringify({
+				logSize: totalLogSize,
+				indexSize: totalIndexSize,
+				byteSize: totalByteSize,
+			}),
+			{ status: 200, headers: { "Content-Type": "application/json" } },
 		);
 	}
 

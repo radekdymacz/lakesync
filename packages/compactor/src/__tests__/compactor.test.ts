@@ -13,7 +13,7 @@ import { readParquetToDeltas, writeDeltasToParquet } from "@lakesync/parquet";
 import { describe, expect, it } from "vitest";
 import { Compactor } from "../compactor";
 import { readEqualityDeletes } from "../equality-delete";
-import type { CompactionConfig } from "../types";
+import { type CompactionConfig, DEFAULT_COMPACTION_CONFIG } from "../types";
 
 /** Test schema for a todos table */
 const todoSchema: TableSchema = {
@@ -120,6 +120,12 @@ async function seedDeltaFile(
 	}
 	await adapter.putObject(key, result.value);
 }
+
+describe("DEFAULT_COMPACTION_CONFIG", () => {
+	it("limits maxDeltaFiles to 20 to cap compaction memory", () => {
+		expect(DEFAULT_COMPACTION_CONFIG.maxDeltaFiles).toBe(20);
+	});
+});
 
 describe("Compactor", () => {
 	it("compacts 20 INSERT deltas across files into 1 base file with 20 rows and 0 delete files", async () => {
@@ -436,6 +442,254 @@ describe("Compactor", () => {
 		// No output files should have been written
 		const outputFiles = [...adapter.stored.keys()].filter((k) => k.startsWith("output/compacted/"));
 		expect(outputFiles).toHaveLength(0);
+	});
+
+	it("resolves correctly with out-of-order HLCs across files", async () => {
+		const adapter = createMockAdapter();
+
+		// File 1: row-1 INSERT at HLC=10, row-2 INSERT at HLC=20
+		await seedDeltaFile(
+			adapter,
+			"deltas/file-0.parquet",
+			[
+				makeDelta({
+					rowId: "row-1",
+					hlc: HLC.encode(BASE_WALL + 10, 0),
+					op: "INSERT",
+					columns: [
+						{ column: "title", value: "Row1 Early" },
+						{ column: "completed", value: false },
+					],
+				}),
+				makeDelta({
+					rowId: "row-2",
+					hlc: HLC.encode(BASE_WALL + 20, 0),
+					op: "INSERT",
+					columns: [
+						{ column: "title", value: "Row2 Early" },
+						{ column: "completed", value: false },
+					],
+				}),
+			],
+			todoSchema,
+		);
+
+		// File 2: row-1 UPDATE at HLC=30 (later), row-2 UPDATE at HLC=5 (earlier — should lose)
+		await seedDeltaFile(
+			adapter,
+			"deltas/file-1.parquet",
+			[
+				makeDelta({
+					rowId: "row-1",
+					hlc: HLC.encode(BASE_WALL + 30, 0),
+					op: "UPDATE",
+					columns: [
+						{ column: "title", value: "Row1 Late" },
+						{ column: "completed", value: true },
+					],
+				}),
+				makeDelta({
+					rowId: "row-2",
+					hlc: HLC.encode(BASE_WALL + 5, 0),
+					op: "UPDATE",
+					columns: [
+						{ column: "title", value: "Row2 Stale" },
+						{ column: "completed", value: true },
+					],
+				}),
+			],
+			todoSchema,
+		);
+
+		const compactor = new Compactor(adapter, testConfig, todoSchema);
+		const result = await compactor.compact(
+			["deltas/file-0.parquet", "deltas/file-1.parquet"],
+			"output/compacted",
+		);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		expect(result.value.baseFilesWritten).toBe(1);
+
+		const baseFiles = [...adapter.stored.keys()].filter(
+			(k) => k.startsWith("output/compacted/") && k.includes("/base-"),
+		);
+		const readResult = await readParquetToDeltas(adapter.stored.get(baseFiles[0]!)!);
+		expect(readResult.ok).toBe(true);
+		if (!readResult.ok) return;
+
+		expect(readResult.value).toHaveLength(2);
+
+		const row1 = readResult.value.find((r) => r.rowId === "row-1")!;
+		const row2 = readResult.value.find((r) => r.rowId === "row-2")!;
+
+		// row-1: UPDATE at HLC=30 wins over INSERT at HLC=10
+		expect(row1.columns.find((c) => c.column === "title")?.value).toBe("Row1 Late");
+		expect(row1.columns.find((c) => c.column === "completed")?.value).toBe(true);
+
+		// row-2: INSERT at HLC=20 wins over UPDATE at HLC=5
+		expect(row2.columns.find((c) => c.column === "title")?.value).toBe("Row2 Early");
+		expect(row2.columns.find((c) => c.column === "completed")?.value).toBe(false);
+	});
+
+	it("handles delete-then-reinsert across files", async () => {
+		const adapter = createMockAdapter();
+
+		// File 1: INSERT row-1 at HLC=10
+		await seedDeltaFile(
+			adapter,
+			"deltas/file-0.parquet",
+			[
+				makeDelta({
+					rowId: "row-1",
+					hlc: HLC.encode(BASE_WALL + 10, 0),
+					op: "INSERT",
+					columns: [
+						{ column: "title", value: "Original" },
+						{ column: "completed", value: false },
+					],
+				}),
+			],
+			todoSchema,
+		);
+
+		// File 2: DELETE row-1 at HLC=20
+		await seedDeltaFile(
+			adapter,
+			"deltas/file-1.parquet",
+			[
+				makeDelta({
+					rowId: "row-1",
+					hlc: HLC.encode(BASE_WALL + 20, 0),
+					op: "DELETE",
+					columns: [],
+				}),
+			],
+			todoSchema,
+		);
+
+		// File 3: INSERT row-1 at HLC=30 (re-insert after delete)
+		await seedDeltaFile(
+			adapter,
+			"deltas/file-2.parquet",
+			[
+				makeDelta({
+					rowId: "row-1",
+					hlc: HLC.encode(BASE_WALL + 30, 0),
+					op: "INSERT",
+					columns: [
+						{ column: "title", value: "Reinserted" },
+						{ column: "completed", value: true },
+					],
+				}),
+			],
+			todoSchema,
+		);
+
+		const compactor = new Compactor(adapter, testConfig, todoSchema);
+		const result = await compactor.compact(
+			["deltas/file-0.parquet", "deltas/file-1.parquet", "deltas/file-2.parquet"],
+			"output/compacted",
+		);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		// Row should be live, not deleted
+		expect(result.value.baseFilesWritten).toBe(1);
+		expect(result.value.deleteFilesWritten).toBe(0);
+
+		const baseFiles = [...adapter.stored.keys()].filter(
+			(k) => k.startsWith("output/compacted/") && k.includes("/base-"),
+		);
+		const readResult = await readParquetToDeltas(adapter.stored.get(baseFiles[0]!)!);
+		expect(readResult.ok).toBe(true);
+		if (!readResult.ok) return;
+
+		expect(readResult.value).toHaveLength(1);
+		const row = readResult.value[0]!;
+		expect(row.rowId).toBe("row-1");
+		expect(row.columns.find((c) => c.column === "title")?.value).toBe("Reinserted");
+		expect(row.columns.find((c) => c.column === "completed")?.value).toBe(true);
+	});
+
+	it("column-level LWW resolves independently per column", async () => {
+		const adapter = createMockAdapter();
+
+		// File 1: INSERT row-1 with title at HLC=20, completed at HLC=20
+		await seedDeltaFile(
+			adapter,
+			"deltas/file-0.parquet",
+			[
+				makeDelta({
+					rowId: "row-1",
+					hlc: HLC.encode(BASE_WALL + 20, 0),
+					op: "INSERT",
+					columns: [
+						{ column: "title", value: "Title@20" },
+						{ column: "completed", value: false },
+					],
+				}),
+			],
+			todoSchema,
+		);
+
+		// File 2: UPDATE row-1 with only title at HLC=30 (higher — wins for title)
+		await seedDeltaFile(
+			adapter,
+			"deltas/file-1.parquet",
+			[
+				makeDelta({
+					rowId: "row-1",
+					hlc: HLC.encode(BASE_WALL + 30, 0),
+					op: "UPDATE",
+					columns: [{ column: "title", value: "Title@30" }],
+				}),
+			],
+			todoSchema,
+		);
+
+		// File 3: UPDATE row-1 with only completed at HLC=25 (higher than 20 — wins for completed)
+		await seedDeltaFile(
+			adapter,
+			"deltas/file-2.parquet",
+			[
+				makeDelta({
+					rowId: "row-1",
+					hlc: HLC.encode(BASE_WALL + 25, 0),
+					op: "UPDATE",
+					columns: [{ column: "completed", value: true }],
+				}),
+			],
+			todoSchema,
+		);
+
+		const compactor = new Compactor(adapter, testConfig, todoSchema);
+		const result = await compactor.compact(
+			["deltas/file-0.parquet", "deltas/file-1.parquet", "deltas/file-2.parquet"],
+			"output/compacted",
+		);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		expect(result.value.baseFilesWritten).toBe(1);
+
+		const baseFiles = [...adapter.stored.keys()].filter(
+			(k) => k.startsWith("output/compacted/") && k.includes("/base-"),
+		);
+		const readResult = await readParquetToDeltas(adapter.stored.get(baseFiles[0]!)!);
+		expect(readResult.ok).toBe(true);
+		if (!readResult.ok) return;
+
+		expect(readResult.value).toHaveLength(1);
+		const row = readResult.value[0]!;
+
+		// title: HLC=30 wins over HLC=20
+		expect(row.columns.find((c) => c.column === "title")?.value).toBe("Title@30");
+		// completed: HLC=25 wins over HLC=20
+		expect(row.columns.find((c) => c.column === "completed")?.value).toBe(true);
 	});
 
 	it("limits compaction to maxDeltaFiles when more files are provided", async () => {

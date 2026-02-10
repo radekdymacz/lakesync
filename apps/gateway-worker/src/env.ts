@@ -12,4 +12,6 @@ export interface Env {
 	ALLOWED_ORIGINS?: string;
 	/** Optional JSON shard configuration for table-based sharding across DOs */
 	SHARD_CONFIG?: string;
+	/** Optional maximum buffer size in bytes (overrides the default 4 MiB). */
+	MAX_BUFFER_BYTES?: string;
 }

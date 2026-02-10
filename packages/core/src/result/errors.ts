@@ -53,6 +53,13 @@ export class AdapterNotFoundError extends LakeSyncError {
 	}
 }
 
+/** Buffer backpressure limit exceeded — push rejected to prevent OOM. */
+export class BackpressureError extends LakeSyncError {
+	constructor(message: string, cause?: Error) {
+		super(message, "BACKPRESSURE", cause);
+	}
+}
+
 /** Coerce an unknown thrown value into an Error instance. */
 export function toError(err: unknown): Error {
 	return err instanceof Error ? err : new Error(String(err));

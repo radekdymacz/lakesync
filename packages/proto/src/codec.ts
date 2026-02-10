@@ -371,3 +371,25 @@ export function decodeSyncResponse(bytes: Uint8Array): Result<SyncResponsePayloa
 		};
 	});
 }
+
+// ---------------------------------------------------------------------------
+// Checkpoint frame helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode a checkpoint frame (a single SyncResponse) as bytes.
+ * Thin wrapper over encodeSyncResponse for clarity.
+ */
+export function encodeCheckpointFrame(
+	payload: SyncResponsePayload,
+): Result<Uint8Array, CodecError> {
+	return encodeSyncResponse(payload);
+}
+
+/**
+ * Decode a checkpoint frame back into a SyncResponse payload.
+ * Thin wrapper over decodeSyncResponse for clarity.
+ */
+export function decodeCheckpointFrame(data: Uint8Array): Result<SyncResponsePayload, CodecError> {
+	return decodeSyncResponse(data);
+}

@@ -20,7 +20,10 @@ const mockHandlePush = vi.fn();
 const mockHandlePull = vi.fn();
 const mockFlush = vi.fn();
 const mockShouldFlush = vi.fn();
+const mockGetTablesExceedingBudget = vi.fn().mockReturnValue([]);
+const mockFlushTable = vi.fn();
 const mockBufferStats = { logSize: 0, byteSize: 0, indexSize: 0 };
+let lastGatewayConfig: Record<string, unknown> | null = null;
 
 vi.mock("@lakesync/gateway", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@lakesync/gateway")>();
@@ -29,6 +32,11 @@ vi.mock("@lakesync/gateway", async (importOriginal) => {
 		handlePull = mockHandlePull;
 		flush = mockFlush;
 		shouldFlush = mockShouldFlush;
+		getTablesExceedingBudget = mockGetTablesExceedingBudget;
+		flushTable = mockFlushTable;
+		constructor(config: Record<string, unknown>) {
+			lastGatewayConfig = config;
+		}
 		get bufferStats() {
 			return mockBufferStats;
 		}
@@ -43,19 +51,43 @@ vi.mock("@lakesync/gateway", async (importOriginal) => {
 vi.mock("@lakesync/proto", () => ({
 	decodeSyncPush: vi.fn(),
 	decodeSyncPull: vi.fn(),
+	decodeSyncResponse: vi.fn(),
 	encodeSyncResponse: vi.fn().mockReturnValue({
+		ok: true,
+		value: new Uint8Array([0x00]),
+	}),
+	encodeBroadcastFrame: vi.fn().mockReturnValue({
 		ok: true,
 		value: new Uint8Array([0x00]),
 	}),
 }));
 
 // ── Mock R2Adapter ────────────────────────────────────────────────────
+/**
+ * In-memory store for R2 objects. Tests populate this to control what
+ * the R2Adapter returns from getObject.
+ */
+const r2Store = new Map<string, Uint8Array>();
+
 vi.mock("../r2-adapter", () => {
-	class MockR2Adapter {}
+	class MockR2Adapter {
+		async getObject(key: string) {
+			const data = r2Store.get(key);
+			if (!data) {
+				return { ok: false, error: { message: `Object not found: ${key}` } };
+			}
+			return { ok: true, value: data };
+		}
+	}
 	return { R2Adapter: MockR2Adapter };
 });
 
-import { decodeSyncPull, decodeSyncPush, encodeSyncResponse } from "@lakesync/proto";
+import {
+	decodeSyncPull,
+	decodeSyncPush,
+	decodeSyncResponse,
+	encodeSyncResponse,
+} from "@lakesync/proto";
 // Import after all mocks are set up
 import { SyncGatewayDO } from "../sync-gateway-do";
 
@@ -70,6 +102,7 @@ function createMockCtx(): {
 		put: ReturnType<typeof vi.fn>;
 	};
 	acceptWebSocket: ReturnType<typeof vi.fn>;
+	getWebSockets: ReturnType<typeof vi.fn>;
 } {
 	return {
 		id: { toString: () => "do-test-id" },
@@ -79,6 +112,7 @@ function createMockCtx(): {
 			put: vi.fn().mockResolvedValue(undefined),
 		},
 		acceptWebSocket: vi.fn(),
+		getWebSockets: vi.fn().mockReturnValue([]),
 	};
 }
 
@@ -117,6 +151,8 @@ function resetGatewayMocks(): void {
 	mockFlush.mockReset();
 	mockShouldFlush.mockReset();
 	mockShouldFlush.mockReturnValue(false);
+	lastGatewayConfig = null;
+	r2Store.clear();
 }
 
 describe("SyncGatewayDO", () => {
@@ -776,6 +812,186 @@ describe("SyncGatewayDO", () => {
 		});
 	});
 
+	describe("MAX_BUFFER_BYTES env var", () => {
+		it("uses MAX_BUFFER_BYTES env var when set", async () => {
+			resetGatewayMocks();
+			mockFlush.mockResolvedValue({ ok: true, value: undefined });
+
+			const ctx = createMockCtx();
+			const env = {
+				...createMockEnv(),
+				MAX_BUFFER_BYTES: "8388608", // 8 MiB
+			};
+			const DO = new SyncGatewayDO(ctx as unknown as DurableObjectState, env as unknown as never);
+
+			// Trigger gateway creation via /flush
+			const request = new Request("https://do.example.com/flush", {
+				method: "POST",
+			});
+			await DO.fetch(request);
+
+			expect(lastGatewayConfig).not.toBeNull();
+			expect(lastGatewayConfig!.maxBufferBytes).toBe(8388608);
+		});
+
+		it("uses default maxBufferBytes when MAX_BUFFER_BYTES is not set", async () => {
+			resetGatewayMocks();
+			mockFlush.mockResolvedValue({ ok: true, value: undefined });
+
+			const DO = createDO();
+
+			const request = new Request("https://do.example.com/flush", {
+				method: "POST",
+			});
+			await DO.fetch(request);
+
+			expect(lastGatewayConfig).not.toBeNull();
+			// Default is 4 MiB = 4 * 1024 * 1024 = 4194304
+			expect(lastGatewayConfig!.maxBufferBytes).toBe(4 * 1024 * 1024);
+		});
+	});
+
+	describe("handleCheckpoint (GET /checkpoint)", () => {
+		/** Seed R2 store with a manifest and chunk for the test DO. */
+		function seedCheckpointData(snapshotHlc: string, chunkBytes: Uint8Array): void {
+			const gatewayId = "do-test-id";
+			const manifest = JSON.stringify({
+				snapshotHlc,
+				chunks: ["chunk-0.bin"],
+				chunkCount: 1,
+			});
+			r2Store.set(`checkpoints/${gatewayId}/manifest.json`, new TextEncoder().encode(manifest));
+			r2Store.set(`checkpoints/${gatewayId}/chunk-0.bin`, chunkBytes);
+		}
+
+		it("returns streaming checkpoint response", async () => {
+			resetGatewayMocks();
+
+			const snapshotHlc = "281474976710656";
+			const chunkProtoBytes = new Uint8Array([0x0a, 0x0b, 0x0c]);
+			seedCheckpointData(snapshotHlc, chunkProtoBytes);
+
+			// Mock decodeSyncResponse to return a decoded chunk with deltas
+			const mockDelta = {
+				op: "UPDATE" as const,
+				table: "todos",
+				rowId: "row-1",
+				clientId: "client-1",
+				columns: [{ column: "title", value: "Hello" }],
+				hlc: BigInt(100) as never,
+				deltaId: "d1",
+			};
+			vi.mocked(decodeSyncResponse).mockReturnValue({
+				ok: true,
+				value: { deltas: [mockDelta], serverHlc: BigInt(snapshotHlc) as never, hasMore: false },
+			});
+
+			// Mock encodeSyncResponse to return deterministic frame bytes
+			const frameBytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+			vi.mocked(encodeSyncResponse).mockReturnValue({
+				ok: true,
+				value: frameBytes,
+			});
+
+			const DO = createDO();
+			const request = new Request("https://do.example.com/checkpoint", {
+				method: "GET",
+				headers: {
+					Accept: "application/x-lakesync-checkpoint-stream",
+				},
+			});
+
+			const response = await DO.fetch(request);
+
+			expect(response.status).toBe(200);
+			expect(response.headers.get("Content-Type")).toBe("application/x-lakesync-checkpoint-stream");
+			expect(response.headers.get("X-Checkpoint-Hlc")).toBe(snapshotHlc);
+
+			// Read the streamed body — expect 4-byte BE length prefix + frame bytes
+			const body = new Uint8Array(await response.arrayBuffer());
+			// Length prefix: frameBytes.length = 4 → 0x00000004 big-endian
+			const expectedPrefix = new Uint8Array([0x00, 0x00, 0x00, 0x04]);
+			expect(body.slice(0, 4)).toEqual(expectedPrefix);
+			expect(body.slice(4)).toEqual(frameBytes);
+		});
+	});
+
+	describe("handleMetrics (GET /admin/metrics)", () => {
+		it("peakBufferBytes tracks high-water mark across pushes", async () => {
+			resetGatewayMocks();
+
+			// First push: buffer grows to 512 bytes
+			mockBufferStats.byteSize = 512;
+			mockBufferStats.logSize = 3;
+			mockHandlePush.mockReturnValue({
+				ok: true,
+				value: { accepted: 1, serverHlc: BigInt(100), deltas: [] },
+			});
+
+			const DO = createDO();
+
+			const pushRequest = () =>
+				new Request("https://do.example.com/push", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						clientId: "client-1",
+						deltas: [
+							{
+								op: "UPDATE",
+								table: "t",
+								rowId: "r",
+								clientId: "c",
+								columns: [],
+								hlc: "1",
+								deltaId: "d1",
+							},
+						],
+						lastSeenHlc: "0",
+					}),
+				});
+
+			await DO.fetch(pushRequest());
+
+			// Check metrics — peakBufferBytes should be 512
+			let metricsRes = await DO.fetch(
+				new Request("https://do.example.com/admin/metrics", { method: "GET" }),
+			);
+			expect(metricsRes.status).toBe(200);
+			let metrics = (await metricsRes.json()) as { peakBufferBytes: number };
+			expect(metrics.peakBufferBytes).toBe(512);
+
+			// Second push: buffer grows to 2048 bytes
+			mockBufferStats.byteSize = 2048;
+			mockHandlePush.mockReturnValue({
+				ok: true,
+				value: { accepted: 1, serverHlc: BigInt(200), deltas: [] },
+			});
+			await DO.fetch(pushRequest());
+
+			metricsRes = await DO.fetch(
+				new Request("https://do.example.com/admin/metrics", { method: "GET" }),
+			);
+			metrics = (await metricsRes.json()) as { peakBufferBytes: number };
+			expect(metrics.peakBufferBytes).toBe(2048);
+
+			// Third push: buffer shrinks to 256 bytes (e.g. after partial flush)
+			// peakBufferBytes should still report 2048 (high-water mark)
+			mockBufferStats.byteSize = 256;
+			mockHandlePush.mockReturnValue({
+				ok: true,
+				value: { accepted: 1, serverHlc: BigInt(300), deltas: [] },
+			});
+			await DO.fetch(pushRequest());
+
+			metricsRes = await DO.fetch(
+				new Request("https://do.example.com/admin/metrics", { method: "GET" }),
+			);
+			metrics = (await metricsRes.json()) as { peakBufferBytes: number };
+			expect(metrics.peakBufferBytes).toBe(2048);
+		});
+	});
+
 	describe("bigint JSON serialisation", () => {
 		it("serialises BigInt values in push response via bigintReplacer", async () => {
 			resetGatewayMocks();
@@ -845,6 +1061,163 @@ describe("SyncGatewayDO", () => {
 			// The assertion happens inside mockHandlePush
 			// but also verify it was called
 			expect(mockHandlePush).toHaveBeenCalled();
+		});
+	});
+
+	describe("handleInternalBroadcast (POST /internal/broadcast)", () => {
+		it("broadcasts deltas to connected WebSocket clients", async () => {
+			resetGatewayMocks();
+
+			const ctx = createMockCtx();
+			const env = createMockEnv();
+
+			const mockWs = {
+				close: vi.fn(),
+				send: vi.fn(),
+				deserializeAttachment: vi.fn().mockReturnValue({
+					claims: {},
+					clientId: "other-client",
+				}),
+			};
+			ctx.getWebSockets.mockReturnValue([mockWs]);
+
+			const DO = new SyncGatewayDO(ctx as unknown as DurableObjectState, env as unknown as never);
+
+			const { bigintReplacer } = await import("@lakesync/core");
+			const body = JSON.stringify(
+				{
+					deltas: [
+						{
+							op: "INSERT",
+							table: "todos",
+							rowId: "row-1",
+							clientId: "sender-client",
+							columns: [{ column: "title", value: "Test" }],
+							hlc: BigInt(100),
+							deltaId: "d1",
+						},
+					],
+					serverHlc: BigInt(200),
+					excludeClientId: "sender-client",
+				},
+				bigintReplacer,
+			);
+
+			const request = new Request("https://do.example.com/internal/broadcast", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body,
+			});
+
+			const response = await DO.fetch(request);
+			expect(response.status).toBe(200);
+
+			const result = (await response.json()) as { broadcast: boolean };
+			expect(result.broadcast).toBe(true);
+
+			// The WebSocket client should have received the broadcast frame
+			expect(mockWs.send).toHaveBeenCalled();
+		});
+
+		it("returns 405 for non-POST requests", async () => {
+			resetGatewayMocks();
+			const DO = createDO();
+
+			const request = new Request("https://do.example.com/internal/broadcast", {
+				method: "GET",
+			});
+
+			const response = await DO.fetch(request);
+			expect(response.status).toBe(405);
+		});
+
+		it("skips broadcast for empty deltas", async () => {
+			resetGatewayMocks();
+			const DO = createDO();
+
+			const { bigintReplacer } = await import("@lakesync/core");
+			const body = JSON.stringify(
+				{
+					deltas: [],
+					serverHlc: BigInt(100),
+					excludeClientId: "client-1",
+				},
+				bigintReplacer,
+			);
+
+			const request = new Request("https://do.example.com/internal/broadcast", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body,
+			});
+
+			const response = await DO.fetch(request);
+			expect(response.status).toBe(200);
+
+			const result = (await response.json()) as { broadcast: boolean; clients: number };
+			expect(result.broadcast).toBe(true);
+			expect(result.clients).toBe(0);
+		});
+
+		it("excludes sender client from broadcast", async () => {
+			resetGatewayMocks();
+
+			const ctx = createMockCtx();
+			const env = createMockEnv();
+
+			const senderWs = {
+				close: vi.fn(),
+				send: vi.fn(),
+				deserializeAttachment: vi.fn().mockReturnValue({
+					claims: {},
+					clientId: "sender-client",
+				}),
+			};
+			const otherWs = {
+				close: vi.fn(),
+				send: vi.fn(),
+				deserializeAttachment: vi.fn().mockReturnValue({
+					claims: {},
+					clientId: "other-client",
+				}),
+			};
+			ctx.getWebSockets.mockReturnValue([senderWs, otherWs]);
+
+			const DO = new SyncGatewayDO(ctx as unknown as DurableObjectState, env as unknown as never);
+
+			const { bigintReplacer } = await import("@lakesync/core");
+			const body = JSON.stringify(
+				{
+					deltas: [
+						{
+							op: "INSERT",
+							table: "todos",
+							rowId: "row-1",
+							clientId: "sender-client",
+							columns: [{ column: "title", value: "Test" }],
+							hlc: BigInt(100),
+							deltaId: "d1",
+						},
+					],
+					serverHlc: BigInt(200),
+					excludeClientId: "sender-client",
+				},
+				bigintReplacer,
+			);
+
+			const request = new Request("https://do.example.com/internal/broadcast", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body,
+			});
+
+			const response = await DO.fetch(request);
+			expect(response.status).toBe(200);
+
+			// Sender should NOT receive the broadcast
+			expect(senderWs.send).not.toHaveBeenCalled();
+			// Other client should receive it
+			expect(otherWs.send).toHaveBeenCalled();
 		});
 	});
 });

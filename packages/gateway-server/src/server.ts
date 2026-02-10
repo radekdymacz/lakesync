@@ -32,9 +32,11 @@ import {
 } from "@lakesync/proto";
 import { WebSocketServer, type WebSocket as WsWebSocket } from "ws";
 import { type AuthClaims, verifyToken } from "./auth";
+import type { DistributedLock } from "./cluster";
 import { SourcePoller } from "./ingest/poller";
 import type { IngestSourceConfig } from "./ingest/types";
 import { type DeltaPersistence, MemoryPersistence, SqlitePersistence } from "./persistence";
+import { SharedBuffer } from "./shared-buffer";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -64,6 +66,13 @@ export interface GatewayServerConfig {
 	sqlitePath?: string;
 	/** Polling ingest sources. Each source is polled independently. */
 	ingestSources?: IngestSourceConfig[];
+	/** Optional clustering configuration for multi-instance deployment. */
+	cluster?: {
+		/** Distributed lock for coordinated flush. */
+		lock: DistributedLock;
+		/** Shared database adapter for cross-instance visibility. */
+		sharedAdapter: DatabaseAdapter;
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +155,13 @@ function matchRoute(pathname: string, method: string): RouteMatch | null {
 		const match = pathname.match(/^\/admin\/connectors\/([^/]+)\/([^/]+)$/);
 		if (match && method === "DELETE") {
 			return { gatewayId: match[1]!, action: "unregister-connector", connectorName: match[2]! };
+		}
+	}
+	// GET /admin/metrics/:gatewayId
+	{
+		const match = pathname.match(/^\/admin\/metrics\/([^/]+)$/);
+		if (match && method === "GET") {
+			return { gatewayId: match[1]!, action: "metrics" };
 		}
 	}
 	// WebSocket /sync/:gatewayId/ws
@@ -246,6 +262,7 @@ export class GatewayServer {
 	private connectorConfigs = new Map<string, ConnectorConfig>();
 	private connectorAdapters = new Map<string, DatabaseAdapter>();
 	private connectorPollers = new Map<string, Poller>();
+	private sharedBuffer: SharedBuffer | null = null;
 
 	constructor(config: GatewayServerConfig) {
 		this.config = {
@@ -267,6 +284,10 @@ export class GatewayServer {
 			config.persistence === "sqlite"
 				? new SqlitePersistence(config.sqlitePath ?? "./lakesync-buffer.sqlite")
 				: new MemoryPersistence();
+
+		if (config.cluster) {
+			this.sharedBuffer = new SharedBuffer(config.cluster.sharedAdapter);
+		}
 	}
 
 	/**
@@ -636,7 +657,8 @@ export class GatewayServer {
 				route.action === "sync-rules" ||
 				route.action === "register-connector" ||
 				route.action === "unregister-connector" ||
-				route.action === "list-connectors"
+				route.action === "list-connectors" ||
+				route.action === "metrics"
 			) {
 				if (auth.role !== "admin") {
 					sendError(res, "Admin role required", 403, corsH);
@@ -669,6 +691,9 @@ export class GatewayServer {
 				break;
 			case "list-connectors":
 				this.handleListConnectors(res, corsH);
+				break;
+			case "metrics":
+				this.handleMetrics(res, corsH);
 				break;
 			default:
 				sendError(res, "Not found", 404, corsH);
@@ -738,12 +763,21 @@ export class GatewayServer {
 				sendError(res, err.message, 422, corsH);
 				return;
 			}
+			if (err.code === "BACKPRESSURE") {
+				sendError(res, err.message, 503, corsH);
+				return;
+			}
 			sendError(res, err.message, 500, corsH);
 			return;
 		}
 
 		// Clear persisted deltas on success — they are now in the in-memory buffer
 		this.persistence.clear();
+
+		// Write-through to shared adapter for cross-instance visibility
+		if (this.sharedBuffer && result.value.deltas.length > 0) {
+			await this.sharedBuffer.writeThroughPush(result.value.deltas);
+		}
 
 		// Broadcast to connected WebSocket clients
 		this.broadcastDeltas(result.value.deltas, result.value.serverHlc, body.clientId);
@@ -802,7 +836,12 @@ export class GatewayServer {
 			return;
 		}
 
-		sendJson(res, result.value, 200, corsH);
+		let response = result.value;
+		// Merge with shared adapter for cross-instance visibility
+		if (this.sharedBuffer) {
+			response = await this.sharedBuffer.mergePull(response, sinceHlc);
+		}
+		sendJson(res, response, 200, corsH);
 	}
 
 	/** Handle `POST /admin/flush/:gatewayId` -- manual flush. */
@@ -1034,6 +1073,12 @@ export class GatewayServer {
 		sendJson(res, list, 200, corsH);
 	}
 
+	/** Handle `GET /admin/metrics/:gatewayId` -- return buffer stats and process memory. */
+	private handleMetrics(res: ServerResponse, corsH: Record<string, string>): void {
+		const stats = this.gateway.bufferStats;
+		sendJson(res, { ...stats, process: process.memoryUsage() }, 200, corsH);
+	}
+
 	// -----------------------------------------------------------------------
 	// Periodic flush
 	// -----------------------------------------------------------------------
@@ -1043,9 +1088,25 @@ export class GatewayServer {
 			return;
 		}
 
-		const result = await this.gateway.flush();
-		if (result.ok) {
-			this.persistence.clear();
+		// Acquire distributed lock for coordinated flush (if clustering is enabled)
+		const lock = this.config.cluster?.lock;
+		const lockKey = `flush:${this.config.gatewayId}`;
+		if (lock) {
+			const acquired = await lock.acquire(lockKey, 30_000);
+			if (!acquired) {
+				return; // Another instance is flushing
+			}
+		}
+
+		try {
+			const result = await this.gateway.flush();
+			if (result.ok) {
+				this.persistence.clear();
+			}
+		} finally {
+			if (lock) {
+				await lock.release(lockKey);
+			}
 		}
 	}
 

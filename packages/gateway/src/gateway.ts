@@ -8,6 +8,7 @@ import {
 import {
 	type AdapterError,
 	AdapterNotFoundError,
+	BackpressureError,
 	type ClockDriftError,
 	Err,
 	FlushError,
@@ -71,7 +72,19 @@ export class SyncGateway {
 	 * @returns A `Result` with the new server HLC and accepted count,
 	 *          or a `ClockDriftError` if the client clock is too far ahead.
 	 */
-	handlePush(msg: SyncPush): Result<HandlePushResult, ClockDriftError | SchemaError> {
+	handlePush(
+		msg: SyncPush,
+	): Result<HandlePushResult, ClockDriftError | SchemaError | BackpressureError> {
+		// Backpressure — reject when buffer exceeds threshold to prevent OOM
+		const backpressureLimit = this.config.maxBackpressureBytes ?? this.config.maxBufferBytes * 2;
+		if (this.buffer.byteSize >= backpressureLimit) {
+			return Err(
+				new BackpressureError(
+					`Buffer backpressure exceeded (${this.buffer.byteSize} >= ${backpressureLimit} bytes)`,
+				),
+			);
+		}
+
 		let accepted = 0;
 		const ingested: RowDelta[] = [];
 
@@ -428,10 +441,132 @@ export class SyncGateway {
 		return Object.keys(this.config.sourceAdapters!);
 	}
 
+	/** Get per-table buffer statistics. */
+	get tableStats(): Array<{ table: string; byteSize: number; deltaCount: number }> {
+		return this.buffer.tableStats();
+	}
+
+	/**
+	 * Flush a single table's deltas from the buffer.
+	 *
+	 * Drains only the specified table's deltas and flushes them,
+	 * leaving other tables in the buffer.
+	 */
+	async flushTable(table: string): Promise<Result<void, FlushError>> {
+		if (this.flushing) {
+			return Err(new FlushError("Flush already in progress"));
+		}
+		if (!this.adapter) {
+			return Err(new FlushError("No adapter configured"));
+		}
+
+		const entries = this.buffer.drainTable(table);
+		if (entries.length === 0) {
+			return Ok(undefined);
+		}
+
+		this.flushing = true;
+
+		// Database adapter path
+		if (isDatabaseAdapter(this.adapter)) {
+			try {
+				const result = await this.adapter.insertDeltas(entries);
+				if (!result.ok) {
+					this.restoreEntries(entries);
+					this.flushing = false;
+					return Err(new FlushError(`Table flush failed: ${result.error.message}`));
+				}
+				return Ok(undefined);
+			} catch (error: unknown) {
+				this.restoreEntries(entries);
+				const message = toError(error).message;
+				return Err(new FlushError(`Unexpected table flush failure: ${message}`));
+			} finally {
+				this.flushing = false;
+			}
+		}
+
+		// Lake adapter path
+		try {
+			let min = entries[0]!.hlc;
+			let max = entries[0]!.hlc;
+			for (let i = 1; i < entries.length; i++) {
+				const hlc = entries[i]!.hlc;
+				if (HLC.compare(hlc, min) < 0) min = hlc;
+				if (HLC.compare(hlc, max) > 0) max = hlc;
+			}
+
+			const date = new Date().toISOString().split("T")[0];
+
+			if (this.config.flushFormat === "json" || !this.config.tableSchema) {
+				const envelope: FlushEnvelope = {
+					version: 1,
+					gatewayId: this.config.gatewayId,
+					createdAt: new Date().toISOString(),
+					hlcRange: { min, max },
+					deltaCount: entries.length,
+					byteSize: 0,
+					deltas: entries,
+				};
+				const jsonStr = JSON.stringify(envelope, bigintReplacer);
+				const data = new TextEncoder().encode(jsonStr);
+				const objectKey = `deltas/${date}/${this.config.gatewayId}/${table}-${min.toString()}-${max.toString()}.json`;
+				const result = await this.adapter.putObject(objectKey, data, "application/json");
+				if (!result.ok) {
+					this.restoreEntries(entries);
+					return Err(new FlushError(`Failed to write table flush: ${result.error.message}`));
+				}
+			} else {
+				const parquetResult = await writeDeltasToParquet(entries, this.config.tableSchema);
+				if (!parquetResult.ok) {
+					this.restoreEntries(entries);
+					return Err(parquetResult.error);
+				}
+				const objectKey = `deltas/${date}/${this.config.gatewayId}/${table}-${min.toString()}-${max.toString()}.parquet`;
+				const result = await this.adapter.putObject(
+					objectKey,
+					parquetResult.value,
+					"application/vnd.apache.parquet",
+				);
+				if (!result.ok) {
+					this.restoreEntries(entries);
+					return Err(new FlushError(`Failed to write table flush: ${result.error.message}`));
+				}
+			}
+			return Ok(undefined);
+		} catch (error: unknown) {
+			this.restoreEntries(entries);
+			const message = toError(error).message;
+			return Err(new FlushError(`Unexpected table flush failure: ${message}`));
+		} finally {
+			this.flushing = false;
+		}
+	}
+
+	/**
+	 * Get tables that exceed the per-table budget.
+	 */
+	getTablesExceedingBudget(): string[] {
+		const budget = this.config.perTableBudgetBytes;
+		if (!budget) return [];
+		return this.buffer
+			.tableStats()
+			.filter((s) => s.byteSize >= budget)
+			.map((s) => s.table);
+	}
+
 	/** Check if the buffer should be flushed based on config thresholds. */
 	shouldFlush(): boolean {
+		let effectiveMaxBytes = this.config.maxBufferBytes;
+
+		// Reduce threshold for wide-column deltas
+		const adaptive = this.config.adaptiveBufferConfig;
+		if (adaptive && this.buffer.averageDeltaBytes > adaptive.wideColumnThreshold) {
+			effectiveMaxBytes = Math.floor(effectiveMaxBytes * adaptive.reductionFactor);
+		}
+
 		return this.buffer.shouldFlush({
-			maxBytes: this.config.maxBufferBytes,
+			maxBytes: effectiveMaxBytes,
 			maxAgeMs: this.config.maxBufferAgeMs,
 		});
 	}

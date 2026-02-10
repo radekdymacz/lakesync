@@ -2,11 +2,13 @@ export type { SyncPullPayload, SyncPushPayload, SyncResponsePayload } from "./co
 export {
 	CodecError,
 	decodeBroadcastFrame,
+	decodeCheckpointFrame,
 	decodeRowDelta,
 	decodeSyncPull,
 	decodeSyncPush,
 	decodeSyncResponse,
 	encodeBroadcastFrame,
+	encodeCheckpointFrame,
 	encodeRowDelta,
 	encodeSyncPull,
 	encodeSyncPush,

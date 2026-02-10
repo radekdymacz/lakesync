@@ -33,6 +33,17 @@ export interface GatewayConfig {
 	adapter?: LakeAdapter | DatabaseAdapter;
 	/** Named source adapters for adapter-sourced pulls. */
 	sourceAdapters?: Record<string, DatabaseAdapter>;
+	/** Adaptive buffer configuration for wide-column deltas. */
+	adaptiveBufferConfig?: {
+		/** Average delta byte threshold above which flush triggers earlier. */
+		wideColumnThreshold: number;
+		/** Factor to reduce effective maxBufferBytes (0-1). */
+		reductionFactor: number;
+	};
+	/** Maximum buffer bytes before rejecting pushes (default: 2 × maxBufferBytes). */
+	maxBackpressureBytes?: number;
+	/** Maximum buffer bytes per table before auto-flushing that table. */
+	perTableBudgetBytes?: number;
 }
 
 /** Gateway runtime state */

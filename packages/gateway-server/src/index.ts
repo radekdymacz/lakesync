@@ -1,4 +1,5 @@
 export { type AuthClaims, AuthError, verifyToken } from "./auth";
+export { AdapterBasedLock, type DistributedLock } from "./cluster";
 export {
 	type CursorStrategy,
 	type DiffStrategy,
@@ -13,3 +14,4 @@ export {
 	SqlitePersistence,
 } from "./persistence";
 export { GatewayServer, type GatewayServerConfig } from "./server";
+export { SharedBuffer } from "./shared-buffer";

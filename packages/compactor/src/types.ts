@@ -11,7 +11,7 @@ export interface CompactionConfig {
 /** Default compaction configuration values */
 export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
 	minDeltaFiles: 10,
-	maxDeltaFiles: 100,
+	maxDeltaFiles: 20,
 	targetFileSizeBytes: 128 * 1024 * 1024, // 128 MB
 };
 

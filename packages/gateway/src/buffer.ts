@@ -55,6 +55,8 @@ export class DeltaBuffer {
 	private deltaIds = new Set<string>();
 	private estimatedBytes = 0;
 	private createdAt: number = Date.now();
+	private tableBytes = new Map<string, number>();
+	private tableLog = new Map<string, RowDelta[]>();
 
 	/** Append a delta to the log and upsert the index (post-conflict-resolution). */
 	append(delta: RowDelta): void {
@@ -62,7 +64,16 @@ export class DeltaBuffer {
 		const key = rowKey(delta.table, delta.rowId);
 		this.index.set(key, delta);
 		this.deltaIds.add(delta.deltaId);
-		this.estimatedBytes += estimateDeltaBytes(delta);
+		const bytes = estimateDeltaBytes(delta);
+		this.estimatedBytes += bytes;
+		// Per-table tracking
+		this.tableBytes.set(delta.table, (this.tableBytes.get(delta.table) ?? 0) + bytes);
+		const tableEntries = this.tableLog.get(delta.table);
+		if (tableEntries) {
+			tableEntries.push(delta);
+		} else {
+			this.tableLog.set(delta.table, [delta]);
+		}
 	}
 
 	/** Get the current merged state for a row (for conflict resolution). */
@@ -97,6 +108,55 @@ export class DeltaBuffer {
 		return this.estimatedBytes >= config.maxBytes || Date.now() - this.createdAt >= config.maxAgeMs;
 	}
 
+	/** Per-table buffer statistics. */
+	tableStats(): Array<{ table: string; byteSize: number; deltaCount: number }> {
+		const stats: Array<{ table: string; byteSize: number; deltaCount: number }> = [];
+		for (const [table, bytes] of this.tableBytes) {
+			stats.push({
+				table,
+				byteSize: bytes,
+				deltaCount: this.tableLog.get(table)?.length ?? 0,
+			});
+		}
+		return stats;
+	}
+
+	/** Drain only the specified table's deltas, leaving other tables intact. */
+	drainTable(table: string): RowDelta[] {
+		const tableDeltas = this.tableLog.get(table) ?? [];
+		if (tableDeltas.length === 0) return [];
+
+		const tableDeltaIds = new Set<string>();
+		for (const delta of tableDeltas) {
+			tableDeltaIds.add(delta.deltaId);
+		}
+
+		// Remove from main log
+		this.log = this.log.filter((d) => d.table !== table);
+
+		// Remove from index
+		for (const delta of tableDeltas) {
+			const key = rowKey(delta.table, delta.rowId);
+			const indexed = this.index.get(key);
+			if (indexed && indexed.table === table) {
+				this.index.delete(key);
+			}
+		}
+
+		// Remove from deltaIds
+		for (const id of tableDeltaIds) {
+			this.deltaIds.delete(id);
+		}
+
+		// Adjust byte tracking
+		const tableByteSize = this.tableBytes.get(table) ?? 0;
+		this.estimatedBytes -= tableByteSize;
+		this.tableBytes.delete(table);
+		this.tableLog.delete(table);
+
+		return tableDeltas;
+	}
+
 	/** Drain the log for flush. Returns log entries and clears both structures. */
 	drain(): RowDelta[] {
 		const entries = [...this.log];
@@ -105,6 +165,8 @@ export class DeltaBuffer {
 		this.deltaIds.clear();
 		this.estimatedBytes = 0;
 		this.createdAt = Date.now();
+		this.tableBytes.clear();
+		this.tableLog.clear();
 		return entries;
 	}
 
@@ -121,5 +183,10 @@ export class DeltaBuffer {
 	/** Estimated byte size of the buffer */
 	get byteSize(): number {
 		return this.estimatedBytes;
+	}
+
+	/** Average byte size per delta in the buffer (0 if empty). */
+	get averageDeltaBytes(): number {
+		return this.log.length === 0 ? 0 : this.estimatedBytes / this.log.length;
 	}
 }

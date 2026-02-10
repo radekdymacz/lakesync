@@ -254,6 +254,21 @@ describe("GatewayServer", () => {
 	});
 
 	// -----------------------------------------------------------------------
+	// Admin: metrics
+	// -----------------------------------------------------------------------
+
+	it("GET /admin/metrics returns buffer stats", async () => {
+		const res = await req(`${baseUrl}/admin/metrics/${gatewayId}`);
+		expect(res.status).toBe(200);
+		const body = JSON.parse(res.body);
+		expect(typeof body.logSize).toBe("number");
+		expect(typeof body.indexSize).toBe("number");
+		expect(typeof body.byteSize).toBe("number");
+		expect(body.process).toBeDefined();
+		expect(typeof body.process.heapUsed).toBe("number");
+	});
+
+	// -----------------------------------------------------------------------
 	// CORS
 	// -----------------------------------------------------------------------
 

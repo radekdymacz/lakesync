@@ -1,9 +1,9 @@
 import type { LakeAdapter } from "@lakesync/adapter";
 import {
-	applyDelta,
 	type ColumnDelta,
 	Err,
 	HLC,
+	type HLCTimestamp,
 	LakeSyncError,
 	Ok,
 	type Result,
@@ -14,6 +14,24 @@ import {
 import { readParquetToDeltas, writeDeltasToParquet } from "@lakesync/parquet";
 import { writeEqualityDeletes } from "./equality-delete";
 import type { CompactionConfig, CompactionResult } from "./types";
+
+/** Per-column LWW state for incremental resolution. */
+interface ColumnState {
+	value: unknown;
+	hlc: HLCTimestamp;
+}
+
+/** Per-row state tracking column-level LWW resolution. */
+interface RowState {
+	table: string;
+	rowId: string;
+	clientId: string;
+	columns: Map<string, ColumnState>;
+	latestHlc: HLCTimestamp;
+	latestDeltaId: string;
+	/** HLC of the most recent DELETE operation, or 0n if never deleted. */
+	deleteHlc: HLCTimestamp;
+}
 
 /**
  * Compacts delta files into consolidated base data files and equality delete files.
@@ -66,10 +84,10 @@ export class Compactor {
 
 		const keysToCompact = deltaFileKeys.slice(0, this.config.maxDeltaFiles);
 
-		const readResult = await this.readAndGroupDeltas(keysToCompact);
-		if (!readResult.ok) return readResult;
+		const resolveResult = await this.readAndResolveIncrementally(keysToCompact);
+		if (!resolveResult.ok) return resolveResult;
 
-		const { liveRows, deletedRows } = this.resolveRowGroups(readResult.value.rowGroups);
+		const { liveRows, deletedRows, bytesRead } = resolveResult.value;
 
 		const writeResult = await this.writeOutputFiles(liveRows, deletedRows, outputPrefix);
 		if (!writeResult.ok) return writeResult;
@@ -77,15 +95,27 @@ export class Compactor {
 		return Ok({
 			...writeResult.value,
 			deltaFilesCompacted: keysToCompact.length,
-			bytesRead: readResult.value.bytesRead,
+			bytesRead,
 		});
 	}
 
-	/** Read delta files and group the parsed deltas by row key. */
-	private async readAndGroupDeltas(
-		keysToCompact: string[],
-	): Promise<Result<{ rowGroups: Map<string, RowDelta[]>; bytesRead: number }, LakeSyncError>> {
-		const allDeltas: RowDelta[] = [];
+	/**
+	 * Read delta files one at a time and incrementally resolve to final row state.
+	 *
+	 * Memory usage is O(unique rows x columns) rather than O(total deltas),
+	 * since each file's deltas are processed and discarded before reading the next.
+	 */
+	private async readAndResolveIncrementally(keysToCompact: string[]): Promise<
+		Result<
+			{
+				liveRows: RowDelta[];
+				deletedRows: Array<{ table: string; rowId: string }>;
+				bytesRead: number;
+			},
+			LakeSyncError
+		>
+	> {
+		const rowStates = new Map<string, RowState>();
 		let bytesRead = 0;
 
 		for (const key of keysToCompact) {
@@ -114,70 +144,91 @@ export class Compactor {
 				);
 			}
 
-			allDeltas.push(...parseResult.value);
-		}
+			// Process each delta incrementally — no accumulation
+			for (const delta of parseResult.value) {
+				const k = rowKey(delta.table, delta.rowId);
+				let state = rowStates.get(k);
 
-		const rowGroups = new Map<string, RowDelta[]>();
-		for (const delta of allDeltas) {
-			const k = rowKey(delta.table, delta.rowId);
-			const group = rowGroups.get(k);
-			if (group) {
-				group.push(delta);
-			} else {
-				rowGroups.set(k, [delta]);
+				if (!state) {
+					state = {
+						table: delta.table,
+						rowId: delta.rowId,
+						clientId: delta.clientId,
+						columns: new Map(),
+						latestHlc: 0n as HLCTimestamp,
+						latestDeltaId: delta.deltaId,
+						deleteHlc: 0n as HLCTimestamp,
+					};
+					rowStates.set(k, state);
+				}
+
+				// Track overall latest HLC for metadata
+				if (HLC.compare(delta.hlc, state.latestHlc) > 0) {
+					state.latestHlc = delta.hlc;
+					state.latestDeltaId = delta.deltaId;
+					state.clientId = delta.clientId;
+				}
+
+				if (delta.op === "DELETE") {
+					// Track the latest DELETE HLC
+					if (HLC.compare(delta.hlc, state.deleteHlc) > 0) {
+						state.deleteHlc = delta.hlc;
+					}
+				} else {
+					// INSERT or UPDATE — apply column-level LWW
+					for (const col of delta.columns) {
+						const existing = state.columns.get(col.column);
+						if (!existing || HLC.compare(delta.hlc, existing.hlc) > 0) {
+							state.columns.set(col.column, {
+								value: col.value,
+								hlc: delta.hlc,
+							});
+						}
+					}
+				}
 			}
+			// parseResult.value is now eligible for GC — no reference kept
 		}
 
-		return Ok({ rowGroups, bytesRead });
-	}
-
-	/** Resolve each row group into live rows (final state) or deleted rows. */
-	private resolveRowGroups(rowGroups: Map<string, RowDelta[]>): {
-		liveRows: RowDelta[];
-		deletedRows: Array<{ table: string; rowId: string }>;
-	} {
+		// Convert resolved states to output format
 		const liveRows: RowDelta[] = [];
 		const deletedRows: Array<{ table: string; rowId: string }> = [];
 
-		for (const [, deltas] of rowGroups) {
-			deltas.sort((a, b) => HLC.compare(a.hlc, b.hlc));
+		for (const [, state] of rowStates) {
+			// A row is deleted if the DELETE HLC is >= all column HLCs
+			// (i.e. no column was written after the delete)
+			const isDeleted =
+				state.deleteHlc > 0n &&
+				[...state.columns.values()].every((col) => HLC.compare(state.deleteHlc, col.hlc) >= 0);
 
-			let currentState: Record<string, unknown> | null = null;
-			let latestDelta: RowDelta | undefined;
-
-			for (const delta of deltas) {
-				currentState = applyDelta(currentState, delta);
-				latestDelta = delta;
-			}
-
-			if (!latestDelta) continue;
-
-			if (currentState !== null) {
+			if (isDeleted || state.columns.size === 0) {
+				deletedRows.push({ table: state.table, rowId: state.rowId });
+			} else {
+				// Filter out columns that were set before the delete
 				const columns: ColumnDelta[] = [];
 				for (const col of this.schema.columns) {
-					if (col.name in currentState) {
-						columns.push({ column: col.name, value: currentState[col.name] as unknown });
+					const colState = state.columns.get(col.name);
+					if (
+						colState &&
+						(state.deleteHlc === 0n || HLC.compare(colState.hlc, state.deleteHlc) > 0)
+					) {
+						columns.push({ column: col.name, value: colState.value });
 					}
 				}
 
 				liveRows.push({
 					op: "INSERT",
-					table: latestDelta.table,
-					rowId: latestDelta.rowId,
-					clientId: latestDelta.clientId,
+					table: state.table,
+					rowId: state.rowId,
+					clientId: state.clientId,
 					columns,
-					hlc: latestDelta.hlc,
-					deltaId: latestDelta.deltaId,
-				});
-			} else {
-				deletedRows.push({
-					table: latestDelta.table,
-					rowId: latestDelta.rowId,
+					hlc: state.latestHlc,
+					deltaId: state.latestDeltaId,
 				});
 			}
 		}
 
-		return { liveRows, deletedRows };
+		return Ok({ liveRows, deletedRows, bytesRead });
 	}
 
 	/** Write base Parquet file(s) for live rows and equality delete file(s) for deleted rows. */

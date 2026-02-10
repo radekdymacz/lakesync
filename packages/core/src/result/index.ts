@@ -1,6 +1,7 @@
 export {
 	AdapterError,
 	AdapterNotFoundError,
+	BackpressureError,
 	ClockDriftError,
 	ConflictError,
 	FlushError,

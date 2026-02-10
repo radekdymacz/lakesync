@@ -1,8 +1,12 @@
 import type { HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
+import { bigintReplacer, bigintReviver } from "@lakesync/core";
+import { encodeSyncResponse } from "@lakesync/proto";
 import { describe, expect, it } from "vitest";
 import {
 	allShardGatewayIds,
 	extractTableNames,
+	handleShardedCheckpoint,
+	handleShardedPush,
 	mergePullResponses,
 	parseShardConfig,
 	partitionDeltasByShard,
@@ -375,5 +379,245 @@ describe("parseShardConfig", () => {
 		expect(config).not.toBeNull();
 		expect(config!.shards).toHaveLength(0);
 		expect(config!.default).toBe("shard-default");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// handleShardedCheckpoint
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a mock DurableObjectNamespace that routes idFromName/get calls
+ * to a stub map keyed by gateway ID.
+ */
+function createMockDoNamespace(
+	stubs: Map<string, { fetch: (req: Request) => Promise<Response> }>,
+): DurableObjectNamespace {
+	return {
+		idFromName(name: string) {
+			return { name } as unknown as DurableObjectId;
+		},
+		get(id: DurableObjectId) {
+			const stub = stubs.get((id as unknown as { name: string }).name);
+			if (!stub) throw new Error(`No stub for ${(id as unknown as { name: string }).name}`);
+			return stub as unknown as DurableObjectStub;
+		},
+	} as unknown as DurableObjectNamespace;
+}
+
+/** Encode a SyncResponse to a proto binary Response with checkpoint headers. */
+function makeCheckpointResponse(deltas: RowDelta[], serverHlc: HLCTimestamp): Response {
+	const encoded = encodeSyncResponse({ deltas, serverHlc, hasMore: false });
+	if (!encoded.ok) throw new Error("Failed to encode test checkpoint response");
+	return new Response(encoded.value, {
+		status: 200,
+		headers: {
+			"Content-Type": "application/octet-stream",
+			"X-Checkpoint-Hlc": serverHlc.toString(),
+		},
+	});
+}
+
+describe("handleShardedCheckpoint", () => {
+	it("merges checkpoint deltas from all shards sorted by HLC", async () => {
+		const config = testConfig();
+
+		const stubs = new Map<string, { fetch: (req: Request) => Promise<Response> }>();
+
+		// shard-users returns deltas with HLC 300 and 100
+		stubs.set("shard-users", {
+			fetch: async () =>
+				makeCheckpointResponse(
+					[
+						makeDelta("users", "u1", 300n as HLCTimestamp),
+						makeDelta("profiles", "p1", 100n as HLCTimestamp),
+					],
+					300n as HLCTimestamp,
+				),
+		});
+
+		// shard-orders returns deltas with HLC 200
+		stubs.set("shard-orders", {
+			fetch: async () =>
+				makeCheckpointResponse(
+					[makeDelta("orders", "o1", 200n as HLCTimestamp)],
+					200n as HLCTimestamp,
+				),
+		});
+
+		// shard-default returns deltas with HLC 150
+		stubs.set("shard-default", {
+			fetch: async () =>
+				makeCheckpointResponse(
+					[makeDelta("logs", "l1", 150n as HLCTimestamp)],
+					150n as HLCTimestamp,
+				),
+		});
+
+		const doNamespace = createMockDoNamespace(stubs);
+		const request = new Request("https://example.com/sync/gw/checkpoint", { method: "GET" });
+
+		const response = await handleShardedCheckpoint(config, request, doNamespace);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("X-Checkpoint-Hlc")).toBe("300");
+
+		// Decode the proto response and verify merged + sorted deltas
+		const { decodeSyncResponse } = await import("@lakesync/proto");
+		const body = new Uint8Array(await response.arrayBuffer());
+		const decoded = decodeSyncResponse(body);
+		expect(decoded.ok).toBe(true);
+		if (!decoded.ok) return;
+
+		expect(decoded.value.deltas).toHaveLength(4);
+		// Sorted by HLC ascending: 100, 150, 200, 300
+		expect(decoded.value.deltas[0]!.hlc).toBe(100n);
+		expect(decoded.value.deltas[1]!.hlc).toBe(150n);
+		expect(decoded.value.deltas[2]!.hlc).toBe(200n);
+		expect(decoded.value.deltas[3]!.hlc).toBe(300n);
+
+		// Verify serverHlc is the max
+		expect(decoded.value.serverHlc).toBe(300n);
+	});
+
+	it("skips failed shards gracefully during checkpoint", async () => {
+		const config = testConfig();
+
+		const stubs = new Map<string, { fetch: (req: Request) => Promise<Response> }>();
+
+		// shard-users succeeds
+		stubs.set("shard-users", {
+			fetch: async () =>
+				makeCheckpointResponse(
+					[makeDelta("users", "u1", 100n as HLCTimestamp)],
+					100n as HLCTimestamp,
+				),
+		});
+
+		// shard-orders returns 500 error
+		stubs.set("shard-orders", {
+			fetch: async () => new Response(JSON.stringify({ error: "Internal error" }), { status: 500 }),
+		});
+
+		// shard-default throws (network failure)
+		stubs.set("shard-default", {
+			fetch: async () => {
+				throw new Error("Network timeout");
+			},
+		});
+
+		const doNamespace = createMockDoNamespace(stubs);
+		const request = new Request("https://example.com/sync/gw/checkpoint", { method: "GET" });
+
+		const response = await handleShardedCheckpoint(config, request, doNamespace);
+
+		expect(response.status).toBe(200);
+
+		// Decode and verify only the successful shard's deltas are present
+		const { decodeSyncResponse } = await import("@lakesync/proto");
+		const body = new Uint8Array(await response.arrayBuffer());
+		const decoded = decodeSyncResponse(body);
+		expect(decoded.ok).toBe(true);
+		if (!decoded.ok) return;
+
+		expect(decoded.value.deltas).toHaveLength(1);
+		expect(decoded.value.deltas[0]!.table).toBe("users");
+		expect(decoded.value.deltas[0]!.hlc).toBe(100n);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// handleShardedPush — cross-shard broadcast
+// ---------------------------------------------------------------------------
+
+describe("handleShardedPush", () => {
+	it("forwards deltas cross-shard via /internal/broadcast", async () => {
+		const config = testConfig();
+
+		// Track all requests made to each stub
+		const fetchCalls = new Map<string, Request[]>();
+		for (const id of ["shard-users", "shard-orders", "shard-default"]) {
+			fetchCalls.set(id, []);
+		}
+
+		const stubs = new Map<string, { fetch: (req: Request) => Promise<Response> }>();
+
+		// Each shard stub records requests and responds appropriately
+		for (const shardId of ["shard-users", "shard-orders", "shard-default"]) {
+			stubs.set(shardId, {
+				fetch: async (req: Request) => {
+					fetchCalls.get(shardId)!.push(req);
+					const url = new URL(req.url);
+					if (url.pathname === "/push") {
+						// Return a successful push response
+						return new Response(JSON.stringify({ serverHlc: "100", accepted: 1 }, bigintReplacer), {
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						});
+					}
+					if (url.pathname === "/internal/broadcast") {
+						return new Response(JSON.stringify({ broadcast: true }), {
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						});
+					}
+					return new Response("Not found", { status: 404 });
+				},
+			});
+		}
+
+		const doNamespace = createMockDoNamespace(stubs);
+
+		// Push deltas that go to shard-users only (users table)
+		const pushBody = {
+			clientId: "client-1",
+			deltas: [makeDelta("users", "u1", 100n as HLCTimestamp)],
+			lastSeenHlc: 0n as HLCTimestamp,
+		};
+
+		const request = new Request("https://example.com/sync/gw/push", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(pushBody, bigintReplacer),
+		});
+
+		const response = await handleShardedPush(config, request, doNamespace);
+		expect(response.status).toBe(200);
+
+		// shard-users should get the /push request
+		const usersPushes = fetchCalls
+			.get("shard-users")!
+			.filter((r) => new URL(r.url).pathname === "/push");
+		expect(usersPushes).toHaveLength(1);
+
+		// Wait for fire-and-forget broadcast promises to settle
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		// Other shards (shard-orders, shard-default) should get /internal/broadcast
+		const ordersBroadcasts = fetchCalls
+			.get("shard-orders")!
+			.filter((r) => new URL(r.url).pathname === "/internal/broadcast");
+		const defaultBroadcasts = fetchCalls
+			.get("shard-default")!
+			.filter((r) => new URL(r.url).pathname === "/internal/broadcast");
+		expect(ordersBroadcasts).toHaveLength(1);
+		expect(defaultBroadcasts).toHaveLength(1);
+
+		// shard-users should NOT get a broadcast (it already handled the push)
+		const usersBroadcasts = fetchCalls
+			.get("shard-users")!
+			.filter((r) => new URL(r.url).pathname === "/internal/broadcast");
+		expect(usersBroadcasts).toHaveLength(0);
+
+		// Verify broadcast payload contains the deltas and excludeClientId
+		const broadcastBody = await ordersBroadcasts[0]!.text();
+		const parsed = JSON.parse(broadcastBody, bigintReviver) as {
+			deltas: RowDelta[];
+			serverHlc: HLCTimestamp;
+			excludeClientId: string;
+		};
+		expect(parsed.deltas).toHaveLength(1);
+		expect(parsed.deltas[0]!.table).toBe("users");
+		expect(parsed.excludeClientId).toBe("client-1");
 	});
 });

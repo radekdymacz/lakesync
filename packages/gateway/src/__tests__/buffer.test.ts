@@ -164,6 +164,41 @@ describe("DeltaBuffer", () => {
 		expect(longBuffer.byteSize).toBeGreaterThan(shortBuffer.byteSize * 10);
 	});
 
+	it("averageDeltaBytes computes correctly", () => {
+		const buffer = new DeltaBuffer();
+
+		// Empty buffer returns 0
+		expect(buffer.averageDeltaBytes).toBe(0);
+
+		buffer.append(
+			makeDelta({
+				hlc: hlcLow,
+				rowId: "row-1",
+				deltaId: "delta-avg-1",
+				columns: [{ column: "title", value: "Hello" }],
+			}),
+		);
+		buffer.append(
+			makeDelta({
+				hlc: hlcMid,
+				rowId: "row-2",
+				deltaId: "delta-avg-2",
+				columns: [{ column: "title", value: "World" }],
+			}),
+		);
+		buffer.append(
+			makeDelta({
+				hlc: hlcHigh,
+				rowId: "row-3",
+				deltaId: "delta-avg-3",
+				columns: [{ column: "description", value: "A much longer value here" }],
+			}),
+		);
+
+		expect(buffer.averageDeltaBytes).toBe(buffer.byteSize / 3);
+		expect(buffer.averageDeltaBytes).toBeGreaterThan(0);
+	});
+
 	it("drain clears both log and index, returns entries", () => {
 		const buffer = new DeltaBuffer();
 		const d1 = makeDelta({

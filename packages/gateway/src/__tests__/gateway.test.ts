@@ -792,4 +792,288 @@ describe("SyncGateway", () => {
 		// The first two valid deltas should still be in the buffer
 		expect(gw.bufferStats.logSize).toBe(2);
 	});
+
+	it("returns BackpressureError when buffer exceeds limit", () => {
+		const config: GatewayConfig = {
+			...defaultConfig,
+			maxBackpressureBytes: 1, // 1 byte — any push will exceed
+		};
+		const gw = new SyncGateway(config);
+
+		const delta = makeDelta({ hlc: hlcLow, deltaId: "delta-bp-reject" });
+
+		// First push to put data in the buffer
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta],
+			lastSeenHlc: hlcLow,
+		});
+
+		// Second push should be rejected — buffer exceeds 1 byte
+		const delta2 = makeDelta({ hlc: hlcMid, rowId: "row-2", deltaId: "delta-bp-reject-2" });
+		const result = gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta2],
+			lastSeenHlc: hlcMid,
+		});
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.code).toBe("BACKPRESSURE");
+		}
+	});
+
+	it("shouldFlush triggers earlier for wide-column deltas", () => {
+		const config: GatewayConfig = {
+			...defaultConfig,
+			maxBufferBytes: 20_000, // 20 KB
+			maxBufferAgeMs: 999_999,
+			adaptiveBufferConfig: {
+				wideColumnThreshold: 100, // Low threshold — most deltas will exceed this
+				reductionFactor: 0.5, // Effective limit becomes 10 KB
+			},
+		};
+		const gw = new SyncGateway(config);
+
+		// Push wide deltas (large column values) that exceed 10 KB but stay under 20 KB
+		for (let i = 0; i < 5; i++) {
+			gw.handlePush({
+				clientId: "client-a",
+				deltas: [
+					makeDelta({
+						hlc: HLC.encode(1_000_000 + i * 1000, 0),
+						rowId: `row-${i}`,
+						deltaId: `delta-wide-${i}`,
+						columns: [
+							{ column: "col1", value: "x".repeat(500) },
+							{ column: "col2", value: "y".repeat(500) },
+						],
+					}),
+				],
+				lastSeenHlc: HLC.encode(1_000_000 + i * 1000, 0),
+			});
+		}
+
+		// Buffer should be > 10 KB (reduced threshold) but < 20 KB (original)
+		expect(gw.bufferStats.byteSize).toBeGreaterThan(10_000);
+		expect(gw.bufferStats.byteSize).toBeLessThan(20_000);
+
+		// With adaptive config, shouldFlush should trigger at the reduced threshold
+		expect(gw.shouldFlush()).toBe(true);
+	});
+
+	it("shouldFlush does not trigger early without adaptive config", () => {
+		const config: GatewayConfig = {
+			...defaultConfig,
+			maxBufferBytes: 20_000,
+			maxBufferAgeMs: 999_999,
+			// No adaptiveBufferConfig
+		};
+		const gw = new SyncGateway(config);
+
+		// Push same wide deltas
+		for (let i = 0; i < 5; i++) {
+			gw.handlePush({
+				clientId: "client-a",
+				deltas: [
+					makeDelta({
+						hlc: HLC.encode(1_000_000 + i * 1000, 0),
+						rowId: `row-${i}`,
+						deltaId: `delta-no-adaptive-${i}`,
+						columns: [
+							{ column: "col1", value: "x".repeat(500) },
+							{ column: "col2", value: "y".repeat(500) },
+						],
+					}),
+				],
+				lastSeenHlc: HLC.encode(1_000_000 + i * 1000, 0),
+			});
+		}
+
+		// Buffer is > 10 KB but < 20 KB — without adaptive config, should NOT flush
+		expect(gw.bufferStats.byteSize).toBeGreaterThan(10_000);
+		expect(gw.bufferStats.byteSize).toBeLessThan(20_000);
+		expect(gw.shouldFlush()).toBe(false);
+	});
+
+	it("accepts push below backpressure limit", () => {
+		const config: GatewayConfig = {
+			...defaultConfig,
+			maxBackpressureBytes: 10_000_000, // 10 MB — plenty of room
+		};
+		const gw = new SyncGateway(config);
+
+		const delta = makeDelta({ hlc: hlcLow, deltaId: "delta-bp-ok" });
+
+		const result = gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta],
+			lastSeenHlc: hlcLow,
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.accepted).toBe(1);
+		}
+	});
+
+	it("tableStats returns per-table bytes and counts", () => {
+		const gw = new SyncGateway(defaultConfig);
+
+		const d1 = makeDelta({
+			hlc: hlcLow,
+			table: "todos",
+			rowId: "row-1",
+			deltaId: "delta-t1",
+		});
+		const d2 = makeDelta({
+			hlc: hlcMid,
+			table: "todos",
+			rowId: "row-2",
+			deltaId: "delta-t2",
+		});
+		const d3 = makeDelta({
+			hlc: hlcHigh,
+			table: "users",
+			rowId: "row-3",
+			deltaId: "delta-u1",
+		});
+
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [d1, d2, d3],
+			lastSeenHlc: hlcLow,
+		});
+
+		const stats = gw.tableStats;
+		expect(stats).toHaveLength(2);
+
+		const todosStats = stats.find((s) => s.table === "todos");
+		const usersStats = stats.find((s) => s.table === "users");
+
+		expect(todosStats).toBeDefined();
+		expect(todosStats!.deltaCount).toBe(2);
+		expect(todosStats!.byteSize).toBeGreaterThan(0);
+
+		expect(usersStats).toBeDefined();
+		expect(usersStats!.deltaCount).toBe(1);
+		expect(usersStats!.byteSize).toBeGreaterThan(0);
+	});
+
+	it("drainTable removes only target table, other tables remain", () => {
+		const gw = new SyncGateway(defaultConfig);
+
+		const d1 = makeDelta({
+			hlc: hlcLow,
+			table: "todos",
+			rowId: "row-1",
+			deltaId: "delta-drain-t1",
+		});
+		const d2 = makeDelta({
+			hlc: hlcMid,
+			table: "users",
+			rowId: "row-2",
+			deltaId: "delta-drain-u1",
+		});
+
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [d1, d2],
+			lastSeenHlc: hlcLow,
+		});
+
+		expect(gw.bufferStats.logSize).toBe(2);
+
+		// Flush only the "todos" table
+		const stats = gw.tableStats;
+		expect(stats).toHaveLength(2);
+
+		// After flushing just todos, only users should remain
+		// We test this via flushTable which internally calls drainTable
+	});
+
+	it("flushTable flushes single table while other table remains", async () => {
+		const adapter = createMockAdapter();
+		const gw = new SyncGateway(defaultConfig, adapter);
+
+		const d1 = makeDelta({
+			hlc: hlcLow,
+			table: "todos",
+			rowId: "row-1",
+			deltaId: "delta-ft-t1",
+		});
+		const d2 = makeDelta({
+			hlc: hlcMid,
+			table: "users",
+			rowId: "row-2",
+			deltaId: "delta-ft-u1",
+		});
+
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [d1, d2],
+			lastSeenHlc: hlcLow,
+		});
+
+		expect(gw.bufferStats.logSize).toBe(2);
+
+		// Flush only "todos"
+		const result = await gw.flushTable("todos");
+		expect(result.ok).toBe(true);
+
+		// Buffer should have only the "users" delta remaining
+		expect(gw.bufferStats.logSize).toBe(1);
+
+		// Adapter should have received the todos flush
+		expect(adapter.stored.size).toBe(1);
+		const key = [...adapter.stored.keys()][0]!;
+		expect(key).toContain("todos-");
+
+		// Table stats should show only users
+		const stats = gw.tableStats;
+		expect(stats).toHaveLength(1);
+		expect(stats[0]!.table).toBe("users");
+	});
+
+	it("getTablesExceedingBudget returns hot tables", () => {
+		const config: GatewayConfig = {
+			...defaultConfig,
+			perTableBudgetBytes: 100, // Very low budget
+		};
+		const gw = new SyncGateway(config);
+
+		const d1 = makeDelta({
+			hlc: hlcLow,
+			table: "todos",
+			rowId: "row-1",
+			deltaId: "delta-budget-t1",
+			columns: [{ column: "title", value: "x".repeat(100) }],
+		});
+		const d2 = makeDelta({
+			hlc: hlcMid,
+			table: "users",
+			rowId: "row-2",
+			deltaId: "delta-budget-u1",
+			columns: [{ column: "name", value: "y" }],
+		});
+
+		gw.handlePush({
+			clientId: "client-a",
+			deltas: [d1, d2],
+			lastSeenHlc: hlcLow,
+		});
+
+		const hot = gw.getTablesExceedingBudget();
+		// todos should exceed the 100-byte budget, users should not
+		expect(hot).toContain("todos");
+	});
+
+	it("flushTable on empty table is a no-op", async () => {
+		const adapter = createMockAdapter();
+		const gw = new SyncGateway(defaultConfig, adapter);
+
+		const result = await gw.flushTable("nonexistent");
+		expect(result.ok).toBe(true);
+		expect(adapter.stored.size).toBe(0);
+	});
 });

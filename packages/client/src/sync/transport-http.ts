@@ -2,6 +2,7 @@ import type {
 	HLCTimestamp,
 	LakeSyncError,
 	Result,
+	RowDelta,
 	SyncPull,
 	SyncPush,
 	SyncResponse,
@@ -126,9 +127,8 @@ export class HttpTransport implements SyncTransport {
 	/**
 	 * Download checkpoint for initial sync.
 	 *
-	 * Sends a GET request to the checkpoint endpoint. Returns null if no
-	 * checkpoint is available (404). The response body is proto-encoded
-	 * and contains pre-filtered deltas (filtered server-side by JWT claims).
+	 * Requests the streaming checkpoint format via Accept header and reads
+	 * length-prefixed proto frames from the response body.
 	 */
 	async checkpoint(): Promise<Result<CheckpointResponse | null, LakeSyncError>> {
 		const url = `${this.baseUrl}/sync/${this.gatewayId}/checkpoint`;
@@ -138,6 +138,7 @@ export class HttpTransport implements SyncTransport {
 				method: "GET",
 				headers: {
 					Authorization: `Bearer ${this.token}`,
+					Accept: "application/x-lakesync-checkpoint-stream",
 				},
 			});
 
@@ -152,26 +153,10 @@ export class HttpTransport implements SyncTransport {
 				);
 			}
 
-			const bytes = new Uint8Array(await response.arrayBuffer());
-			const decoded = decodeSyncResponse(bytes);
-
-			if (!decoded.ok) {
-				return Err(
-					new LSError(
-						`Checkpoint decode failed: ${decoded.error.message}`,
-						"TRANSPORT_ERROR",
-						decoded.error,
-					),
-				);
-			}
-
 			const hlcHeader = response.headers.get("X-Checkpoint-Hlc");
-			const snapshotHlc = hlcHeader ? (BigInt(hlcHeader) as HLCTimestamp) : decoded.value.serverHlc;
-
-			return Ok({
-				deltas: decoded.value.deltas,
-				snapshotHlc,
-			});
+			const { deltas, serverHlc } = await readStreamingCheckpoint(response);
+			const snapshotHlc = hlcHeader ? (BigInt(hlcHeader) as HLCTimestamp) : serverHlc;
+			return Ok({ deltas, snapshotHlc });
 		} catch (error) {
 			const cause = toError(error);
 			return Err(
@@ -179,4 +164,48 @@ export class HttpTransport implements SyncTransport {
 			);
 		}
 	}
+}
+
+/**
+ * Read a streaming checkpoint response containing length-prefixed proto frames.
+ *
+ * Each frame is: 4-byte big-endian length prefix + proto-encoded SyncResponse.
+ * Collects all deltas across frames and returns the server HLC from the header.
+ */
+async function readStreamingCheckpoint(
+	response: Response,
+): Promise<{ deltas: RowDelta[]; serverHlc: HLCTimestamp }> {
+	const reader = response.body!.getReader();
+	const allDeltas: RowDelta[] = [];
+	const hlcHeader = response.headers.get("X-Checkpoint-Hlc");
+	const serverHlc = hlcHeader ? (BigInt(hlcHeader) as HLCTimestamp) : (0n as HLCTimestamp);
+
+	let buffer = new Uint8Array(0);
+
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+
+		// Append to buffer
+		const newBuffer = new Uint8Array(buffer.length + value.length);
+		newBuffer.set(buffer);
+		newBuffer.set(value, buffer.length);
+		buffer = newBuffer;
+
+		// Process complete frames
+		while (buffer.length >= 4) {
+			const frameLength = new DataView(buffer.buffer, buffer.byteOffset).getUint32(0, false);
+			if (buffer.length < 4 + frameLength) break;
+
+			const frameData = buffer.slice(4, 4 + frameLength);
+			buffer = buffer.slice(4 + frameLength);
+
+			const decoded = decodeSyncResponse(frameData);
+			if (decoded.ok) {
+				allDeltas.push(...decoded.value.deltas);
+			}
+		}
+	}
+
+	return { deltas: allDeltas, serverHlc };
 }
