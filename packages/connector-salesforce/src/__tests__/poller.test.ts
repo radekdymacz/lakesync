@@ -345,6 +345,127 @@ describe("SalesforceSourcePoller", () => {
 		vi.useRealTimers();
 	});
 
+	describe("cursor state serialisation", () => {
+		it("getCursorState returns a copy of internal cursors", async () => {
+			const client = createMockClient({
+				accounts: [makeAccount("001A", "2025-01-15T00:00:00.000+0000")],
+			});
+
+			const poller = new SalesforceSourcePoller(
+				{
+					instanceUrl: "https://test.salesforce.com",
+					clientId: "cid",
+					clientSecret: "csecret",
+					username: "user",
+					password: "pass",
+					includeContacts: false,
+					includeOpportunities: false,
+					includeLeads: false,
+				},
+				undefined,
+				"sf-test",
+				gateway,
+				client,
+			);
+
+			// Before polling — all cursors undefined
+			const before = poller.getCursorState();
+			expect(before).toEqual({
+				accounts: undefined,
+				contacts: undefined,
+				opportunities: undefined,
+				leads: undefined,
+			});
+
+			await poller.poll();
+
+			const after = poller.getCursorState();
+			expect(after.accounts).toBe("2025-01-15T00:00:00.000+0000");
+			expect(after.contacts).toBeUndefined();
+			expect(after.opportunities).toBeUndefined();
+			expect(after.leads).toBeUndefined();
+		});
+
+		it("setCursorState restores cursors and affects subsequent queries", async () => {
+			const client = createMockClient({});
+
+			const poller = new SalesforceSourcePoller(
+				{
+					instanceUrl: "https://test.salesforce.com",
+					clientId: "cid",
+					clientSecret: "csecret",
+					username: "user",
+					password: "pass",
+					includeContacts: false,
+					includeOpportunities: false,
+					includeLeads: false,
+				},
+				undefined,
+				"sf-test",
+				gateway,
+				client,
+			);
+
+			poller.setCursorState({
+				accounts: "2025-03-01T00:00:00.000+0000",
+				contacts: undefined,
+				opportunities: undefined,
+				leads: undefined,
+			});
+
+			await poller.poll();
+
+			const soql = (client.query as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+			expect(soql).toContain("LastModifiedDate > 2025-03-01T00:00:00.000+0000");
+		});
+
+		it("round-trips cursor state via getCursorState/setCursorState", async () => {
+			const client = createMockClient({
+				accounts: [makeAccount("001A", "2025-02-20T12:00:00.000+0000")],
+				contacts: [makeContact("003A", "2025-02-21T12:00:00.000+0000")],
+			});
+
+			const poller1 = new SalesforceSourcePoller(
+				{
+					instanceUrl: "https://test.salesforce.com",
+					clientId: "cid",
+					clientSecret: "csecret",
+					username: "user",
+					password: "pass",
+					includeOpportunities: false,
+					includeLeads: false,
+				},
+				undefined,
+				"sf-test",
+				gateway,
+				client,
+			);
+
+			await poller1.poll();
+			const snapshot = poller1.getCursorState();
+
+			// Create a new poller and restore state
+			const poller2 = new SalesforceSourcePoller(
+				{
+					instanceUrl: "https://test.salesforce.com",
+					clientId: "cid",
+					clientSecret: "csecret",
+					username: "user",
+					password: "pass",
+					includeOpportunities: false,
+					includeLeads: false,
+				},
+				undefined,
+				"sf-test",
+				gateway,
+				client,
+			);
+
+			poller2.setCursorState(snapshot);
+			expect(poller2.getCursorState()).toEqual(snapshot);
+		});
+	});
+
 	it("swallows errors during poll without crashing", async () => {
 		const client = createMockClient({});
 		(client.query as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Network error"));

@@ -29,6 +29,26 @@ export class JiraSourcePoller extends BaseSourcePoller {
 	/** In-memory snapshot for project diff (keyed by project key). */
 	private projectSnapshot = new Map<string, Record<string, unknown>>();
 
+	/** Export cursor state as a JSON-serialisable object for external persistence. */
+	override getCursorState(): Record<string, unknown> {
+		return {
+			lastUpdated: this.lastUpdated,
+			commentSnapshot: Array.from(this.commentSnapshot.entries()),
+			projectSnapshot: Array.from(this.projectSnapshot.entries()),
+		};
+	}
+
+	/** Restore cursor state from a previously exported snapshot. */
+	override setCursorState(state: Record<string, unknown>): void {
+		this.lastUpdated = state.lastUpdated as string | undefined;
+		this.commentSnapshot = new Map(
+			state.commentSnapshot as Array<[string, Record<string, unknown>]>,
+		);
+		this.projectSnapshot = new Map(
+			state.projectSnapshot as Array<[string, Record<string, unknown>]>,
+		);
+	}
+
 	constructor(
 		connectionConfig: JiraConnectorConfig,
 		ingestConfig: JiraIngestConfig | undefined,

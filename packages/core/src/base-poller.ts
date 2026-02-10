@@ -101,6 +101,20 @@ export abstract class BaseSourcePoller {
 	/** Execute a single poll cycle. Subclasses implement their specific polling logic. */
 	abstract poll(): Promise<void>;
 
+	/** Export cursor state as a JSON-serialisable object for external persistence. */
+	abstract getCursorState(): Record<string, unknown>;
+
+	/** Restore cursor state from a previously exported snapshot. */
+	abstract setCursorState(state: Record<string, unknown>): void;
+
+	/**
+	 * Execute a single poll cycle without the timer loop.
+	 * Convenience for serverless consumers who trigger polls manually.
+	 */
+	async pollOnce(): Promise<void> {
+		return this.poll();
+	}
+
 	/** Push collected deltas to the gateway (single-shot, backward compat). */
 	protected pushDeltas(deltas: RowDelta[]): void {
 		if (deltas.length === 0) return;

@@ -108,6 +108,7 @@ function createIngestTarget(opts?: {
 class TestPoller extends BaseSourcePoller {
 	deltasToAccumulate: RowDelta[] = [];
 	pollCallCount = 0;
+	cursor: Record<string, unknown> = {};
 
 	constructor(
 		gateway: PushTarget,
@@ -122,6 +123,14 @@ class TestPoller extends BaseSourcePoller {
 			await this.accumulateDelta(d);
 		}
 		await this.flushAccumulator();
+	}
+
+	getCursorState(): Record<string, unknown> {
+		return { ...this.cursor };
+	}
+
+	setCursorState(state: Record<string, unknown>): void {
+		this.cursor = { ...state };
 	}
 
 	/** Expose pushDeltas for backward-compat test. */

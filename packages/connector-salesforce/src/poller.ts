@@ -110,6 +110,22 @@ export class SalesforceSourcePoller extends BaseSourcePoller {
 		leads: undefined,
 	};
 
+	/** Export cursor state as a JSON-serialisable object for external persistence. */
+	override getCursorState(): Record<string, unknown> {
+		return { ...this.cursors };
+	}
+
+	/** Restore cursor state from a previously exported snapshot. */
+	override setCursorState(state: Record<string, unknown>): void {
+		const incoming = state as Record<string, string | undefined>;
+		this.cursors = {
+			accounts: incoming.accounts,
+			contacts: incoming.contacts,
+			opportunities: incoming.opportunities,
+			leads: incoming.leads,
+		};
+	}
+
 	constructor(
 		connectionConfig: SalesforceConnectorConfig,
 		ingestConfig: SalesforceIngestConfig | undefined,
