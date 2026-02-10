@@ -1,6 +1,6 @@
 {
 	"name": "lakesync",
-	"version": "0.1.3",
+	"version": "0.1.4",
 	"type": "module",
 	"description": "Local-first sync engine with pluggable backends — Postgres, MySQL, BigQuery, S3/R2 via Apache Iceberg",
 	"license": "Apache-2.0",
