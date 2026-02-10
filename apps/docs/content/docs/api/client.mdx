@@ -171,6 +171,10 @@ interface SyncTransport {
   push(msg: SyncPush): Promise<Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>>;
   pull(msg: SyncPull): Promise<Result<SyncResponse, LakeSyncError>>;
   checkpoint?(): Promise<Result<CheckpointResponse | null, LakeSyncError>>;
+  /** Execute imperative actions against external systems via the gateway. */
+  executeAction?(msg: ActionPush): Promise<Result<ActionResponse, LakeSyncError>>;
+  /** Discover available connectors and their supported action types. */
+  describeActions?(): Promise<Result<ActionDiscovery, LakeSyncError>>;
 
   /** Whether this transport supports real-time server push. */
   readonly supportsRealtime?: boolean;
@@ -185,6 +189,8 @@ interface SyncTransport {
 
 The optional realtime members (`supportsRealtime`, `onBroadcast`, `connect`, `disconnect`) are implemented by `WebSocketTransport`. Polling transports (`HttpTransport`, `LocalTransport`) ignore them.
 
+The action methods (`executeAction`, `describeActions`) are optional and implemented by `HttpTransport` and `LocalTransport`. See [Actions](/docs/actions) for usage.
+
 ### `LocalTransport`
 
 In-process transport for development and testing. Connects directly to a gateway instance.
@@ -197,6 +203,8 @@ class LocalTransport implements SyncTransport {
 interface LocalGateway {
   handlePush(msg: SyncPush): Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>;
   handlePull(msg: SyncPull): Result<SyncResponse, LakeSyncError>;
+  handleAction?(msg: ActionPush, context?: AuthContext): Promise<Result<ActionResponse, ActionValidationError>>;
+  describeActions?(): ActionDiscovery;
 }
 ```
 

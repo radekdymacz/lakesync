@@ -287,6 +287,93 @@ function quoteIdentifier(name: string): string;
 
 Double-quote a SQL identifier with proper escaping.
 
+## Actions
+
+Types for imperative actions against external systems. See [Actions](/docs/actions) for the full guide.
+
+### Action Types
+
+```ts
+interface Action {
+  actionId: string;
+  clientId: string;
+  hlc: HLCTimestamp;
+  connector: string;
+  actionType: string;
+  params: Record<string, unknown>;
+  idempotencyKey?: string;
+}
+
+interface ActionPush {
+  clientId: string;
+  actions: Action[];
+}
+
+interface ActionResponse {
+  results: Array<ActionResult | ActionErrorResult>;
+  serverHlc: HLCTimestamp;
+}
+
+interface ActionResult {
+  actionId: string;
+  data: Record<string, unknown>;
+  serverHlc: HLCTimestamp;
+}
+
+interface ActionErrorResult {
+  actionId: string;
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+```
+
+### Action Discovery
+
+```ts
+interface ActionDescriptor {
+  actionType: string;
+  description: string;
+  paramsSchema?: Record<string, unknown>;
+}
+
+interface ActionDiscovery {
+  connectors: Record<string, ActionDescriptor[]>;
+}
+```
+
+### ActionHandler
+
+```ts
+interface ActionHandler {
+  readonly supportedActions: ActionDescriptor[];
+  executeAction(
+    action: Action,
+    context?: AuthContext,
+  ): Promise<Result<ActionResult, ActionExecutionError | ActionNotSupportedError>>;
+}
+
+function isActionHandler(obj: unknown): obj is ActionHandler;
+```
+
+### Action Errors
+
+```ts
+class ActionValidationError extends LakeSyncError {}   // code: "ACTION_VALIDATION_ERROR"
+class ActionExecutionError extends LakeSyncError {      // code: "ACTION_EXECUTION_ERROR"
+  readonly retryable: boolean;
+}
+class ActionNotSupportedError extends LakeSyncError {}  // code: "ACTION_NOT_SUPPORTED"
+```
+
+### Utilities
+
+```ts
+function validateAction(action: Action): Result<void, ActionValidationError>;
+function generateActionId(action: Omit<Action, "actionId">): Promise<string>;
+function isActionError(result: ActionResult | ActionErrorResult): result is ActionErrorResult;
+```
+
 ## Connector Types
 
 Types for dynamic connector registration. See [Dynamic Connectors](/docs/connectors) for the full API.
