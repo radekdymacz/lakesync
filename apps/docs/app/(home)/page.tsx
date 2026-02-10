@@ -6,12 +6,13 @@ const CORE_FLOW = `sequenceDiagram
     participant GW as Gateway
     participant Source as Any Data Source
 
-    Consumer->>GW: push local deltas
+    Consumer->>GW: push local deltas (HTTP or WS)
     GW-->>Consumer: ACK + server HLC
     Consumer->>GW: pull (sync rule filter)
     GW->>Source: query via adapter
     Source-->>GW: filtered results
     GW-->>Consumer: deltas matching rule
+    GW-->>Consumer: broadcast new deltas (WS)
     Note over GW,Source: Adapters are both<br/>sources and destinations`;
 
 const OFFLINE_SYNC = `sequenceDiagram
@@ -41,6 +42,20 @@ const CROSS_BACKEND = `sequenceDiagram
     PG->>GW: read via DatabaseAdapter
     GW->>ICE: write via LakeAdapter
     Note over GW: Any source → any destination<br/>via adapter interfaces`;
+
+const SOURCE_POLLING = `sequenceDiagram
+    participant SaaS as External API (Jira, Salesforce)
+    participant Poller as SourcePoller
+    participant GW as Gateway
+
+    loop Every interval
+        Poller->>SaaS: poll for changes (cursor)
+        SaaS-->>Poller: new/updated records
+        Poller->>Poller: extract deltas (diff)
+        Poller->>GW: push deltas (chunked)
+        Note over Poller,GW: Memory-bounded<br/>streaming accumulation
+    end
+    GW-->>GW: buffer + flush to adapter`;
 
 const CONFLICT_RESOLUTION = `sequenceDiagram
     participant A as Client A
@@ -86,10 +101,10 @@ export default function HomePage() {
 
 				<p className="mx-auto mb-10 max-w-2xl text-center text-lg leading-relaxed text-fd-muted-foreground">
 					LakeSync is an open-source TypeScript sync engine. Pluggable
-					adapters connect to any data source. Declarative sync rules
-					define what data flows where. Consumers get a local SQLite
-					working set with offline support and column-level conflict
-					resolution.
+					adapters and source connectors connect to any data source.
+					Declarative sync rules define what data flows where. Consumers
+					get a local SQLite working set with real-time WebSocket sync,
+					offline support, and column-level conflict resolution.
 				</p>
 
 				<div className="flex flex-wrap items-center justify-center gap-4">
@@ -136,11 +151,12 @@ export default function HomePage() {
 					<p className="mx-auto mb-16 max-w-2xl text-center leading-relaxed text-fd-muted-foreground">
 						Two interfaces: <code className="rounded bg-fd-accent/50 px-1.5 py-0.5 text-xs">DatabaseAdapter</code> for
 						SQL-like sources and <code className="rounded bg-fd-accent/50 px-1.5 py-0.5 text-xs">LakeAdapter</code> for
-						object storage. Adapters are both sources and destinations,
+						object storage. Source connectors poll external APIs (Jira, Salesforce)
+						and push changes as deltas. Adapters are both sources and destinations,
 						enabling cross-backend data flows.
 					</p>
 
-					<div className="mx-auto grid max-w-5xl grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+					<div className="mx-auto grid max-w-5xl grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
 						<AdapterCard
 							name="Postgres / MySQL"
 							description="DatabaseAdapter. insertDeltas, queryDeltasSince, getLatestState, ensureSchema."
@@ -154,8 +170,16 @@ export default function HomePage() {
 							description="LakeAdapter. putObject, getObject, listObjects, deleteObject. Parquet + Iceberg table format."
 						/>
 						<AdapterCard
+							name="Jira"
+							description="Source connector. Polls issues, comments, and projects via Jira Cloud API with cursor-based change detection."
+						/>
+						<AdapterCard
+							name="Salesforce"
+							description="Source connector. Polls accounts, contacts, opportunities, and leads via SOQL with LastModifiedDate cursors."
+						/>
+						<AdapterCard
 							name="Custom adapters"
-							description="Implement either interface for any data source. CompositeAdapter routes to multiple backends."
+							description="Implement either interface for any data source. CompositeAdapter, FanOutAdapter, and LifecycleAdapter for advanced routing."
 							highlight
 						/>
 					</div>
@@ -166,7 +190,7 @@ export default function HomePage() {
 			<DiagramSection
 				label="Sync rules"
 				title="Declarative filtering via sync rules DSL"
-				description="Bucket-based filtering with eq/in operators and JWT claim references via jwt: prefix. The gateway evaluates rules at pull time and returns only matching deltas. Sync rules define what data each consumer receives."
+				description="Bucket-based filtering with eq, neq, in, gt, lt, gte, lte operators and JWT claim references via jwt: prefix. The gateway evaluates rules at pull time and returns only matching deltas. Sync rules define what data each consumer receives."
 				chart={SYNC_RULES}
 				border
 			/>
@@ -196,6 +220,15 @@ export default function HomePage() {
 				chart={CONFLICT_RESOLUTION}
 			/>
 
+			{/* Source polling */}
+			<DiagramSection
+				label="Source connectors"
+				title="Poll external APIs and ingest as deltas"
+				description="Source connectors extend BaseSourcePoller to poll external APIs on an interval and push changes as deltas. Memory-bounded streaming accumulation keeps resource usage predictable. Built-in connectors for Jira and Salesforce. Extend the base class for any API."
+				chart={SOURCE_POLLING}
+				border
+			/>
+
 			{/* Design decisions */}
 			<section className="w-full border-t border-fd-border px-4 py-24">
 				<div className="mx-auto max-w-5xl">
@@ -223,12 +256,24 @@ export default function HomePage() {
 							description="Public APIs never throw. Error paths are explicit, composable, and impossible to accidentally ignore."
 						/>
 						<Feature
+							title="Real-time WebSocket sync"
+							description="WebSocketTransport uses binary protobuf framing for push, pull, and server-initiated broadcasts. Auto-reconnects with exponential backoff."
+						/>
+						<Feature
+							title="Sync rules DSL"
+							description="Declarative bucket-based filtering with eq, neq, in, gt, lt, gte, lte operators and JWT claim references. Pure function evaluation — filterDeltas() has no side effects."
+						/>
+						<Feature
 							title="Deterministic delta IDs"
 							description="SHA-256 of stable-stringified payload. Same logical change always produces the same deltaId. Enables idempotent processing."
 						/>
 						<Feature
-							title="Sync rules DSL"
-							description="Declarative bucket-based filtering with eq/in operators and JWT claim references. Pure function evaluation — filterDeltas() has no side effects."
+							title="React bindings"
+							description="LakeSyncProvider, useQuery, useMutation, and useSyncStatus hooks. Reactive local-first data access for React apps."
+						/>
+						<Feature
+							title="Source polling"
+							description="BaseSourcePoller base class with memory-bounded streaming accumulation. Built-in connectors for Jira and Salesforce. Extend for any API."
 						/>
 					</div>
 				</div>
@@ -242,11 +287,12 @@ export default function HomePage() {
 					</div>
 					<h2 className="mb-4 text-3xl font-bold">Experimental, but real</h2>
 					<p className="mb-8 leading-relaxed text-fd-muted-foreground">
-						Core sync engine, conflict resolution, client SDK, Cloudflare Workers
-						gateway, compaction, checkpoint generation, sync rules, and adapters
-						for Postgres, MySQL, BigQuery, and S3/R2 are all implemented and
-						tested. Cross-backend flows and the extended sync rules DSL are
-						next. API is not yet stable &mdash; expect breaking changes.
+						14 packages, 3 apps. Core sync engine, conflict resolution, client SDK,
+						React bindings, Cloudflare Workers gateway, self-hosted gateway server
+						with WebSocket support, compaction, checkpoint generation, sync rules
+						DSL, cross-backend flows, source connectors (Jira, Salesforce), and
+						adapters for Postgres, MySQL, BigQuery, and S3/R2 are all implemented
+						and tested. API is not yet stable &mdash; expect breaking changes.
 					</p>
 					<div className="flex flex-wrap items-center justify-center gap-4">
 						<Link

@@ -5,7 +5,7 @@
 
 **Local-first sync. Any backend.**
 
-LakeSync is an open-source sync engine for local-first TypeScript apps. Your data lives in SQLite on the device, syncs through a lightweight gateway, and flushes to the backend of your choice — **Postgres for small data, BigQuery for analytics, S3/R2 via Apache Iceberg for large data**. Same client code either way.
+LakeSync is an open-source sync engine for local-first TypeScript apps. Your data lives in SQLite on the device, syncs through a lightweight gateway, and flushes to the backend of your choice — **Postgres for small data, BigQuery for analytics, S3/R2 via Apache Iceberg for large data**. Source connectors pull data from external systems like Jira and Salesforce into the same pipeline. Same client code either way.
 
 **[Documentation](https://radekdymacz.github.io/lakesync)** · **[Getting Started](https://radekdymacz.github.io/lakesync/docs/getting-started)** · **[Architecture](https://radekdymacz.github.io/lakesync/docs/architecture)**
 
@@ -22,6 +22,8 @@ Most sync engines lock you into a single backend. LakeSync's `LakeAdapter` inter
 | Analytics (BigQuery) | Sometimes | Sometimes | **Yes** |
 | Large data (Iceberg/S3/R2) | No | Yes | **Yes** |
 | Time-travel queries | No | Yes | **Yes** |
+| Real-time WebSocket sync | Sometimes | No | **Yes** |
+| Source connectors (Jira, Salesforce, ...) | No | No | **Yes** |
 | Self-hosted or edge (CF Workers) | Sometimes | No | **Yes** |
 
 ## How It Works
@@ -35,7 +37,7 @@ sequenceDiagram
 
     App->>DB: INSERT / UPDATE / DELETE
     Note over App,DB: Zero latency — local write
-    DB-->>GW: Push column-level deltas
+    DB-->>GW: Push column-level deltas (HTTP or WebSocket)
     GW-->>DB: ACK + pull remote changes
     Note over GW: Deltas merge via HLC + LWW
     GW->>Backend: Batch flush
@@ -43,9 +45,10 @@ sequenceDiagram
 ```
 
 1. **Mutations write to local SQLite** with zero latency
-2. **Column-level deltas push** to a lightweight gateway
+2. **Column-level deltas push** to a lightweight gateway (HTTP or WebSocket)
 3. **Gateway merges** via Hybrid Logical Clocks — concurrent edits to different columns are both preserved
 4. **Batch flush** to whatever backend you choose via the adapter interface
+5. **Source connectors poll** external systems (Jira, Salesforce, ...) and ingest data through the same gateway
 
 ## Right-Size Your Backend
 
@@ -264,6 +267,11 @@ graph TB
         end
     end
 
+    subgraph "Source Connectors"
+        JIRA[Jira]
+        SF[Salesforce]
+    end
+
     subgraph "Backends"
         PG[(Postgres / MySQL)]
         BQ[(BigQuery)]
@@ -285,8 +293,10 @@ graph TB
     SC --> ST
     ST --> DB
     ST --> Q
-    SC -->|HTTP| CF
-    SC -->|HTTP| SH
+    SC -->|HTTP / WS| CF
+    SC -->|HTTP / WS| SH
+    JIRA -->|poll| SH
+    SF -->|poll| SH
     CF --> COMP
     SH --> COMP
     COMP --> PG
@@ -309,6 +319,8 @@ graph TB
 - **Adapter composition** — `CompositeAdapter` (route by table), `FanOutAdapter` (replicate writes), `LifecycleAdapter` (hot/cold tiers). All implement `DatabaseAdapter` so they nest freely.
 - **Table sharding** — split a tenant's traffic across multiple Durable Objects by table name. The shard router fans out pushes and merges pull results automatically.
 - **Adapter-sourced pull** — clients can pull directly from named source adapters (e.g. a BigQuery dataset) via the gateway, with sync rules filtering applied.
+- **Real-time WebSocket sync** — `WebSocketTransport` maintains a persistent connection to the gateway server, with server-initiated broadcast of new deltas to connected clients.
+- **Source connectors** — `BaseSourcePoller` provides a memory-managed ingestion pipeline. Connectors (Jira, Salesforce) poll external APIs and push deltas into the gateway with backpressure-aware streaming.
 
 ## Packages
 
@@ -317,13 +329,16 @@ graph TB
 | [`@lakesync/core`](packages/core) | HLC timestamps, delta types, LWW conflict resolution, sync rules, Result type |
 | [`@lakesync/client`](packages/client) | Client SDK: SyncCoordinator, SyncTracker, LocalDB, transports, queues, initial sync |
 | [`@lakesync/gateway`](packages/gateway) | Sync gateway with delta buffer, conflict resolution, adapter-sourced pull, dual-adapter flush |
-| [`@lakesync/gateway-server`](packages/gateway-server) | Self-hosted gateway server (Node.js / Bun) with SQLite persistence and JWT auth |
+| [`@lakesync/gateway-server`](packages/gateway-server) | Self-hosted gateway server (Node.js / Bun) with SQLite persistence, JWT auth, and WebSocket support |
 | [`@lakesync/adapter`](packages/adapter) | Storage adapters: MinIO/S3, Postgres, MySQL, BigQuery, Composite, FanOut, Lifecycle, migration tooling |
 | [`@lakesync/proto`](packages/proto) | Protobuf codec for the wire protocol |
 | [`@lakesync/parquet`](packages/parquet) | Parquet read/write via parquet-wasm |
 | [`@lakesync/catalogue`](packages/catalogue) | Iceberg REST catalogue client (Nessie-compatible) |
 | [`@lakesync/compactor`](packages/compactor) | Parquet compaction, equality deletes, checkpoint generation |
 | [`@lakesync/analyst`](packages/analyst) | Time-travel queries + analytics via DuckDB-WASM |
+| [`@lakesync/react`](packages/react) | React bindings: reactive hooks for sync, queries, and mutations |
+| [`@lakesync/connector-jira`](packages/connector-jira) | Jira Cloud source connector — polls issues, comments, and projects into the gateway |
+| [`@lakesync/connector-salesforce`](packages/connector-salesforce) | Salesforce CRM source connector — polls accounts, contacts, opportunities, and leads |
 | [`lakesync`](packages/lakesync) | Unified package with subpath exports for all of the above |
 
 | App | Description |
@@ -345,10 +360,12 @@ graph TB
 | Composite (route by table) | `CompositeAdapter` | Implemented |
 | Fan-out (replicate writes) | `FanOutAdapter` | Implemented |
 | Lifecycle (hot/cold tiers) | `LifecycleAdapter` | Implemented |
+| Jira Cloud | `connector-jira` (source connector) | Implemented |
+| Salesforce CRM | `connector-salesforce` (source connector) | Implemented |
 
 ## Status
 
-Experimental, but real. All planned phases are implemented and tested: core sync engine, conflict resolution, client SDK, Cloudflare Workers gateway, self-hosted gateway server, compaction, checkpoint generation, sync rules (with extended comparison operators), initial sync, database adapters (Postgres, MySQL, BigQuery), composite routing, fan-out replication, lifecycle tiering, table sharding, and adapter-sourced pull. API is not yet stable — expect breaking changes.
+Experimental, but real. All planned phases are implemented and tested: core sync engine, conflict resolution, client SDK, Cloudflare Workers gateway, self-hosted gateway server with WebSocket support, React bindings, compaction, checkpoint generation, sync rules (with extended comparison operators), initial sync, database adapters (Postgres, MySQL, BigQuery), composite routing, fan-out replication, lifecycle tiering, table sharding, adapter-sourced pull, and source connectors (Jira, Salesforce) with memory-managed ingestion. API is not yet stable — expect breaking changes.
 
 ## Contributing
 

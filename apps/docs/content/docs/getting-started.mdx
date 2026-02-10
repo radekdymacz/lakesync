@@ -53,7 +53,11 @@ For local development, use `LocalTransport` to sync in-process:
 import { LocalTransport } from "lakesync/client";
 import { SyncGateway } from "lakesync/gateway";
 
-const gateway = new SyncGateway("gw-1");
+const gateway = new SyncGateway({
+  gatewayId: "gw-1",
+  maxBufferBytes: 1_048_576,
+  maxBufferAgeMs: 30_000,
+});
 const transport = new LocalTransport(gateway);
 ```
 

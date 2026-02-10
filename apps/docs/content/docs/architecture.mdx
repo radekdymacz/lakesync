@@ -34,6 +34,7 @@ Any data source you can read from becomes a LakeSync adapter. Adapters are both 
 | **BigQuery** | `DatabaseAdapter` | Analytics-scale queries, managed and serverless |
 | **S3 / R2 (Iceberg)** | `LakeAdapter` | Massive scale on object storage, open format |
 | **Jira Cloud** | API Connector | Sync issues, comments, and projects from Jira |
+| **Salesforce** | API Connector | Sync accounts, contacts, opportunities, and leads from Salesforce |
 | **Anything else** | Either interface | CloudWatch, Stripe, custom APIs — implement the interface |
 
 The `DatabaseAdapter` interface (`insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema`) handles SQL-like sources. The `LakeAdapter` interface (`putObject`, `getObject`, `listObjects`, `deleteObject`) handles object storage. The `CompositeAdapter` routes data to multiple backends simultaneously.
@@ -55,16 +56,22 @@ const ts: HLCTimestamp = hlc.now();
 
 ## Delta Model
 
-A **Delta** represents a single mutation to a single row. Rather than storing full row snapshots, LakeSync stores _column-level_ changes:
+A **RowDelta** represents a single mutation to a single row. Rather than storing full row snapshots, LakeSync stores _column-level_ changes:
 
 ```ts
-interface Delta {
+interface RowDelta {
+  op: "INSERT" | "UPDATE" | "DELETE";
   deltaId: string;       // SHA-256 of stable-stringified payload
   table: string;
   rowId: string;
-  columns: Record<string, unknown>;
-  hlc: HLCTimestamp;
   clientId: string;
+  columns: ColumnDelta[]; // Array of { column, value } pairs
+  hlc: HLCTimestamp;
+}
+
+interface ColumnDelta {
+  column: string;
+  value: unknown;
 }
 ```
 
@@ -102,11 +109,11 @@ sequenceDiagram
 Public APIs never throw. Instead, they return `Result<T, E>`:
 
 ```ts
-import { ok, err, type Result } from "lakesync";
+import { Ok, Err, type Result } from "lakesync";
 
 function divide(a: number, b: number): Result<number, string> {
-  if (b === 0) return err("Division by zero");
-  return ok(a / b);
+  if (b === 0) return Err("Division by zero");
+  return Ok(a / b);
 }
 
 const result = divide(10, 2);
@@ -236,9 +243,11 @@ sequenceDiagram
     GW-->>C: broadcast / pull
 ```
 
-Two change detection strategies are available for database sources: **cursor** (fast, requires a monotonically increasing column like `updated_at`) and **diff** (slower, detects hard deletes via full-table comparison). API connectors like Jira use their own strategies internally. All pollers run inside `GatewayServer` — no HTTP hop, no auth needed. Detected changes flow through the same conflict resolution and sync rules as client-originated deltas.
+Two change detection strategies are available for database sources: **cursor** (fast, requires a monotonically increasing column like `updated_at`) and **diff** (slower, detects hard deletes via full-table comparison). API connectors like Jira and Salesforce use their own strategies internally. All pollers run inside `GatewayServer` — no HTTP hop, no auth needed. Detected changes flow through the same conflict resolution and sync rules as client-originated deltas.
 
-See [Source Polling Ingest](/docs/source-polling) for database polling setup and [Dynamic Connectors](/docs/connectors) for API connectors like Jira.
+The `BaseSourcePoller` includes a **memory-managed ingestion pipeline**. Pollers accumulate deltas and push them in configurable chunks (default 500). When the gateway implements the `IngestTarget` interface, the poller monitors buffer memory pressure and triggers flushes automatically. If the gateway rejects a push due to backpressure, the poller flushes and retries — preventing unbounded memory growth during large ingest operations.
+
+See [Source Polling Ingest](/docs/source-polling) for database polling setup and [Dynamic Connectors](/docs/connectors) for API connectors like Jira and Salesforce.
 
 ## Checkpoints
 

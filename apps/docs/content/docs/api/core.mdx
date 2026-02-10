@@ -1,6 +1,6 @@
 ---
 title: Core API
-description: API reference for @lakesync/core — HLC, Delta, Result, conflict resolution, sync rules, and validation.
+description: API reference for @lakesync/core — HLC, Delta, Result, conflict resolution, sync rules, connector types, and validation.
 ---
 
 The `@lakesync/core` package provides the foundational types and functions used across the LakeSync ecosystem.
@@ -13,14 +13,24 @@ Hybrid Logical Clock for causal ordering of events.
 
 ```ts
 class HLC {
-  constructor(clock?: () => number);
+  constructor(wallClock?: () => number);
   now(): HLCTimestamp;
-  receive(remote: HLCTimestamp): HLCTimestamp;
+  recv(remote: HLCTimestamp): Result<HLCTimestamp, ClockDriftError>;
+
+  static encode(wall: number, counter: number): HLCTimestamp;
+  static decode(ts: HLCTimestamp): { wall: number; counter: number };
+  static compare(a: HLCTimestamp, b: HLCTimestamp): -1 | 0 | 1;
+
+  static readonly MAX_DRIFT_MS: 5_000;
+  static readonly MAX_COUNTER: 0xffff;
 }
 ```
 
-- **`now()`** — Generate a new timestamp, advancing the clock.
-- **`receive(remote)`** — Merge a remote timestamp, ensuring the local clock stays ahead.
+- **`now()`** — Generate a new monotonically increasing timestamp.
+- **`recv(remote)`** — Merge a remote timestamp, advancing the local clock. Returns `Err(ClockDriftError)` if drift exceeds 5 seconds.
+- **`encode(wall, counter)`** — Pack wall clock ms and counter into an `HLCTimestamp`.
+- **`decode(ts)`** — Unpack an `HLCTimestamp` into its wall and counter components.
+- **`compare(a, b)`** — Compare two timestamps. Returns `-1`, `0`, or `1`.
 
 ### `HLCTimestamp`
 
@@ -30,113 +40,28 @@ A branded `bigint` encoding 48 bits of wall-clock milliseconds and 16 bits of a 
 type HLCTimestamp = bigint & { readonly __brand: "HLCTimestamp" };
 ```
 
-### Utility Functions
-
-```ts
-function hlcTimestamp(wallMs: number, counter: number): HLCTimestamp;
-function wallMs(ts: HLCTimestamp): number;
-function counter(ts: HLCTimestamp): number;
-function compareHLC(a: HLCTimestamp, b: HLCTimestamp): number;
-```
-
 ## Delta
 
-### `Delta`
+### `RowDelta`
 
 ```ts
-interface Delta {
-  deltaId: string;
+interface RowDelta {
+  op: DeltaOp;
   table: string;
   rowId: string;
-  columns: Record<string, unknown>;
-  hlc: HLCTimestamp;
   clientId: string;
-}
-```
-
-### `createDeltaId(delta)`
-
-```ts
-function createDeltaId(delta: Omit<Delta, "deltaId">): Promise<string>;
-```
-
-Generates a deterministic SHA-256 hash from a stable-stringified delta payload.
-
-## Result
-
-Type-safe error handling without exceptions.
-
-### Types
-
-```ts
-type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
-```
-
-### Constructors
-
-```ts
-function ok<T>(value: T): Result<T, never>;
-function err<E>(error: E): Result<never, E>;
-```
-
-## Conflict Resolution
-
-### `resolveConflict(local, remote)`
-
-```ts
-function resolveConflict(
-  local: Delta | undefined,
-  remote: Delta,
-): { winner: "local" | "remote"; columns: Record<string, unknown> };
-```
-
-Performs column-level LWW merge. When HLC timestamps are equal, the higher `clientId` wins.
-
-## Sync Rules
-
-### `SyncRules`
-
-```ts
-interface SyncRules {
-  buckets: SyncBucket[];
+  columns: ColumnDelta[];
+  hlc: HLCTimestamp;
+  deltaId: string;
 }
 
-interface SyncBucket {
-  name: string;
-  filters: SyncFilter[];
-  tables: string[];
-}
+type DeltaOp = "INSERT" | "UPDATE" | "DELETE";
 
-interface SyncFilter {
+interface ColumnDelta {
   column: string;
-  op: "eq" | "in";
-  value: string | string[];
+  value: unknown;
 }
 ```
-
-### `filterDeltas(deltas, rules, claims)`
-
-```ts
-function filterDeltas(
-  deltas: Delta[],
-  rules: SyncRules,
-  claims: Record<string, unknown>,
-): Delta[];
-```
-
-Pure function that returns the union of deltas matching any bucket's filters. JWT claim references (prefixed with `jwt:`) are resolved from the `claims` object.
-
-## Validation
-
-### `validateTableSchema(schema)`
-
-```ts
-function validateTableSchema(
-  schema: TableSchema,
-): Result<TableSchema, string>;
-```
-
-Validates that a table schema has a valid table name and at least one column with a supported type.
 
 ### `TableSchema`
 
@@ -146,3 +71,306 @@ interface TableSchema {
   columns: Array<{ name: string; type: "string" | "number" | "boolean" | "json" | "null" }>;
 }
 ```
+
+### `SyncPush` / `SyncPull` / `SyncResponse`
+
+```ts
+interface SyncPush {
+  clientId: string;
+  deltas: RowDelta[];
+  lastSeenHlc: HLCTimestamp;
+}
+
+interface SyncPull {
+  clientId: string;
+  sinceHlc: HLCTimestamp;
+  maxDeltas: number;
+  source?: string;
+}
+
+interface SyncResponse {
+  deltas: RowDelta[];
+  serverHlc: HLCTimestamp;
+  hasMore: boolean;
+}
+```
+
+### `extractDelta(before, after, opts)`
+
+```ts
+function extractDelta(
+  before: Record<string, unknown> | null | undefined,
+  after: Record<string, unknown> | null | undefined,
+  opts: {
+    table: string;
+    rowId: string;
+    clientId: string;
+    hlc: HLCTimestamp;
+    schema?: TableSchema;
+  },
+): Promise<RowDelta | null>;
+```
+
+Extract a column-level delta between two row states. Returns `null` if nothing changed. Generates a deterministic `deltaId` via SHA-256 of the stable-stringified payload.
+
+- `null` before + present after = INSERT
+- present before + `null` after = DELETE
+- both present = UPDATE (only changed columns)
+
+### `applyDelta(row, delta)`
+
+```ts
+function applyDelta(
+  row: Record<string, unknown> | null,
+  delta: RowDelta,
+): Record<string, unknown> | null;
+```
+
+Apply a delta to an existing row, returning the merged result. DELETE returns `null`, INSERT creates a new row, UPDATE merges columns onto the existing row (immutable).
+
+## Result
+
+Type-safe error handling without exceptions.
+
+### Types
+
+```ts
+type Result<T, E = LakeSyncError> = { ok: true; value: T } | { ok: false; error: E };
+```
+
+### Constructors
+
+```ts
+function Ok<T>(value: T): Result<T, never>;
+function Err<E>(error: E): Result<never, E>;
+```
+
+### Utilities
+
+```ts
+function mapResult<T, U, E>(result: Result<T, E>, fn: (value: T) => U): Result<U, E>;
+function flatMapResult<T, U, E>(result: Result<T, E>, fn: (value: T) => Result<U, E>): Result<U, E>;
+function unwrapOrThrow<T, E>(result: Result<T, E>): T;
+function fromPromise<T>(promise: Promise<T>): Promise<Result<T, Error>>;
+```
+
+### Error Classes
+
+```ts
+class LakeSyncError extends Error {
+  readonly code: string;
+  override readonly cause?: Error;
+  constructor(message: string, code: string, cause?: Error);
+}
+
+class ClockDriftError extends LakeSyncError {}   // code: "CLOCK_DRIFT"
+class ConflictError extends LakeSyncError {}     // code: "CONFLICT"
+class FlushError extends LakeSyncError {}        // code: "FLUSH_FAILED"
+class SchemaError extends LakeSyncError {}       // code: "SCHEMA_MISMATCH"
+class AdapterError extends LakeSyncError {}      // code: "ADAPTER_ERROR"
+class AdapterNotFoundError extends LakeSyncError {} // code: "ADAPTER_NOT_FOUND"
+class BackpressureError extends LakeSyncError {} // code: "BACKPRESSURE"
+```
+
+## Conflict Resolution
+
+### `resolveLWW(local, remote)`
+
+```ts
+function resolveLWW(
+  local: RowDelta,
+  remote: RowDelta,
+): Result<RowDelta, ConflictError>;
+```
+
+Column-level Last-Write-Wins merge. For each column present in both deltas, the one with the higher HLC wins. When HLC timestamps are equal, the lexicographically higher `clientId` wins (deterministic tiebreak).
+
+### `LWWResolver`
+
+```ts
+class LWWResolver implements ConflictResolver {
+  resolve(local: RowDelta, remote: RowDelta): Result<RowDelta, ConflictError>;
+}
+
+interface ConflictResolver {
+  resolve(local: RowDelta, remote: RowDelta): Result<RowDelta, ConflictError>;
+}
+```
+
+## Sync Rules
+
+### Types
+
+```ts
+interface SyncRulesConfig {
+  version: number;
+  buckets: BucketDefinition[];
+}
+
+interface BucketDefinition {
+  name: string;
+  tables: string[];
+  filters: SyncRuleFilter[];
+}
+
+interface SyncRuleFilter {
+  column: string;
+  op: SyncRuleOp;
+  value: string;
+}
+
+type SyncRuleOp = "eq" | "in" | "neq" | "gt" | "lt" | "gte" | "lte";
+
+interface SyncRulesContext {
+  claims: ResolvedClaims;
+  rules: SyncRulesConfig;
+}
+
+type ResolvedClaims = Record<string, string | string[]>;
+```
+
+### `filterDeltas(deltas, context)`
+
+```ts
+function filterDeltas(
+  deltas: RowDelta[],
+  context: SyncRulesContext,
+): RowDelta[];
+```
+
+Pure function that returns the union of deltas matching any bucket's filters. JWT claim references (prefixed with `jwt:`) are resolved from the context's `claims` object.
+
+### `validateSyncRules(config)`
+
+```ts
+function validateSyncRules(
+  config: unknown,
+): Result<void, SyncRuleError>;
+```
+
+Validates structural correctness of a sync rules configuration: version, bucket names, filter operators, and uniqueness.
+
+### `resolveClientBuckets(rules, claims)`
+
+```ts
+function resolveClientBuckets(
+  rules: SyncRulesConfig,
+  claims: ResolvedClaims,
+): string[];
+```
+
+Returns the names of buckets a client matches based on their JWT claims.
+
+## Validation
+
+### `isValidIdentifier(name)`
+
+```ts
+function isValidIdentifier(name: string): boolean;
+```
+
+Check whether a string is a valid SQL identifier (starts with letter or underscore, alphanumeric + underscore, max 64 chars).
+
+### `assertValidIdentifier(name)`
+
+```ts
+function assertValidIdentifier(name: string): Result<void, SchemaError>;
+```
+
+Returns `Ok` if valid, `Err(SchemaError)` if invalid.
+
+### `quoteIdentifier(name)`
+
+```ts
+function quoteIdentifier(name: string): string;
+```
+
+Double-quote a SQL identifier with proper escaping.
+
+## Connector Types
+
+Types for dynamic connector registration. See [Dynamic Connectors](/docs/connectors) for the full API.
+
+```ts
+type ConnectorType = "postgres" | "mysql" | "bigquery" | "jira" | "salesforce";
+
+interface ConnectorConfig {
+  name: string;
+  type: ConnectorType;
+  postgres?: PostgresConnectorConfig;
+  mysql?: MySQLConnectorConfig;
+  bigquery?: BigQueryConnectorConfig;
+  jira?: JiraConnectorConfig;
+  salesforce?: SalesforceConnectorConfig;
+  ingest?: ConnectorIngestConfig;
+}
+
+function validateConnectorConfig(
+  input: unknown,
+): Result<ConnectorConfig, ConnectorValidationError>;
+```
+
+## Source Polling
+
+Base class and types for building source pollers. See [Source Polling Ingest](/docs/source-polling) for usage.
+
+```ts
+abstract class BaseSourcePoller {
+  constructor(config: {
+    name: string;
+    intervalMs: number;
+    gateway: PushTarget;
+    memory?: PollerMemoryConfig;
+  });
+
+  start(): void;
+  stop(): void;
+  get isRunning(): boolean;
+
+  abstract poll(): Promise<void>;
+
+  protected pushDeltas(deltas: RowDelta[]): void;
+  protected accumulateDelta(delta: RowDelta): Promise<void>;
+  protected flushAccumulator(): Promise<void>;
+}
+
+interface PushTarget {
+  handlePush(push: SyncPush): unknown;
+}
+
+interface IngestTarget extends PushTarget {
+  flush(): Promise<Result<void, FlushError>>;
+  shouldFlush(): boolean;
+  readonly bufferStats: { logSize: number; indexSize: number; byteSize: number };
+}
+
+function isIngestTarget(target: PushTarget): target is IngestTarget;
+
+interface PollerMemoryConfig {
+  chunkSize?: number;
+  memoryBudgetBytes?: number;
+  flushThreshold?: number;
+}
+```
+
+## Auth
+
+```ts
+function verifyToken(
+  token: string,
+  secret: string,
+): Promise<Result<AuthClaims, AuthError>>;
+
+interface AuthClaims {
+  clientId: string;
+  gatewayId: string;
+  role: string;
+  customClaims: Record<string, string | string[]>;
+}
+
+class AuthError extends Error {
+  constructor(message: string);
+}
+```
+
+Verifies a JWT signed with HMAC-SHA256 using the Web Crypto API. Checks expiry, required claims (`sub`, `gw`, `exp`), and extracts custom claims for sync rules evaluation. The `role` claim defaults to `"client"` if absent.

@@ -3,13 +3,13 @@ title: Introduction
 description: LakeSync — sync any data source to a local working set.
 ---
 
-LakeSync is an open-source TypeScript sync engine. Pluggable adapters connect to any data source. Declarative sync rules define what data flows where. Consumers get a local SQLite working set with offline support and column-level conflict resolution.
+LakeSync is an open-source TypeScript sync engine. Pluggable adapters connect to any data source. Declarative sync rules define what data flows where. Consumers get a local SQLite working set with real-time updates, offline support, and column-level conflict resolution.
 
 ## How It Works
 
-1. **Adapters** connect to data sources — Postgres, BigQuery, S3/R2, Jira, or anything you implement the interface for
+1. **Adapters** connect to data sources — Postgres, BigQuery, S3/R2, Jira, Salesforce, or anything you implement the interface for
 2. **Sync rules** define what data flows to each consumer — bucket-based filtering with `eq`/`in` operators and JWT claim references
-3. **The gateway** evaluates rules and routes data between adapters
+3. **The gateway** evaluates rules and routes data between adapters, with real-time WebSocket broadcast to connected clients
 4. **Local SQLite** gives each consumer a queryable working set with zero-latency reads and offline support
 
 ## Adapters
@@ -21,12 +21,22 @@ Two interfaces abstract all data sources. Adapters are both sources and destinat
 | **Postgres / MySQL** | `DatabaseAdapter` | `insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema` |
 | **BigQuery** | `DatabaseAdapter` | Idempotent MERGE inserts, INT64 HLC precision, clustered by `table` + `hlc` |
 | **S3 / R2 (Iceberg)** | `LakeAdapter` | `putObject`, `getObject`, `listObjects`, `deleteObject` — Parquet + Iceberg table format |
-| **Jira Cloud** | API Connector | Issues, comments, and projects via `@lakesync/connector-jira` |
 | **Custom** | Either | Implement the interface for any readable data source. `CompositeAdapter` routes to multiple backends. |
+
+## Source Connectors
+
+Source connectors poll external APIs on an interval and push changes into the sync gateway. They extend `BaseSourcePoller` in `@lakesync/core`, which handles lifecycle, chunked push, and memory-managed ingestion with automatic backpressure.
+
+| Connector | Package | Details |
+|-----------|---------|---------|
+| **Jira Cloud** | `@lakesync/connector-jira` | Issues, comments, and projects via JQL-filtered polling |
+| **Salesforce** | `@lakesync/connector-salesforce` | Accounts, contacts, opportunities, and leads via SOQL queries |
+| **Database (Postgres / MySQL / BigQuery)** | `@lakesync/core` | Cursor-based or diff-based polling via `ConnectorIngestConfig` |
 
 ## Key Features
 
 - **Pluggable adapters** — `DatabaseAdapter` for SQL-like sources, `LakeAdapter` for object storage. Both are bidirectional. Cross-backend flows via sync rules.
+- **Source polling** — `BaseSourcePoller` provides lifecycle management, chunked push, and memory-managed ingestion with automatic backpressure and flush. Connectors extend it to poll any external API.
 - **Adapter-sourced pull** — Pull data from named source adapters (BigQuery, Postgres, etc.) directly into local SQLite. The gateway queries the adapter and applies sync rules before returning filtered deltas.
 - **Sync rules DSL** — Declarative bucket-based filtering with `eq`/`in`/`neq`/`gt`/`lt`/`gte`/`lte` operators and `jwt:` claim references. Pure function evaluation via `filterDeltas()`.
 - **Column-level LWW** — Conflicts resolved per-column, not per-row. Concurrent edits to different fields never overwrite each other.
@@ -39,16 +49,17 @@ Two interfaces abstract all data sources. Adapters are both sources and destinat
 
 | Package | Description |
 |---------|-------------|
-| `@lakesync/core` | HLC, Delta, Result, conflict resolution, sync rules, validation |
+| `@lakesync/core` | HLC, Delta, Result, conflict resolution, sync rules, validation, base source poller, connector types |
 | `@lakesync/client` | LocalDB (sql.js), SyncCoordinator, transports, queues |
 | `@lakesync/gateway` | In-memory sync gateway with push/pull protocol |
-| `@lakesync/gateway-server` | Self-hosted gateway server (Node.js/Bun) with HTTP + WebSocket |
-| `@lakesync/proto` | Protocol Buffer encoding/decoding for deltas and broadcast frames |
-| `@lakesync/adapter` | Storage adapters (S3/R2, Postgres, MySQL, BigQuery, Composite) |
+| `@lakesync/gateway-server` | Self-hosted HTTP + WebSocket gateway server for Node.js and Bun |
+| `@lakesync/proto` | Protocol Buffer serialisation for the sync wire format |
+| `@lakesync/adapter` | Storage adapters — S3/R2, Postgres, MySQL, BigQuery, Composite, FanOut, Lifecycle |
 | `@lakesync/connector-jira` | Jira Cloud source connector — polls issues, comments, and projects |
-| `@lakesync/parquet` | Parquet file reader/writer |
-| `@lakesync/catalogue` | Iceberg catalogue management |
-| `@lakesync/compactor` | Compaction, maintenance, and checkpoint generation |
+| `@lakesync/connector-salesforce` | Salesforce CRM source connector — polls accounts, contacts, opportunities, and leads |
+| `@lakesync/parquet` | Parquet file encoding/decoding for delta persistence in Iceberg format |
+| `@lakesync/catalogue` | Iceberg REST catalogue client for table metadata and commit operations |
+| `@lakesync/compactor` | Background compaction, maintenance, and checkpoint generation |
+| `@lakesync/analyst` | Analytical query engine powered by DuckDB-WASM |
 | `@lakesync/react` | React hooks — useQuery, useMutation, useSyncStatus, LakeSyncProvider |
-| `@lakesync/analyst` | Schema evolution and analytics |
 | `lakesync` | Unified package re-exporting all packages |

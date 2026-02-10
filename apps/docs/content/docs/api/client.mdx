@@ -7,28 +7,54 @@ The `@lakesync/client` package provides the browser-side SDK for building local-
 
 ## LocalDB
 
-SQLite database running in the browser via sql.js WASM, with IndexedDB snapshot persistence.
+SQLite database running in the browser via sql.js WASM, with optional IndexedDB snapshot persistence.
 
-### `LocalDB.create()`
+### `LocalDB.open(config)`
 
 ```ts
 class LocalDB {
-  static create(): Promise<LocalDB>;
-  exec(sql: string, params?: unknown[]): void;
-  query<T>(sql: string, params?: unknown[]): T[];
-  snapshot(): Uint8Array;
-  restore(data: Uint8Array): void;
+  static open(config: DbConfig): Promise<Result<LocalDB, DbError>>;
+
+  readonly name: string;
+  readonly backend: "idb" | "memory";
+
+  exec(sql: string, params?: unknown[]): Promise<Result<void, DbError>>;
+  query<T>(sql: string, params?: unknown[]): Promise<Result<T[], DbError>>;
+  transaction<T>(fn: (tx: Transaction) => T): Promise<Result<T, DbError>>;
+  save(): Promise<Result<void, DbError>>;
+  close(): Promise<void>;
 }
 ```
 
+- **`open(config)`** — Initialise sql.js WASM and create a database. When backend is `"idb"`, loads any existing snapshot from IndexedDB.
 - **`exec(sql, params?)`** — Execute a SQL statement (DDL or DML).
-- **`query(sql, params?)`** — Execute a SQL query and return rows.
-- **`snapshot()`** — Export the full database as a binary snapshot.
-- **`restore(data)`** — Replace the database contents from a snapshot.
+- **`query(sql, params?)`** — Execute a SQL query and return rows as typed objects.
+- **`transaction(fn)`** — Execute a function within a BEGIN/COMMIT transaction with automatic rollback on error.
+- **`save()`** — Persist the database snapshot to IndexedDB. No-op for `"memory"` backend.
+- **`close()`** — Save (if IDB) and release resources.
+
+### `DbConfig`
+
+```ts
+interface DbConfig {
+  name: string;
+  backend?: "idb" | "memory";
+}
+```
+
+When `backend` is omitted, auto-detects: uses `"idb"` if `indexedDB` is available, otherwise `"memory"`.
+
+### `DbError`
+
+```ts
+class DbError extends LakeSyncError {
+  constructor(message: string, cause?: Error);
+}
+```
 
 ## SyncTracker
 
-Wraps a `LocalDB`, a queue, and an HLC to automatically extract deltas from mutations.
+Tracks local mutations (insert, update, delete) and produces column-level deltas that are pushed to a sync queue.
 
 ```ts
 class SyncTracker {
@@ -38,13 +64,32 @@ class SyncTracker {
     hlc: HLC,
     clientId: string,
   );
-  insert(table: string, row: Record<string, unknown>): void;
-  update(table: string, rowId: string, changes: Record<string, unknown>): void;
-  delete(table: string, rowId: string): void;
+
+  insert(
+    table: string,
+    rowId: string,
+    data: Record<string, unknown>,
+  ): Promise<Result<void, LakeSyncError>>;
+
+  update(
+    table: string,
+    rowId: string,
+    data: Record<string, unknown>,
+  ): Promise<Result<void, LakeSyncError>>;
+
+  delete(
+    table: string,
+    rowId: string,
+  ): Promise<Result<void, LakeSyncError>>;
+
+  query<T>(
+    sql: string,
+    params?: unknown[],
+  ): Promise<Result<T[], DbError>>;
 }
 ```
 
-Each mutation is recorded as a `Delta` and enqueued for sync.
+Each mutation applies the change to SQLite, extracts a `RowDelta`, and pushes it to the queue for eventual upstream delivery.
 
 ## SyncCoordinator
 
@@ -54,13 +99,31 @@ Orchestrates push/pull sync between the local database and a remote gateway.
 
 ```ts
 class SyncCoordinator {
-  constructor(config: SyncCoordinatorConfig);
-  push(): Promise<Result<void, string>>;
-  pull(): Promise<Result<void, string>>;
-  start(): void;
-  stop(): void;
+  constructor(db: LocalDB, transport: SyncTransport, config?: SyncCoordinatorConfig);
+
+  readonly tracker: SyncTracker;
+  readonly clientId: string;
+  readonly lastSyncTime: Date | null;
+
+  syncOnce(): Promise<void>;
+  pushToGateway(): Promise<void>;
+  pullFromGateway(source?: string): Promise<number>;
+  pullFrom(source: string): Promise<number>;
+  startAutoSync(): void;
+  stopAutoSync(): void;
+  queueDepth(): Promise<number>;
+
+  on<K extends keyof SyncEvents>(event: K, listener: SyncEvents[K]): void;
+  off<K extends keyof SyncEvents>(event: K, listener: SyncEvents[K]): void;
 }
 ```
+
+- **`syncOnce()`** — Perform a single sync cycle (pull then push, depending on `syncMode`). Includes initial checkpoint download on first sync.
+- **`pushToGateway()`** — Push pending deltas from the queue to the gateway.
+- **`pullFromGateway(source?)`** — Pull remote deltas and apply them locally. Pass a `source` name for adapter-sourced pull.
+- **`pullFrom(source)`** — Convenience wrapper for `pullFromGateway(source)`.
+- **`startAutoSync()`** — Start periodic sync + visibility change handler. Connects realtime transport if available.
+- **`stopAutoSync()`** — Stop periodic sync, remove listeners, disconnect transport.
 
 ### `SyncCoordinatorConfig`
 
@@ -85,9 +148,19 @@ interface SyncCoordinatorConfig {
 type SyncMode = "full" | "pushOnly" | "pullOnly";
 ```
 
-- **`full`** — Push and pull on each sync cycle (default).
+- **`full`** — Pull then push on each sync cycle (default).
 - **`pushOnly`** — Only push local deltas. Useful for write-only producers.
 - **`pullOnly`** — Only pull remote deltas. Useful for read-only consumers.
+
+### `SyncEvents`
+
+```ts
+interface SyncEvents {
+  onChange: (count: number) => void;
+  onSyncComplete: () => void;
+  onError: (error: Error) => void;
+}
+```
 
 ## Transports
 
@@ -114,11 +187,16 @@ The optional realtime members (`supportsRealtime`, `onBroadcast`, `connect`, `di
 
 ### `LocalTransport`
 
-In-process transport for development and testing. Connects directly to a `Gateway` instance.
+In-process transport for development and testing. Connects directly to a gateway instance.
 
 ```ts
 class LocalTransport implements SyncTransport {
-  constructor(gateway: LocalGateway, clientId: string);
+  constructor(gateway: LocalGateway);
+}
+
+interface LocalGateway {
+  handlePush(msg: SyncPush): Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>;
+  handlePull(msg: SyncPull): Result<SyncResponse, LakeSyncError>;
 }
 ```
 
@@ -134,7 +212,8 @@ class HttpTransport implements SyncTransport {
 interface HttpTransportConfig {
   baseUrl: string;
   gatewayId: string;
-  getToken: () => Promise<string>;
+  token: string;
+  fetch?: typeof globalThis.fetch;
 }
 ```
 
@@ -175,15 +254,36 @@ See [Real-Time Sync](/docs/real-time) for a full guide.
 
 ## Queues
 
+### `SyncQueue` (interface)
+
+```ts
+interface SyncQueue {
+  push(delta: RowDelta): Promise<Result<QueueEntry, LakeSyncError>>;
+  peek(limit: number): Promise<Result<QueueEntry[], LakeSyncError>>;
+  markSending(ids: string[]): Promise<Result<void, LakeSyncError>>;
+  ack(ids: string[]): Promise<Result<void, LakeSyncError>>;
+  nack(ids: string[]): Promise<Result<void, LakeSyncError>>;
+  depth(): Promise<Result<number, LakeSyncError>>;
+  clear(): Promise<Result<void, LakeSyncError>>;
+}
+
+interface QueueEntry {
+  id: string;
+  delta: RowDelta;
+  status: "pending" | "sending" | "acked";
+  createdAt: number;
+  retryCount: number;
+  retryAfter?: number;
+}
+```
+
 ### `MemoryQueue`
 
 In-memory queue for development and testing. Deltas are lost on page refresh.
 
 ```ts
 class MemoryQueue implements SyncQueue {
-  enqueue(delta: Delta): void;
-  dequeueAll(): Delta[];
-  peek(): Delta[];
+  // All SyncQueue methods
 }
 ```
 
@@ -193,10 +293,8 @@ IndexedDB-backed queue for production use. Persists deltas across page refreshes
 
 ```ts
 class IDBQueue implements SyncQueue {
-  static create(dbName?: string): Promise<IDBQueue>;
-  enqueue(delta: Delta): void;
-  dequeueAll(): Delta[];
-  peek(): Delta[];
+  constructor(dbName?: string);
+  // All SyncQueue methods
 }
 ```
 
@@ -206,11 +304,17 @@ Note: `IDBQueue` serialises `HLCTimestamp` to string internally because IndexedD
 
 ### `SchemaSynchroniser`
 
-Handles client-side schema migrations by comparing local table schemas against the gateway's schema.
+Handles client-side schema migrations by comparing local table schemas against the gateway's schema version.
 
 ```ts
 class SchemaSynchroniser {
   constructor(db: LocalDB);
-  synchronise(schemas: TableSchema[]): void;
+  synchronise(
+    table: string,
+    serverSchema: TableSchema,
+    serverVersion: number,
+  ): Promise<Result<void, LakeSyncError>>;
 }
 ```
+
+Compares the locally stored schema version against the server's version and applies additive migrations (ALTER TABLE ... ADD COLUMN) when the client is behind.
