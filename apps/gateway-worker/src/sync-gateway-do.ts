@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type {
+	ActionPush,
 	ConnectorConfig,
 	HLCTimestamp,
 	ResolvedClaims,
@@ -234,6 +235,10 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				return this.handlePush(request);
 			case "/pull":
 				return this.handlePull(url, request);
+			case "/action":
+				return this.handleActionRequest(request);
+			case "/actions":
+				return this.handleDescribeActions();
 			case "/flush":
 				return this.handleFlush();
 			case "/admin/schema":
@@ -395,6 +400,70 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		});
 
 		return jsonResponse(result.value);
+	}
+
+	/**
+	 * Handle `POST /action` -- execute imperative actions.
+	 *
+	 * Dispatches actions to registered ActionHandlers via the gateway.
+	 * Uses forwarded JWT claims for permission checks.
+	 */
+	private async handleActionRequest(request: Request): Promise<Response> {
+		if (request.method !== "POST") {
+			return errorResponse("Method not allowed", 405);
+		}
+
+		let body: ActionPush;
+		try {
+			const raw = await request.text();
+			body = JSON.parse(raw, bigintReviver) as ActionPush;
+		} catch {
+			return errorResponse("Invalid JSON body", 400);
+		}
+
+		if (!body.clientId || !Array.isArray(body.actions)) {
+			return errorResponse("Missing required fields: clientId, actions", 400);
+		}
+
+		const headerClientId = request.headers.get("X-Client-Id");
+		if (headerClientId && body.clientId !== headerClientId) {
+			return errorResponse(
+				"Client ID mismatch: action clientId does not match authenticated identity",
+				403,
+			);
+		}
+
+		const gateway = await this.getGateway();
+
+		// Build auth context from forwarded claims
+		const claimsHeader = request.headers.get("X-Auth-Claims");
+		let context: { claims: ResolvedClaims } | undefined;
+		if (claimsHeader) {
+			try {
+				context = { claims: JSON.parse(claimsHeader) as ResolvedClaims };
+			} catch {
+				// Invalid claims — proceed without context
+			}
+		}
+
+		const result = await gateway.handleAction(body, context);
+
+		if (!result.ok) {
+			return errorResponse(result.error.message, 400);
+		}
+
+		return jsonResponse(result.value);
+	}
+
+	/**
+	 * Handle `GET /actions` -- describe available action handlers.
+	 *
+	 * Returns a map of connector names to their supported action descriptors,
+	 * enabling frontend discovery of available actions.
+	 */
+	private async handleDescribeActions(): Promise<Response> {
+		const gateway = await this.getGateway();
+		return jsonResponse(gateway.describeActions());
 	}
 
 	/**

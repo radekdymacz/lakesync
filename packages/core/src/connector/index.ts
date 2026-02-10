@@ -1,3 +1,5 @@
+export type { ActionDescriptor, ActionHandler, AuthContext } from "./action-handler";
+export { isActionHandler } from "./action-handler";
 export { ConnectorValidationError } from "./errors";
 export type {
 	BigQueryConnectorConfig,

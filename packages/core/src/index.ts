@@ -1,3 +1,4 @@
+export * from "./action";
 export { type AuthClaims, AuthError, verifyToken } from "./auth";
 export {
 	BaseSourcePoller,

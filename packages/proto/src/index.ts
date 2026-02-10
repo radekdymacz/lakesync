@@ -1,21 +1,30 @@
 export type { SyncPullPayload, SyncPushPayload, SyncResponsePayload } from "./codec.js";
 export {
 	CodecError,
+	decodeActionPush,
+	decodeActionResponse,
 	decodeBroadcastFrame,
 	decodeRowDelta,
 	decodeSyncPull,
 	decodeSyncPush,
 	decodeSyncResponse,
+	encodeActionPush,
+	encodeActionResponse,
 	encodeBroadcastFrame,
 	encodeRowDelta,
 	encodeSyncPull,
 	encodeSyncPush,
 	encodeSyncResponse,
+	TAG_ACTION_PUSH,
+	TAG_ACTION_RESPONSE,
 	TAG_BROADCAST,
 	TAG_SYNC_PULL,
 	TAG_SYNC_PUSH,
 } from "./codec.js";
 export type {
+	Action as ProtoAction,
+	ActionPush as ProtoActionPush,
+	ActionResponse as ProtoActionResponse,
 	ColumnDelta as ProtoColumnDelta,
 	RowDelta as ProtoRowDelta,
 	SyncPull as ProtoSyncPull,
@@ -23,6 +32,9 @@ export type {
 	SyncResponse as ProtoSyncResponse,
 } from "./gen/lakesync_pb.js";
 export {
+	ActionPushSchema,
+	ActionResponseSchema,
+	ActionSchema,
 	ColumnDeltaSchema,
 	DeltaOp as ProtoDeltaOp,
 	DeltaOpSchema,

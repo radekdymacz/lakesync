@@ -1,6 +1,6 @@
 import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
 import type { NessieCatalogueClient } from "@lakesync/catalogue";
-import type { HLCTimestamp, RowDelta, TableSchema } from "@lakesync/core";
+import type { ActionHandler, HLCTimestamp, RowDelta, TableSchema } from "@lakesync/core";
 import type { SchemaManager } from "./schema-manager";
 
 /** Result returned by {@link SyncGateway.handlePush}. */
@@ -44,6 +44,8 @@ export interface GatewayConfig {
 	maxBackpressureBytes?: number;
 	/** Maximum buffer bytes per table before auto-flushing that table. */
 	perTableBudgetBytes?: number;
+	/** Named action handlers for imperative action execution. */
+	actionHandlers?: Record<string, ActionHandler>;
 }
 
 /** Gateway runtime state */

@@ -1,3 +1,10 @@
+export type {
+	ActionDiscovery,
+	ActionHandler,
+	ActionPush,
+	ActionResponse,
+	AuthContext,
+} from "@lakesync/core";
 export { type IngestTarget, isIngestTarget } from "@lakesync/core";
 export { DeltaBuffer } from "./buffer";
 export {

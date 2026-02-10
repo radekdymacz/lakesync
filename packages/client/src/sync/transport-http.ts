@@ -1,4 +1,7 @@
 import type {
+	ActionDiscovery,
+	ActionPush,
+	ActionResponse,
 	HLCTimestamp,
 	LakeSyncError,
 	Result,
@@ -121,6 +124,71 @@ export class HttpTransport implements SyncTransport {
 		} catch (error) {
 			const cause = toError(error);
 			return Err(new LSError(`Pull request failed: ${cause.message}`, "TRANSPORT_ERROR", cause));
+		}
+	}
+
+	/**
+	 * Execute imperative actions against external systems via the gateway.
+	 *
+	 * Sends a POST request with the action payload as BigInt-safe JSON.
+	 */
+	async executeAction(msg: ActionPush): Promise<Result<ActionResponse, LakeSyncError>> {
+		const url = `${this.baseUrl}/sync/${this.gatewayId}/action`;
+
+		try {
+			const response = await this._fetch(url, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${this.token}`,
+				},
+				body: JSON.stringify(msg, bigintReplacer),
+			});
+
+			if (!response.ok) {
+				const text = await response.text().catch(() => "Unknown error");
+				return Err(new LSError(`Action failed (${response.status}): ${text}`, "TRANSPORT_ERROR"));
+			}
+
+			const raw = await response.text();
+			const data = JSON.parse(raw, bigintReviver) as ActionResponse;
+			return Ok(data);
+		} catch (error) {
+			const cause = toError(error);
+			return Err(new LSError(`Action request failed: ${cause.message}`, "TRANSPORT_ERROR", cause));
+		}
+	}
+
+	/**
+	 * Discover available connectors and their supported action types.
+	 *
+	 * Sends a GET request to the actions discovery endpoint.
+	 */
+	async describeActions(): Promise<Result<ActionDiscovery, LakeSyncError>> {
+		const url = `${this.baseUrl}/sync/${this.gatewayId}/actions`;
+
+		try {
+			const response = await this._fetch(url, {
+				method: "GET",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+				},
+			});
+
+			if (!response.ok) {
+				const text = await response.text().catch(() => "Unknown error");
+				return Err(
+					new LSError(`Describe actions failed (${response.status}): ${text}`, "TRANSPORT_ERROR"),
+				);
+			}
+
+			const data = (await response.json()) as ActionDiscovery;
+			return Ok(data);
+		} catch (error) {
+			const cause = toError(error);
+			return Err(
+				new LSError(`Describe actions request failed: ${cause.message}`, "TRANSPORT_ERROR", cause),
+			);
 		}
 	}
 

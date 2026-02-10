@@ -1,4 +1,7 @@
 import type {
+	ActionDiscovery,
+	ActionPush,
+	ActionResponse,
 	HLCTimestamp,
 	LakeSyncError,
 	Result,
@@ -26,6 +29,10 @@ export interface SyncTransport {
 	pull(msg: SyncPull): Promise<Result<SyncResponse, LakeSyncError>>;
 	/** Download checkpoint for initial sync. Returns null if no checkpoint available. */
 	checkpoint?(): Promise<Result<CheckpointResponse | null, LakeSyncError>>;
+	/** Execute imperative actions against external systems via the gateway. */
+	executeAction?(msg: ActionPush): Promise<Result<ActionResponse, LakeSyncError>>;
+	/** Discover available connectors and their supported action types. */
+	describeActions?(): Promise<Result<ActionDiscovery, LakeSyncError>>;
 
 	/** Whether this transport supports real-time server push. */
 	readonly supportsRealtime?: boolean;

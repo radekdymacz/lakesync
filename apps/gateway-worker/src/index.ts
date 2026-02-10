@@ -57,13 +57,17 @@ interface RouteEntry {
 
 const ROUTE_TABLE: RouteEntry[] = [
 	{
-		// POST /sync/:gatewayId/push | GET /sync/:gatewayId/pull
-		pattern: /^\/sync\/([^/]+)\/(push|pull)$/,
+		// POST /sync/:gatewayId/push | GET /sync/:gatewayId/pull | POST /sync/:gatewayId/action | GET /sync/:gatewayId/actions
+		pattern: /^\/sync\/([^/]+)\/(push|pull|action|actions)$/,
 		extract: (match) => {
 			const gatewayId = match[1];
 			const action = match[2];
 			if (!gatewayId || !action) return null;
-			return { gatewayId, doPath: `/${action}`, forwardBody: action === "push" };
+			return {
+				gatewayId,
+				doPath: `/${action}`,
+				forwardBody: action === "push" || action === "action",
+			};
 		},
 	},
 	{
@@ -285,6 +289,21 @@ async function handleShardedRoute(
 	// Checkpoint — fan out to all shards and merge
 	if (route.doPath === "/checkpoint") {
 		return handleShardedCheckpoint(config, request, env.SYNC_GATEWAY);
+	}
+
+	// Actions discovery / action execution — route to default shard (connector-scoped, not table-scoped)
+	if (route.doPath === "/action" || route.doPath === "/actions") {
+		const id = env.SYNC_GATEWAY.idFromName(config.default);
+		const stub = env.SYNC_GATEWAY.get(id);
+		const doUrl = new URL(request.url);
+		doUrl.pathname = route.doPath;
+		return stub.fetch(
+			new Request(doUrl.toString(), {
+				method: route.doMethod ?? request.method,
+				headers: request.headers,
+				body: request.body,
+			}),
+		);
 	}
 
 	// WebSocket — route to default shard (cross-shard broadcasting is future work)

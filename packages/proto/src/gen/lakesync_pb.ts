@@ -2,194 +2,373 @@
 // @generated from file lakesync.proto (package lakesync.v1, syntax proto3)
 /* eslint-disable */
 
-import type { Message } from "@bufbuild/protobuf";
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file lakesync.proto.
  */
-export const file_lakesync: GenFile =
-	/*@__PURE__*/
-	fileDesc(
-		"Cg5sYWtlc3luYy5wcm90bxILbGFrZXN5bmMudjEiLAoLQ29sdW1uRGVsdGESDgoGY29sdW1uGAEgASgJEg0KBXZhbHVlGAIgASgMIqgBCghSb3dEZWx0YRIgCgJvcBgBIAEoDjIULmxha2VzeW5jLnYxLkRlbHRhT3ASDQoFdGFibGUYAiABKAkSDgoGcm93X2lkGAMgASgJEikKB2NvbHVtbnMYBCADKAsyGC5sYWtlc3luYy52MS5Db2x1bW5EZWx0YRILCgNobGMYBSABKAYSEQoJY2xpZW50X2lkGAYgASgJEhAKCGRlbHRhX2lkGAcgASgJIlsKCFN5bmNQdXNoEhEKCWNsaWVudF9pZBgBIAEoCRIlCgZkZWx0YXMYAiADKAsyFS5sYWtlc3luYy52MS5Sb3dEZWx0YRIVCg1sYXN0X3NlZW5faGxjGAMgASgGIkQKCFN5bmNQdWxsEhEKCWNsaWVudF9pZBgBIAEoCRIRCglzaW5jZV9obGMYAiABKAYSEgoKbWF4X2RlbHRhcxgDIAEoDSJbCgxTeW5jUmVzcG9uc2USJQoGZGVsdGFzGAEgAygLMhUubGFrZXN5bmMudjEuUm93RGVsdGESEgoKc2VydmVyX2hsYxgCIAEoBhIQCghoYXNfbW9yZRgDIAEoCCpiCgdEZWx0YU9wEhgKFERFTFRBX09QX1VOU1BFQ0lGSUVEEAASEwoPREVMVEFfT1BfSU5TRVJUEAESEwoPREVMVEFfT1BfVVBEQVRFEAISEwoPREVMVEFfT1BfREVMRVRFEANiBnByb3RvMw",
-	);
+export const file_lakesync: GenFile = /*@__PURE__*/
+  fileDesc("Cg5sYWtlc3luYy5wcm90bxILbGFrZXN5bmMudjEiLAoLQ29sdW1uRGVsdGESDgoGY29sdW1uGAEgASgJEg0KBXZhbHVlGAIgASgMIqgBCghSb3dEZWx0YRIgCgJvcBgBIAEoDjIULmxha2VzeW5jLnYxLkRlbHRhT3ASDQoFdGFibGUYAiABKAkSDgoGcm93X2lkGAMgASgJEikKB2NvbHVtbnMYBCADKAsyGC5sYWtlc3luYy52MS5Db2x1bW5EZWx0YRILCgNobGMYBSABKAYSEQoJY2xpZW50X2lkGAYgASgJEhAKCGRlbHRhX2lkGAcgASgJIlsKCFN5bmNQdXNoEhEKCWNsaWVudF9pZBgBIAEoCRIlCgZkZWx0YXMYAiADKAsyFS5sYWtlc3luYy52MS5Sb3dEZWx0YRIVCg1sYXN0X3NlZW5faGxjGAMgASgGIkQKCFN5bmNQdWxsEhEKCWNsaWVudF9pZBgBIAEoCRIRCglzaW5jZV9obGMYAiABKAYSEgoKbWF4X2RlbHRhcxgDIAEoDSJbCgxTeW5jUmVzcG9uc2USJQoGZGVsdGFzGAEgAygLMhUubGFrZXN5bmMudjEuUm93RGVsdGESEgoKc2VydmVyX2hsYxgCIAEoBhIQCghoYXNfbW9yZRgDIAEoCCKMAQoGQWN0aW9uEhEKCWFjdGlvbl9pZBgBIAEoCRIRCgljbGllbnRfaWQYAiABKAkSCwoDaGxjGAMgASgGEhEKCWNvbm5lY3RvchgEIAEoCRITCgthY3Rpb25fdHlwZRgFIAEoCRIOCgZwYXJhbXMYBiABKAwSFwoPaWRlbXBvdGVuY3lfa2V5GAcgASgJIkUKCkFjdGlvblB1c2gSEQoJY2xpZW50X2lkGAEgASgJEiQKB2FjdGlvbnMYAiADKAsyEy5sYWtlc3luYy52MS5BY3Rpb24iRgoPQWN0aW9uUmVzdWx0TXNnEhEKCWFjdGlvbl9pZBgBIAEoCRIMCgRkYXRhGAIgASgMEhIKCnNlcnZlcl9obGMYAyABKAYiVQoOQWN0aW9uRXJyb3JNc2cSEQoJYWN0aW9uX2lkGAEgASgJEgwKBGNvZGUYAiABKAkSDwoHbWVzc2FnZRgDIAEoCRIRCglyZXRyeWFibGUYBCABKAgifgoTQWN0aW9uUmVzcG9uc2VFbnRyeRIvCgdzdWNjZXNzGAEgASgLMhwubGFrZXN5bmMudjEuQWN0aW9uUmVzdWx0TXNnSAASLAoFZXJyb3IYAiABKAsyGy5sYWtlc3luYy52MS5BY3Rpb25FcnJvck1zZ0gAQggKBnJlc3VsdCJXCg5BY3Rpb25SZXNwb25zZRIxCgdyZXN1bHRzGAEgAygLMiAubGFrZXN5bmMudjEuQWN0aW9uUmVzcG9uc2VFbnRyeRISCgpzZXJ2ZXJfaGxjGAIgASgGKmIKB0RlbHRhT3ASGAoUREVMVEFfT1BfVU5TUEVDSUZJRUQQABITCg9ERUxUQV9PUF9JTlNFUlQQARITCg9ERUxUQV9PUF9VUERBVEUQAhITCg9ERUxUQV9PUF9ERUxFVEUQA2IGcHJvdG8z");
 
 /**
  * @generated from message lakesync.v1.ColumnDelta
  */
 export type ColumnDelta = Message<"lakesync.v1.ColumnDelta"> & {
-	/**
-	 * @generated from field: string column = 1;
-	 */
-	column: string;
+  /**
+   * @generated from field: string column = 1;
+   */
+  column: string;
 
-	/**
-	 * @generated from field: bytes value = 2;
-	 */
-	value: Uint8Array;
+  /**
+   * @generated from field: bytes value = 2;
+   */
+  value: Uint8Array;
 };
 
 /**
  * Describes the message lakesync.v1.ColumnDelta.
  * Use `create(ColumnDeltaSchema)` to create a new message.
  */
-export const ColumnDeltaSchema: GenMessage<ColumnDelta> =
-	/*@__PURE__*/
-	messageDesc(file_lakesync, 0);
+export const ColumnDeltaSchema: GenMessage<ColumnDelta> = /*@__PURE__*/
+  messageDesc(file_lakesync, 0);
 
 /**
  * @generated from message lakesync.v1.RowDelta
  */
 export type RowDelta = Message<"lakesync.v1.RowDelta"> & {
-	/**
-	 * @generated from field: lakesync.v1.DeltaOp op = 1;
-	 */
-	op: DeltaOp;
+  /**
+   * @generated from field: lakesync.v1.DeltaOp op = 1;
+   */
+  op: DeltaOp;
 
-	/**
-	 * @generated from field: string table = 2;
-	 */
-	table: string;
+  /**
+   * @generated from field: string table = 2;
+   */
+  table: string;
 
-	/**
-	 * @generated from field: string row_id = 3;
-	 */
-	rowId: string;
+  /**
+   * @generated from field: string row_id = 3;
+   */
+  rowId: string;
 
-	/**
-	 * @generated from field: repeated lakesync.v1.ColumnDelta columns = 4;
-	 */
-	columns: ColumnDelta[];
+  /**
+   * @generated from field: repeated lakesync.v1.ColumnDelta columns = 4;
+   */
+  columns: ColumnDelta[];
 
-	/**
-	 * @generated from field: fixed64 hlc = 5;
-	 */
-	hlc: bigint;
+  /**
+   * @generated from field: fixed64 hlc = 5;
+   */
+  hlc: bigint;
 
-	/**
-	 * @generated from field: string client_id = 6;
-	 */
-	clientId: string;
+  /**
+   * @generated from field: string client_id = 6;
+   */
+  clientId: string;
 
-	/**
-	 * @generated from field: string delta_id = 7;
-	 */
-	deltaId: string;
+  /**
+   * @generated from field: string delta_id = 7;
+   */
+  deltaId: string;
 };
 
 /**
  * Describes the message lakesync.v1.RowDelta.
  * Use `create(RowDeltaSchema)` to create a new message.
  */
-export const RowDeltaSchema: GenMessage<RowDelta> = /*@__PURE__*/ messageDesc(file_lakesync, 1);
+export const RowDeltaSchema: GenMessage<RowDelta> = /*@__PURE__*/
+  messageDesc(file_lakesync, 1);
 
 /**
  * @generated from message lakesync.v1.SyncPush
  */
 export type SyncPush = Message<"lakesync.v1.SyncPush"> & {
-	/**
-	 * @generated from field: string client_id = 1;
-	 */
-	clientId: string;
+  /**
+   * @generated from field: string client_id = 1;
+   */
+  clientId: string;
 
-	/**
-	 * @generated from field: repeated lakesync.v1.RowDelta deltas = 2;
-	 */
-	deltas: RowDelta[];
+  /**
+   * @generated from field: repeated lakesync.v1.RowDelta deltas = 2;
+   */
+  deltas: RowDelta[];
 
-	/**
-	 * @generated from field: fixed64 last_seen_hlc = 3;
-	 */
-	lastSeenHlc: bigint;
+  /**
+   * @generated from field: fixed64 last_seen_hlc = 3;
+   */
+  lastSeenHlc: bigint;
 };
 
 /**
  * Describes the message lakesync.v1.SyncPush.
  * Use `create(SyncPushSchema)` to create a new message.
  */
-export const SyncPushSchema: GenMessage<SyncPush> = /*@__PURE__*/ messageDesc(file_lakesync, 2);
+export const SyncPushSchema: GenMessage<SyncPush> = /*@__PURE__*/
+  messageDesc(file_lakesync, 2);
 
 /**
  * @generated from message lakesync.v1.SyncPull
  */
 export type SyncPull = Message<"lakesync.v1.SyncPull"> & {
-	/**
-	 * @generated from field: string client_id = 1;
-	 */
-	clientId: string;
+  /**
+   * @generated from field: string client_id = 1;
+   */
+  clientId: string;
 
-	/**
-	 * @generated from field: fixed64 since_hlc = 2;
-	 */
-	sinceHlc: bigint;
+  /**
+   * @generated from field: fixed64 since_hlc = 2;
+   */
+  sinceHlc: bigint;
 
-	/**
-	 * @generated from field: uint32 max_deltas = 3;
-	 */
-	maxDeltas: number;
+  /**
+   * @generated from field: uint32 max_deltas = 3;
+   */
+  maxDeltas: number;
 };
 
 /**
  * Describes the message lakesync.v1.SyncPull.
  * Use `create(SyncPullSchema)` to create a new message.
  */
-export const SyncPullSchema: GenMessage<SyncPull> = /*@__PURE__*/ messageDesc(file_lakesync, 3);
+export const SyncPullSchema: GenMessage<SyncPull> = /*@__PURE__*/
+  messageDesc(file_lakesync, 3);
 
 /**
  * @generated from message lakesync.v1.SyncResponse
  */
 export type SyncResponse = Message<"lakesync.v1.SyncResponse"> & {
-	/**
-	 * @generated from field: repeated lakesync.v1.RowDelta deltas = 1;
-	 */
-	deltas: RowDelta[];
+  /**
+   * @generated from field: repeated lakesync.v1.RowDelta deltas = 1;
+   */
+  deltas: RowDelta[];
 
-	/**
-	 * @generated from field: fixed64 server_hlc = 2;
-	 */
-	serverHlc: bigint;
+  /**
+   * @generated from field: fixed64 server_hlc = 2;
+   */
+  serverHlc: bigint;
 
-	/**
-	 * @generated from field: bool has_more = 3;
-	 */
-	hasMore: boolean;
+  /**
+   * @generated from field: bool has_more = 3;
+   */
+  hasMore: boolean;
 };
 
 /**
  * Describes the message lakesync.v1.SyncResponse.
  * Use `create(SyncResponseSchema)` to create a new message.
  */
-export const SyncResponseSchema: GenMessage<SyncResponse> =
-	/*@__PURE__*/
-	messageDesc(file_lakesync, 4);
+export const SyncResponseSchema: GenMessage<SyncResponse> = /*@__PURE__*/
+  messageDesc(file_lakesync, 4);
+
+/**
+ * @generated from message lakesync.v1.Action
+ */
+export type Action = Message<"lakesync.v1.Action"> & {
+  /**
+   * @generated from field: string action_id = 1;
+   */
+  actionId: string;
+
+  /**
+   * @generated from field: string client_id = 2;
+   */
+  clientId: string;
+
+  /**
+   * @generated from field: fixed64 hlc = 3;
+   */
+  hlc: bigint;
+
+  /**
+   * @generated from field: string connector = 4;
+   */
+  connector: string;
+
+  /**
+   * @generated from field: string action_type = 5;
+   */
+  actionType: string;
+
+  /**
+   * @generated from field: bytes params = 6;
+   */
+  params: Uint8Array;
+
+  /**
+   * @generated from field: string idempotency_key = 7;
+   */
+  idempotencyKey: string;
+};
+
+/**
+ * Describes the message lakesync.v1.Action.
+ * Use `create(ActionSchema)` to create a new message.
+ */
+export const ActionSchema: GenMessage<Action> = /*@__PURE__*/
+  messageDesc(file_lakesync, 5);
+
+/**
+ * @generated from message lakesync.v1.ActionPush
+ */
+export type ActionPush = Message<"lakesync.v1.ActionPush"> & {
+  /**
+   * @generated from field: string client_id = 1;
+   */
+  clientId: string;
+
+  /**
+   * @generated from field: repeated lakesync.v1.Action actions = 2;
+   */
+  actions: Action[];
+};
+
+/**
+ * Describes the message lakesync.v1.ActionPush.
+ * Use `create(ActionPushSchema)` to create a new message.
+ */
+export const ActionPushSchema: GenMessage<ActionPush> = /*@__PURE__*/
+  messageDesc(file_lakesync, 6);
+
+/**
+ * @generated from message lakesync.v1.ActionResultMsg
+ */
+export type ActionResultMsg = Message<"lakesync.v1.ActionResultMsg"> & {
+  /**
+   * @generated from field: string action_id = 1;
+   */
+  actionId: string;
+
+  /**
+   * @generated from field: bytes data = 2;
+   */
+  data: Uint8Array;
+
+  /**
+   * @generated from field: fixed64 server_hlc = 3;
+   */
+  serverHlc: bigint;
+};
+
+/**
+ * Describes the message lakesync.v1.ActionResultMsg.
+ * Use `create(ActionResultMsgSchema)` to create a new message.
+ */
+export const ActionResultMsgSchema: GenMessage<ActionResultMsg> = /*@__PURE__*/
+  messageDesc(file_lakesync, 7);
+
+/**
+ * @generated from message lakesync.v1.ActionErrorMsg
+ */
+export type ActionErrorMsg = Message<"lakesync.v1.ActionErrorMsg"> & {
+  /**
+   * @generated from field: string action_id = 1;
+   */
+  actionId: string;
+
+  /**
+   * @generated from field: string code = 2;
+   */
+  code: string;
+
+  /**
+   * @generated from field: string message = 3;
+   */
+  message: string;
+
+  /**
+   * @generated from field: bool retryable = 4;
+   */
+  retryable: boolean;
+};
+
+/**
+ * Describes the message lakesync.v1.ActionErrorMsg.
+ * Use `create(ActionErrorMsgSchema)` to create a new message.
+ */
+export const ActionErrorMsgSchema: GenMessage<ActionErrorMsg> = /*@__PURE__*/
+  messageDesc(file_lakesync, 8);
+
+/**
+ * @generated from message lakesync.v1.ActionResponseEntry
+ */
+export type ActionResponseEntry = Message<"lakesync.v1.ActionResponseEntry"> & {
+  /**
+   * @generated from oneof lakesync.v1.ActionResponseEntry.result
+   */
+  result: {
+    /**
+     * @generated from field: lakesync.v1.ActionResultMsg success = 1;
+     */
+    value: ActionResultMsg;
+    case: "success";
+  } | {
+    /**
+     * @generated from field: lakesync.v1.ActionErrorMsg error = 2;
+     */
+    value: ActionErrorMsg;
+    case: "error";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message lakesync.v1.ActionResponseEntry.
+ * Use `create(ActionResponseEntrySchema)` to create a new message.
+ */
+export const ActionResponseEntrySchema: GenMessage<ActionResponseEntry> = /*@__PURE__*/
+  messageDesc(file_lakesync, 9);
+
+/**
+ * @generated from message lakesync.v1.ActionResponse
+ */
+export type ActionResponse = Message<"lakesync.v1.ActionResponse"> & {
+  /**
+   * @generated from field: repeated lakesync.v1.ActionResponseEntry results = 1;
+   */
+  results: ActionResponseEntry[];
+
+  /**
+   * @generated from field: fixed64 server_hlc = 2;
+   */
+  serverHlc: bigint;
+};
+
+/**
+ * Describes the message lakesync.v1.ActionResponse.
+ * Use `create(ActionResponseSchema)` to create a new message.
+ */
+export const ActionResponseSchema: GenMessage<ActionResponse> = /*@__PURE__*/
+  messageDesc(file_lakesync, 10);
 
 /**
  * @generated from enum lakesync.v1.DeltaOp
  */
 export enum DeltaOp {
-	/**
-	 * @generated from enum value: DELTA_OP_UNSPECIFIED = 0;
-	 */
-	UNSPECIFIED = 0,
+  /**
+   * @generated from enum value: DELTA_OP_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
 
-	/**
-	 * @generated from enum value: DELTA_OP_INSERT = 1;
-	 */
-	INSERT = 1,
+  /**
+   * @generated from enum value: DELTA_OP_INSERT = 1;
+   */
+  INSERT = 1,
 
-	/**
-	 * @generated from enum value: DELTA_OP_UPDATE = 2;
-	 */
-	UPDATE = 2,
+  /**
+   * @generated from enum value: DELTA_OP_UPDATE = 2;
+   */
+  UPDATE = 2,
 
-	/**
-	 * @generated from enum value: DELTA_OP_DELETE = 3;
-	 */
-	DELETE = 3,
+  /**
+   * @generated from enum value: DELTA_OP_DELETE = 3;
+   */
+  DELETE = 3,
 }
 
 /**
  * Describes the enum lakesync.v1.DeltaOp.
  */
-export const DeltaOpSchema: GenEnum<DeltaOp> = /*@__PURE__*/ enumDesc(file_lakesync, 0);
+export const DeltaOpSchema: GenEnum<DeltaOp> = /*@__PURE__*/
+  enumDesc(file_lakesync, 0);
+

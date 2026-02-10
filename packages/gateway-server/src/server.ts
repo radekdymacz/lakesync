@@ -6,6 +6,7 @@ import {
 	type LakeAdapter,
 } from "@lakesync/adapter";
 import type {
+	ActionPush,
 	ConnectorConfig,
 	HLCTimestamp,
 	ResolvedClaims,
@@ -18,6 +19,7 @@ import {
 	bigintReplacer,
 	bigintReviver,
 	filterDeltas,
+	isActionHandler,
 	validateConnectorConfig,
 	validateSyncRules,
 } from "@lakesync/core";
@@ -113,6 +115,8 @@ interface RouteMatch {
 const ROUTES: Array<[string, RegExp, string, boolean?]> = [
 	["POST", /^\/sync\/([^/]+)\/push$/, "push"],
 	["GET", /^\/sync\/([^/]+)\/pull$/, "pull"],
+	["POST", /^\/sync\/([^/]+)\/action$/, "action"],
+	["GET", /^\/sync\/([^/]+)\/actions$/, "describe-actions"],
 	["GET", /^\/sync\/([^/]+)\/ws$/, "ws"],
 	["POST", /^\/admin\/flush\/([^/]+)$/, "flush"],
 	["POST", /^\/admin\/schema\/([^/]+)$/, "schema"],
@@ -627,6 +631,12 @@ export class GatewayServer {
 			case "pull":
 				await this.handlePull(url, res, corsH, auth);
 				break;
+			case "action":
+				await this.handleAction(req, res, corsH, auth);
+				break;
+			case "describe-actions":
+				this.handleDescribeActions(res, corsH);
+				break;
 			case "flush":
 				await this.handleFlush(res, corsH);
 				break;
@@ -787,6 +797,55 @@ export class GatewayServer {
 			response = await this.sharedBuffer.mergePull(response, sinceHlc);
 		}
 		sendJson(res, response, 200, corsH);
+	}
+
+	/**
+	 * Handle `POST /sync/:gatewayId/action` -- execute imperative actions.
+	 */
+	private async handleAction(
+		req: IncomingMessage,
+		res: ServerResponse,
+		corsH: Record<string, string>,
+		auth?: AuthClaims,
+	): Promise<void> {
+		let body: ActionPush;
+		try {
+			const raw = await readBody(req);
+			body = JSON.parse(raw, bigintReviver) as ActionPush;
+		} catch {
+			sendError(res, "Invalid JSON body", 400, corsH);
+			return;
+		}
+
+		if (!body.clientId || !Array.isArray(body.actions)) {
+			sendError(res, "Missing required fields: clientId, actions", 400, corsH);
+			return;
+		}
+
+		if (auth && body.clientId !== auth.clientId) {
+			sendError(
+				res,
+				"Client ID mismatch: action clientId does not match authenticated identity",
+				403,
+				corsH,
+			);
+			return;
+		}
+
+		const context = auth?.customClaims ? { claims: auth.customClaims } : undefined;
+		const result = await this.gateway.handleAction(body, context);
+
+		if (!result.ok) {
+			sendError(res, result.error.message, 400, corsH);
+			return;
+		}
+
+		sendJson(res, result.value, 200, corsH);
+	}
+
+	/** Handle `GET /sync/:gatewayId/actions` -- describe available action handlers. */
+	private handleDescribeActions(res: ServerResponse, corsH: Record<string, string>): void {
+		sendJson(res, this.gateway.describeActions(), 200, corsH);
 	}
 
 	/** Handle `POST /admin/flush/:gatewayId` -- manual flush. */
@@ -950,6 +1009,11 @@ export class GatewayServer {
 		this.connectorConfigs.set(config.name, config);
 		this.connectorAdapters.set(config.name, adapter);
 
+		// Auto-register as action handler if the adapter supports actions
+		if (isActionHandler(adapter)) {
+			this.gateway.registerActionHandler(config.name, adapter);
+		}
+
 		// Start ingest poller if configured
 		if (config.ingest) {
 			const queryFn = await createQueryFn(config);
@@ -1001,6 +1065,7 @@ export class GatewayServer {
 
 		// Unregister from gateway
 		this.gateway.unregisterSource(name);
+		this.gateway.unregisterActionHandler(name);
 		this.connectorConfigs.delete(name);
 
 		sendJson(res, { unregistered: true, name }, 200, corsH);

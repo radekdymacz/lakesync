@@ -40,3 +40,43 @@ message SyncResponse {
   fixed64 server_hlc = 2;
   bool has_more = 3;
 }
+
+message Action {
+  string action_id = 1;
+  string client_id = 2;
+  fixed64 hlc = 3;
+  string connector = 4;
+  string action_type = 5;
+  bytes params = 6;
+  string idempotency_key = 7;
+}
+
+message ActionPush {
+  string client_id = 1;
+  repeated Action actions = 2;
+}
+
+message ActionResultMsg {
+  string action_id = 1;
+  bytes data = 2;
+  fixed64 server_hlc = 3;
+}
+
+message ActionErrorMsg {
+  string action_id = 1;
+  string code = 2;
+  string message = 3;
+  bool retryable = 4;
+}
+
+message ActionResponseEntry {
+  oneof result {
+    ActionResultMsg success = 1;
+    ActionErrorMsg error = 2;
+  }
+}
+
+message ActionResponse {
+  repeated ActionResponseEntry results = 1;
+  fixed64 server_hlc = 2;
+}

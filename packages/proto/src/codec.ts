@@ -1,5 +1,9 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import type {
+	ActionErrorResult as CoreActionErrorResult,
+	ActionPush as CoreActionPush,
+	ActionResponse as CoreActionResponse,
+	ActionResult as CoreActionResult,
 	ColumnDelta as CoreColumnDelta,
 	DeltaOp as CoreDeltaOp,
 	RowDelta as CoreRowDelta,
@@ -8,6 +12,11 @@ import type {
 } from "@lakesync/core";
 import { Err, Ok } from "@lakesync/core";
 import {
+	ActionPushSchema,
+	ActionResponseEntrySchema,
+	ActionResponseSchema,
+	ActionResultMsgSchema,
+	ActionSchema,
 	ColumnDeltaSchema,
 	type ColumnDelta as ProtoColumnDelta,
 	DeltaOp as ProtoDeltaOp,
@@ -186,6 +195,12 @@ export const TAG_SYNC_PULL = 0x02;
 
 /** Tag byte for server-initiated broadcast frames. */
 export const TAG_BROADCAST = 0x03;
+
+/** Tag byte for ActionPush frames. */
+export const TAG_ACTION_PUSH = 0x04;
+
+/** Tag byte for ActionResponse frames. */
+export const TAG_ACTION_RESPONSE = 0x05;
 
 // ---------------------------------------------------------------------------
 // Broadcast frame encode / decode
@@ -368,6 +383,147 @@ export function decodeSyncResponse(bytes: Uint8Array): Result<SyncResponsePayloa
 			deltas: proto.deltas.map(protoRowToCore),
 			serverHlc: proto.serverHlc as HLCTimestamp,
 			hasMore: proto.hasMore,
+		};
+	});
+}
+
+// ---------------------------------------------------------------------------
+// ActionPush encode / decode
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialise an ActionPush payload to protobuf binary.
+ *
+ * @param push - The ActionPush payload containing client ID and actions.
+ * @returns A `Result` containing the binary bytes, or a `CodecError` on failure.
+ */
+export function encodeActionPush(push: CoreActionPush): Result<Uint8Array, CodecError> {
+	return tryCodec("Failed to encode ActionPush", () => {
+		const proto = create(ActionPushSchema, {
+			clientId: push.clientId,
+			actions: push.actions.map((a) =>
+				create(ActionSchema, {
+					actionId: a.actionId,
+					clientId: a.clientId,
+					hlc: a.hlc as bigint,
+					connector: a.connector,
+					actionType: a.actionType,
+					params: encodeValue(a.params),
+					idempotencyKey: a.idempotencyKey ?? "",
+				}),
+			),
+		});
+		return toBinary(ActionPushSchema, proto);
+	});
+}
+
+/**
+ * Deserialise protobuf binary to an ActionPush payload.
+ *
+ * @param bytes - The protobuf binary to deserialise.
+ * @returns A `Result` containing the ActionPush payload, or a `CodecError` on failure.
+ */
+export function decodeActionPush(bytes: Uint8Array): Result<CoreActionPush, CodecError> {
+	return tryCodec("Failed to decode ActionPush", () => {
+		const proto = fromBinary(ActionPushSchema, bytes);
+		return {
+			clientId: proto.clientId,
+			actions: proto.actions.map((a) => ({
+				actionId: a.actionId,
+				clientId: a.clientId,
+				hlc: a.hlc as HLCTimestamp,
+				connector: a.connector,
+				actionType: a.actionType,
+				params: decodeValue(a.params) as Record<string, unknown>,
+				...(a.idempotencyKey ? { idempotencyKey: a.idempotencyKey } : {}),
+			})),
+		};
+	});
+}
+
+// ---------------------------------------------------------------------------
+// ActionResponse encode / decode
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialise an ActionResponse to protobuf binary.
+ *
+ * @param response - The ActionResponse payload.
+ * @returns A `Result` containing the binary bytes, or a `CodecError` on failure.
+ */
+export function encodeActionResponse(response: CoreActionResponse): Result<Uint8Array, CodecError> {
+	return tryCodec("Failed to encode ActionResponse", () => {
+		const entries = response.results.map((r) => {
+			if ("data" in r && "serverHlc" in r) {
+				// Success result
+				const success = r as CoreActionResult;
+				return create(ActionResponseEntrySchema, {
+					result: {
+						case: "success" as const,
+						value: create(ActionResultMsgSchema, {
+							actionId: success.actionId,
+							data: encodeValue(success.data),
+							serverHlc: success.serverHlc as bigint,
+						}),
+					},
+				});
+			}
+			// Error result
+			const error = r as CoreActionErrorResult;
+			return create(ActionResponseEntrySchema, {
+				result: {
+					case: "error" as const,
+					value: {
+						actionId: error.actionId,
+						code: error.code,
+						message: error.message,
+						retryable: error.retryable,
+					},
+				},
+			});
+		});
+
+		const proto = create(ActionResponseSchema, {
+			results: entries,
+			serverHlc: response.serverHlc as bigint,
+		});
+		return toBinary(ActionResponseSchema, proto);
+	});
+}
+
+/**
+ * Deserialise protobuf binary to an ActionResponse payload.
+ *
+ * @param bytes - The protobuf binary to deserialise.
+ * @returns A `Result` containing the ActionResponse payload, or a `CodecError` on failure.
+ */
+export function decodeActionResponse(bytes: Uint8Array): Result<CoreActionResponse, CodecError> {
+	return tryCodec("Failed to decode ActionResponse", () => {
+		const proto = fromBinary(ActionResponseSchema, bytes);
+		const results: Array<CoreActionResult | CoreActionErrorResult> = proto.results.map((entry) => {
+			if (entry.result.case === "success") {
+				const s = entry.result.value;
+				return {
+					actionId: s.actionId,
+					data: decodeValue(s.data) as Record<string, unknown>,
+					serverHlc: s.serverHlc as HLCTimestamp,
+				};
+			}
+			if (entry.result.case === "error") {
+				const e = entry.result.value;
+				return {
+					actionId: e.actionId,
+					code: e.code,
+					message: e.message,
+					retryable: e.retryable,
+				};
+			}
+			throw new CodecError("ActionResponseEntry has no result");
+		});
+
+		return {
+			results,
+			serverHlc: proto.serverHlc as HLCTimestamp,
 		};
 	});
 }

@@ -1,4 +1,9 @@
 import type {
+	ActionDiscovery,
+	ActionPush,
+	ActionResponse,
+	ActionValidationError,
+	AuthContext,
 	HLCTimestamp,
 	LakeSyncError,
 	Result,
@@ -6,13 +11,13 @@ import type {
 	SyncPush,
 	SyncResponse,
 } from "@lakesync/core";
-import { Ok } from "@lakesync/core";
+import { Err, LakeSyncError as LSError, Ok } from "@lakesync/core";
 import type { CheckpointResponse, SyncTransport } from "./transport";
 
 /**
  * Gateway-like interface used by LocalTransport.
  *
- * Matches the shape of SyncGateway's push/pull methods without
+ * Matches the shape of SyncGateway's push/pull/action methods without
  * requiring a direct dependency on `@lakesync/gateway`.
  */
 export interface LocalGateway {
@@ -20,6 +25,13 @@ export interface LocalGateway {
 	handlePush(msg: SyncPush): Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>;
 	/** Handle a pull request from a client */
 	handlePull(msg: SyncPull): Result<SyncResponse, LakeSyncError>;
+	/** Handle an action push from a client */
+	handleAction?(
+		msg: ActionPush,
+		context?: AuthContext,
+	): Promise<Result<ActionResponse, ActionValidationError>>;
+	/** Describe available action handlers and their supported actions. */
+	describeActions?(): ActionDiscovery;
 }
 
 /**
@@ -47,5 +59,25 @@ export class LocalTransport implements SyncTransport {
 	/** Local transport has no checkpoint — returns null */
 	async checkpoint(): Promise<Result<CheckpointResponse | null, LakeSyncError>> {
 		return Ok(null);
+	}
+
+	/** Execute actions against the in-process gateway. */
+	async executeAction(msg: ActionPush): Promise<Result<ActionResponse, LakeSyncError>> {
+		if (!this.gateway.handleAction) {
+			return Err(new LSError("Local gateway does not support actions", "TRANSPORT_ERROR"));
+		}
+		const result = await this.gateway.handleAction(msg);
+		if (!result.ok) {
+			return Err(new LSError(result.error.message, result.error.code));
+		}
+		return Ok(result.value);
+	}
+
+	/** Discover available connectors and their supported action types. */
+	async describeActions(): Promise<Result<ActionDiscovery, LakeSyncError>> {
+		if (!this.gateway.describeActions) {
+			return Ok({ connectors: {} });
+		}
+		return Ok(this.gateway.describeActions());
 	}
 }
