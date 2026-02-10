@@ -1,6 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
 import type {
-	ActionPush,
 	ConnectorConfig,
 	HLCTimestamp,
 	ResolvedClaims,
@@ -9,14 +8,26 @@ import type {
 	SyncRulesContext,
 	TableSchema,
 } from "@lakesync/core";
+import { bigintReplacer, bigintReviver, filterDeltas } from "@lakesync/core";
+import type { SyncResponse } from "@lakesync/gateway";
 import {
-	bigintReplacer,
-	bigintReviver,
-	filterDeltas,
-	validateConnectorConfig,
-	validateSyncRules,
-} from "@lakesync/core";
-import { SyncGateway, type SyncPull, type SyncPush, type SyncResponse } from "@lakesync/gateway";
+	buildSyncRulesContext,
+	type ConfigStore,
+	DEFAULT_MAX_BUFFER_AGE_MS,
+	DEFAULT_MAX_BUFFER_BYTES,
+	handleActionRequest,
+	handleFlushRequest,
+	handleListConnectors,
+	handleMetrics,
+	handlePullRequest,
+	handlePushRequest,
+	handleRegisterConnector,
+	handleSaveSchema,
+	handleSaveSyncRules,
+	handleUnregisterConnector,
+	MAX_PUSH_PAYLOAD_BYTES,
+	SyncGateway,
+} from "@lakesync/gateway";
 import {
 	type CodecError,
 	decodeSyncPull,
@@ -47,14 +58,8 @@ function errorResponse(message: string, status: number): Response {
 }
 
 // ---------------------------------------------------------------------------
-// Constants
+// Constants (DO-specific — shared constants imported from gateway package)
 // ---------------------------------------------------------------------------
-
-/** Default maximum buffer size before triggering flush (4 MiB). */
-const DEFAULT_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
-
-/** Default maximum buffer age before triggering flush (30 seconds). */
-const DEFAULT_MAX_BUFFER_AGE_MS = 30_000;
 
 /** Maximum backoff delay for flush retries (30 seconds). */
 const MAX_RETRY_BACKOFF_MS = 30_000;
@@ -62,20 +67,43 @@ const MAX_RETRY_BACKOFF_MS = 30_000;
 /** Base backoff delay for flush retries (1 second). */
 const BASE_RETRY_BACKOFF_MS = 1_000;
 
-/** Maximum push payload size (1 MiB). */
-const MAX_PUSH_PAYLOAD_BYTES = 1_048_576;
+// ---------------------------------------------------------------------------
+// DurableStorageConfigStore
+// ---------------------------------------------------------------------------
 
-/** Maximum number of deltas allowed in a single push. */
-const MAX_DELTAS_PER_PUSH = 10_000;
+/**
+ * ConfigStore implementation backed by Durable Object storage.
+ *
+ * Wraps the Cloudflare Workers DurableObjectStorage API to satisfy
+ * the platform-agnostic ConfigStore interface from @lakesync/gateway.
+ */
+class DurableStorageConfigStore implements ConfigStore {
+	constructor(private storage: DurableObjectStorage) {}
 
-/** Maximum number of deltas returned in a single pull. */
-const MAX_PULL_LIMIT = 10_000;
+	async getSchema(_gatewayId: string): Promise<TableSchema | undefined> {
+		return (await this.storage.get<TableSchema>("tableSchema")) ?? undefined;
+	}
 
-/** Default number of deltas returned in a pull when no limit is specified. */
-const DEFAULT_PULL_LIMIT = 100;
+	async setSchema(_gatewayId: string, schema: TableSchema): Promise<void> {
+		await this.storage.put("tableSchema", schema);
+	}
 
-/** Allowed column types for schema validation. */
-const VALID_COLUMN_TYPES = new Set(["string", "number", "boolean", "json", "null"]);
+	async getSyncRules(_gatewayId: string): Promise<SyncRulesConfig | undefined> {
+		return (await this.storage.get<SyncRulesConfig>("syncRules")) ?? undefined;
+	}
+
+	async setSyncRules(_gatewayId: string, rules: SyncRulesConfig): Promise<void> {
+		await this.storage.put("syncRules", rules);
+	}
+
+	async getConnectors(): Promise<Record<string, ConnectorConfig>> {
+		return (await this.storage.get<Record<string, ConnectorConfig>>("connectors")) ?? {};
+	}
+
+	async setConnectors(connectors: Record<string, ConnectorConfig>): Promise<void> {
+		await this.storage.put("connectors", connectors);
+	}
+}
 
 // ---------------------------------------------------------------------------
 // SyncGatewayDO
@@ -85,21 +113,31 @@ const VALID_COLUMN_TYPES = new Set(["string", "number", "boolean", "json", "null
  * Durable Object that wraps a {@link SyncGateway} instance.
  *
  * Each DO instance manages one logical gateway's delta buffer and flush
- * lifecycle. It exposes three HTTP endpoints (`/push`, `/pull`, `/flush`)
- * and supports WebSocket connections for binary protobuf transport.
+ * lifecycle. It exposes HTTP endpoints for push, pull, flush, schema,
+ * sync rules, connectors, metrics, and checkpoint streaming, and supports
+ * WebSocket connections for binary protobuf transport.
  *
- * The alarm-based flush mechanism ensures deltas are periodically written
- * to the lake via R2, with exponential backoff on failure.
+ * Route handling delegates to shared request handlers from @lakesync/gateway,
+ * keeping the DO layer focused on platform-specific concerns: Durable Storage,
+ * alarms, WebSocket hibernation, and checkpoint streaming.
  */
 export class SyncGatewayDO extends DurableObject<Env> {
 	/** Lazily initialised gateway instance. */
 	private gateway: SyncGateway | null = null;
+
+	/** Platform-agnostic config store backed by Durable Storage. */
+	private configStore: DurableStorageConfigStore;
 
 	/** Consecutive flush failure count for exponential backoff. Reset on success. */
 	private flushRetryCount = 0;
 
 	/** High-water mark for buffer byte usage. */
 	private peakBufferBytes = 0;
+
+	constructor(ctx: DurableObjectState, env: Env) {
+		super(ctx, env);
+		this.configStore = new DurableStorageConfigStore(ctx.storage);
+	}
 
 	/**
 	 * Return the gateway instance, creating it on first access.
@@ -115,7 +153,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		}
 
 		const adapter = new R2Adapter(this.env.LAKE_BUCKET);
-		const tableSchema = await this.loadTableSchema();
+		const tableSchema = await this.configStore.getSchema(this.ctx.id.toString());
 
 		this.gateway = new SyncGateway(
 			{
@@ -134,68 +172,21 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	}
 
 	/**
-	 * Load a previously saved {@link TableSchema} from Durable Storage.
+	 * Extract JWT claims from the X-Auth-Claims header.
 	 *
-	 * @returns The stored schema, or `undefined` if none has been saved.
+	 * The worker entry point forwards decoded JWT claims as a JSON string
+	 * in this header. Returns an empty object if the header is absent or
+	 * contains invalid JSON.
 	 */
-	private async loadTableSchema(): Promise<TableSchema | undefined> {
-		const schema = await this.ctx.storage.get<TableSchema>("tableSchema");
-		return schema ?? undefined;
-	}
+	private extractClaims(request: Request): ResolvedClaims {
+		const claimsHeader = request.headers.get("X-Auth-Claims");
+		if (!claimsHeader) return {};
 
-	/**
-	 * Persist a {@link TableSchema} to Durable Storage and reset the
-	 * cached gateway so the next {@link getGateway} call picks up the
-	 * new schema and flush format.
-	 */
-	private async saveTableSchema(schema: TableSchema): Promise<void> {
-		await this.ctx.storage.put("tableSchema", schema);
-		// Reset gateway so next getGateway() picks up the new schema
-		this.gateway = null;
-	}
-
-	/**
-	 * Load sync rules from Durable Storage.
-	 *
-	 * @returns The stored sync rules, or `undefined` if none configured.
-	 */
-	private async loadSyncRules(): Promise<SyncRulesConfig | undefined> {
-		const rules = await this.ctx.storage.get<SyncRulesConfig>("syncRules");
-		return rules ?? undefined;
-	}
-
-	/**
-	 * Persist sync rules to Durable Storage.
-	 */
-	private async saveSyncRules(rules: SyncRulesConfig): Promise<void> {
-		await this.ctx.storage.put("syncRules", rules);
-	}
-
-	/**
-	 * Build a SyncRulesContext from stored rules and forwarded JWT claims.
-	 * Returns undefined if no sync rules are configured (backward compat).
-	 */
-	private async buildSyncRulesContext(
-		request: Request | URL,
-	): Promise<SyncRulesContext | undefined> {
-		const rules = await this.loadSyncRules();
-		if (!rules || rules.buckets.length === 0) {
-			return undefined;
+		try {
+			return JSON.parse(claimsHeader) as ResolvedClaims;
+		} catch {
+			return {};
 		}
-
-		// Extract claims from X-Auth-Claims header (forwarded by the worker)
-		let claims: ResolvedClaims = {};
-		const claimsHeader = request instanceof Request ? request.headers.get("X-Auth-Claims") : null;
-
-		if (claimsHeader) {
-			try {
-				claims = JSON.parse(claimsHeader) as ResolvedClaims;
-			} catch {
-				// Invalid claims header — use empty claims
-			}
-		}
-
-		return { claims, rules };
 	}
 
 	/**
@@ -204,14 +195,17 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 * Supported routes:
 	 * - `POST /push`  -- ingest client deltas
 	 * - `GET  /pull`  -- retrieve deltas since a given HLC
+	 * - `POST /action` -- execute imperative actions
+	 * - `GET  /actions` -- describe available action handlers
 	 * - `POST /flush` -- flush the buffer to the lake
 	 * - `POST /admin/schema` -- save table schema
 	 * - `POST /admin/sync-rules` -- save sync rules
+	 * - `POST|GET /admin/connectors` -- register or list connectors
+	 * - `DELETE /admin/connectors/:name` -- unregister a connector
+	 * - `GET  /admin/metrics` -- return buffer statistics
 	 * - `GET  /checkpoint` -- serve checkpoint for initial sync
+	 * - `POST /internal/broadcast` -- broadcast deltas from another shard
 	 * - Upgrade to WebSocket for binary protobuf transport
-	 *
-	 * @param request - The incoming HTTP request.
-	 * @returns An HTTP response with a JSON body, or a WebSocket upgrade.
 	 */
 	async fetch(request: Request): Promise<Response> {
 		// WebSocket upgrade
@@ -236,15 +230,15 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			case "/pull":
 				return this.handlePull(url, request);
 			case "/action":
-				return this.handleActionRequest(request);
+				return this.handleAction(request);
 			case "/actions":
 				return this.handleDescribeActions();
 			case "/flush":
 				return this.handleFlush();
 			case "/admin/schema":
-				return this.handleSaveSchema(request);
+				return this.handleSchema(request);
 			case "/admin/sync-rules":
-				return this.handleSaveSyncRules(request);
+				return this.handleSyncRules(request);
 			case "/admin/connectors":
 				return this.handleConnectors(request);
 			case "/checkpoint":
@@ -265,9 +259,9 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	/**
 	 * Handle `POST /push` -- ingest client deltas via JSON.
 	 *
-	 * Expects a JSON body matching `{ clientId, deltas, lastSeenHlc }`.
-	 * Returns the server HLC and accepted delta count on success.
-	 * Schedules a flush alarm after each successful push.
+	 * Delegates validation and processing to the shared handlePushRequest
+	 * handler. Retains DO-specific concerns: Content-Length pre-check,
+	 * peak buffer tracking, per-table budget auto-flush, and alarm scheduling.
 	 */
 	private async handlePush(request: Request): Promise<Response> {
 		if (request.method !== "POST") {
@@ -279,180 +273,75 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			return errorResponse("Payload too large (max 1 MiB)", 413);
 		}
 
-		let body: SyncPush;
-		try {
-			const raw = await request.text();
-			body = JSON.parse(raw, bigintReviver) as SyncPush;
-		} catch {
-			return errorResponse("Invalid JSON body", 400);
-		}
-
-		if (!body.clientId || !Array.isArray(body.deltas)) {
-			return errorResponse("Missing required fields: clientId, deltas", 400);
-		}
-
+		const raw = await request.text();
 		const headerClientId = request.headers.get("X-Client-Id");
-		if (headerClientId && body.clientId !== headerClientId) {
-			return errorResponse(
-				"Client ID mismatch: push clientId does not match authenticated identity",
-				403,
-			);
-		}
-
-		if (body.deltas.length > MAX_DELTAS_PER_PUSH) {
-			return errorResponse("Too many deltas in a single push (max 10,000)", 400);
-		}
-
 		const gateway = await this.getGateway();
 
-		logger.info("push", {
-			clientId: body.clientId,
-			deltaCount: body.deltas.length,
-			contentLength,
+		const result = handlePushRequest(gateway, raw, headerClientId, {
+			broadcastFn: (deltas, serverHlc, excludeClientId) => {
+				this.broadcastDeltas(deltas, serverHlc, excludeClientId);
+			},
 		});
 
-		const result = gateway.handlePush(body);
+		if (result.status === 200) {
+			// Track peak buffer usage
+			this.peakBufferBytes = Math.max(this.peakBufferBytes, gateway.bufferStats.byteSize);
 
-		if (!result.ok) {
-			const err = result.error;
-			logger.warn("push_error", { code: err.code, message: err.message });
-			const statusByCode: Record<string, number> = {
-				CLOCK_DRIFT: 409,
-				SCHEMA_MISMATCH: 422,
-				BACKPRESSURE: 503,
-			};
-			return errorResponse(err.message, statusByCode[err.code] ?? 500);
+			// Auto-flush tables that exceed per-table budget
+			const hotTables = gateway.getTablesExceedingBudget();
+			for (const table of hotTables) {
+				await gateway.flushTable(table);
+			}
+
+			await this.scheduleFlushAlarm(gateway);
 		}
 
-		// Track peak buffer usage
-		this.peakBufferBytes = Math.max(this.peakBufferBytes, gateway.bufferStats.byteSize);
-
-		// Auto-flush tables that exceed per-table budget
-		const hotTables = gateway.getTablesExceedingBudget();
-		for (const table of hotTables) {
-			await gateway.flushTable(table);
-		}
-
-		await this.scheduleFlushAlarm(gateway);
-
-		// Broadcast ingested deltas to other connected WebSocket clients
-		await this.broadcastDeltas(result.value.deltas, result.value.serverHlc, body.clientId);
-
-		return jsonResponse(result.value);
+		return jsonResponse(result.body, result.status);
 	}
 
 	/**
 	 * Handle `GET /pull` -- retrieve deltas since a given HLC.
 	 *
-	 * When sync rules are configured, the pull is filtered by the client's
-	 * JWT claims. The filtering is performed by the gateway's handlePull
-	 * with a SyncRulesContext.
-	 *
-	 * Query parameters:
-	 * - `since` (required) -- HLC timestamp as a decimal string
-	 * - `limit` (optional) -- maximum number of deltas (default 100)
-	 * - `clientId` (required) -- requesting client identifier
-	 * - `source` (optional) -- named source adapter to pull from
+	 * Delegates validation and filtering to the shared handlePullRequest handler.
 	 */
 	private async handlePull(url: URL, request: Request): Promise<Response> {
-		const sinceParam = url.searchParams.get("since");
-		const clientId = url.searchParams.get("clientId");
-		const limitParam = url.searchParams.get("limit");
-		const source = url.searchParams.get("source");
-
-		if (!sinceParam || !clientId) {
-			return errorResponse("Missing required query params: since, clientId", 400);
-		}
-
-		let sinceHlc: HLCTimestamp;
-		try {
-			sinceHlc = BigInt(sinceParam) as HLCTimestamp;
-		} catch {
-			return errorResponse("Invalid 'since' parameter — must be a decimal integer", 400);
-		}
-
-		const rawLimit = limitParam ? Number.parseInt(limitParam, 10) : DEFAULT_PULL_LIMIT;
-		if (Number.isNaN(rawLimit) || rawLimit < 1) {
-			return errorResponse("Invalid 'limit' parameter — must be a positive integer", 400);
-		}
-		const maxDeltas = Math.min(rawLimit, MAX_PULL_LIMIT);
-
-		const msg: SyncPull = { clientId, sinceHlc, maxDeltas, ...(source ? { source } : {}) };
 		const gateway = await this.getGateway();
-		const context = await this.buildSyncRulesContext(request);
-		const result = source
-			? await gateway.handlePull(msg as SyncPull & { source: string }, context)
-			: gateway.handlePull(msg, context);
+		const gatewayId = this.ctx.id.toString();
+		const syncRules = await this.configStore.getSyncRules(gatewayId);
+		const claims = this.extractClaims(request);
 
-		if (!result.ok) {
-			const err = result.error;
-			if (err.code === "ADAPTER_NOT_FOUND") {
-				return errorResponse(err.message, 404);
-			}
-			return errorResponse(err.message, 500);
-		}
+		const result = await handlePullRequest(
+			gateway,
+			{
+				since: url.searchParams.get("since"),
+				clientId: url.searchParams.get("clientId"),
+				limit: url.searchParams.get("limit"),
+				source: url.searchParams.get("source"),
+			},
+			claims,
+			syncRules,
+		);
 
-		logger.info("pull", {
-			clientId,
-			deltaCount: result.value.deltas.length,
-			sinceHlc: sinceHlc.toString(),
-			...(source ? { source } : {}),
-		});
-
-		return jsonResponse(result.value);
+		return jsonResponse(result.body, result.status);
 	}
 
 	/**
 	 * Handle `POST /action` -- execute imperative actions.
 	 *
-	 * Dispatches actions to registered ActionHandlers via the gateway.
-	 * Uses forwarded JWT claims for permission checks.
+	 * Delegates validation and dispatch to the shared handleActionRequest handler.
 	 */
-	private async handleActionRequest(request: Request): Promise<Response> {
+	private async handleAction(request: Request): Promise<Response> {
 		if (request.method !== "POST") {
 			return errorResponse("Method not allowed", 405);
 		}
 
-		let body: ActionPush;
-		try {
-			const raw = await request.text();
-			body = JSON.parse(raw, bigintReviver) as ActionPush;
-		} catch {
-			return errorResponse("Invalid JSON body", 400);
-		}
-
-		if (!body.clientId || !Array.isArray(body.actions)) {
-			return errorResponse("Missing required fields: clientId, actions", 400);
-		}
-
+		const raw = await request.text();
 		const headerClientId = request.headers.get("X-Client-Id");
-		if (headerClientId && body.clientId !== headerClientId) {
-			return errorResponse(
-				"Client ID mismatch: action clientId does not match authenticated identity",
-				403,
-			);
-		}
-
+		const claims = this.extractClaims(request);
 		const gateway = await this.getGateway();
 
-		// Build auth context from forwarded claims
-		const claimsHeader = request.headers.get("X-Auth-Claims");
-		let context: { claims: ResolvedClaims } | undefined;
-		if (claimsHeader) {
-			try {
-				context = { claims: JSON.parse(claimsHeader) as ResolvedClaims };
-			} catch {
-				// Invalid claims — proceed without context
-			}
-		}
-
-		const result = await gateway.handleAction(body, context);
-
-		if (!result.ok) {
-			return errorResponse(result.error.message, 400);
-		}
-
-		return jsonResponse(result.value);
+		const result = await handleActionRequest(gateway, raw, headerClientId, claims);
+		return jsonResponse(result.body, result.status);
 	}
 
 	/**
@@ -469,87 +358,58 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	/**
 	 * Handle `POST /flush` -- flush the buffer to the lake adapter.
 	 *
-	 * Returns 200 on success, or the appropriate error status if the flush
-	 * fails (e.g. already in progress, no adapter configured).
+	 * Delegates to the shared handleFlushRequest handler.
 	 */
 	private async handleFlush(): Promise<Response> {
 		const gateway = await this.getGateway();
-		const result = await gateway.flush();
-
-		if (!result.ok) {
-			return errorResponse(result.error.message, 500);
-		}
-
-		return jsonResponse({ flushed: true });
+		const result = await handleFlushRequest(gateway);
+		return jsonResponse(result.body, result.status);
 	}
 
 	/**
-	 * Handle `POST /admin/schema` -- save a table schema to Durable Storage.
+	 * Handle `POST /admin/schema` -- save a table schema.
 	 *
-	 * Expects a JSON body matching {@link TableSchema} with at least
-	 * `table` (string) and `columns` (array) fields. Once saved, future
-	 * flushes will use the Parquet format instead of JSON.
+	 * Delegates validation and persistence to the shared handleSaveSchema handler.
+	 * Resets the cached gateway on success so the next getGateway() call picks up
+	 * the new schema and flush format.
 	 */
-	private async handleSaveSchema(request: Request): Promise<Response> {
+	private async handleSchema(request: Request): Promise<Response> {
 		if (request.method !== "POST") {
 			return errorResponse("Method not allowed", 405);
 		}
 
-		let schema: TableSchema;
-		try {
-			schema = (await request.json()) as TableSchema;
-		} catch {
-			return errorResponse("Invalid JSON body", 400);
+		const raw = await request.text();
+		const gatewayId = this.ctx.id.toString();
+		const result = await handleSaveSchema(raw, this.configStore, gatewayId);
+
+		if (result.status === 200) {
+			// Reset gateway so next getGateway() picks up the new schema
+			this.gateway = null;
+			logger.info("schema_saved", { gatewayId });
 		}
 
-		if (!schema.table || !Array.isArray(schema.columns)) {
-			return errorResponse("Missing required fields: table, columns", 400);
-		}
-
-		for (const col of schema.columns) {
-			if (typeof col.name !== "string" || col.name.length === 0) {
-				return errorResponse("Each column must have a non-empty 'name' string", 400);
-			}
-			if (!VALID_COLUMN_TYPES.has(col.type)) {
-				return errorResponse(
-					`Invalid column type "${col.type}" for column "${col.name}". Allowed: string, number, boolean, json, null`,
-					400,
-				);
-			}
-		}
-
-		await this.saveTableSchema(schema);
-		logger.info("schema_saved", { table: schema.table });
-		return jsonResponse({ saved: true });
+		return jsonResponse(result.body, result.status);
 	}
 
 	/**
-	 * Handle `POST /admin/sync-rules` -- save sync rules to Durable Storage.
+	 * Handle `POST /admin/sync-rules` -- save sync rules.
 	 *
-	 * Validates the sync rules configuration before persisting.
+	 * Delegates validation and persistence to the shared handleSaveSyncRules handler.
 	 */
-	private async handleSaveSyncRules(request: Request): Promise<Response> {
+	private async handleSyncRules(request: Request): Promise<Response> {
 		if (request.method !== "POST") {
 			return errorResponse("Method not allowed", 405);
 		}
 
-		let config: unknown;
-		try {
-			config = await request.json();
-		} catch {
-			return errorResponse("Invalid JSON body", 400);
+		const raw = await request.text();
+		const gatewayId = this.ctx.id.toString();
+		const result = await handleSaveSyncRules(raw, this.configStore, gatewayId);
+
+		if (result.status === 200) {
+			logger.info("sync_rules_saved", { gatewayId });
 		}
 
-		const validation = validateSyncRules(config);
-		if (!validation.ok) {
-			return errorResponse(validation.error.message, 400);
-		}
-
-		await this.saveSyncRules(config as SyncRulesConfig);
-		logger.info("sync_rules_saved", {
-			bucketCount: (config as SyncRulesConfig).buckets.length,
-		});
-		return jsonResponse({ saved: true });
+		return jsonResponse(result.body, result.status);
 	}
 
 	/**
@@ -557,85 +417,36 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 */
 	private async handleConnectors(request: Request): Promise<Response> {
 		if (request.method === "POST") {
-			return this.handleRegisterConnector(request);
+			const raw = await request.text();
+			const result = await handleRegisterConnector(raw, this.configStore);
+
+			if (result.status === 200) {
+				const body = result.body as { name: string };
+				logger.info("connector_registered", { name: body.name });
+			}
+
+			return jsonResponse(result.body, result.status);
 		}
+
 		if (request.method === "GET") {
-			return this.handleListConnectors();
+			const result = await handleListConnectors(this.configStore);
+			return jsonResponse(result.body, result.status);
 		}
+
 		return errorResponse("Method not allowed", 405);
 	}
 
 	/**
-	 * Handle `POST /admin/connectors` -- register a connector configuration.
-	 *
-	 * Validates the body with {@link validateConnectorConfig}, checks for
-	 * duplicate names, and persists the config to Durable Storage.
-	 */
-	private async handleRegisterConnector(request: Request): Promise<Response> {
-		let body: unknown;
-		try {
-			body = await request.json();
-		} catch {
-			return errorResponse("Invalid JSON body", 400);
-		}
-
-		const validation = validateConnectorConfig(body);
-		if (!validation.ok) {
-			return errorResponse(validation.error.message, 400);
-		}
-
-		const config = validation.value;
-		const connectors =
-			(await this.ctx.storage.get<Record<string, ConnectorConfig>>("connectors")) ?? {};
-
-		if (connectors[config.name]) {
-			return errorResponse(`Connector "${config.name}" already exists`, 409);
-		}
-
-		connectors[config.name] = config;
-		await this.ctx.storage.put("connectors", connectors);
-
-		logger.info("connector_registered", { name: config.name, type: config.type });
-		return jsonResponse({ registered: true, name: config.name });
-	}
-
-	/**
 	 * Handle `DELETE /admin/connectors/:name` -- unregister a connector.
-	 *
-	 * Removes the named connector from Durable Storage. Returns 404 if the
-	 * connector does not exist.
 	 */
 	private async handleUnregisterConnector(name: string): Promise<Response> {
-		const connectors =
-			(await this.ctx.storage.get<Record<string, ConnectorConfig>>("connectors")) ?? {};
+		const result = await handleUnregisterConnector(name, this.configStore);
 
-		if (!connectors[name]) {
-			return errorResponse(`Connector "${name}" not found`, 404);
+		if (result.status === 200) {
+			logger.info("connector_unregistered", { name });
 		}
 
-		delete connectors[name];
-		await this.ctx.storage.put("connectors", connectors);
-
-		logger.info("connector_unregistered", { name });
-		return jsonResponse({ unregistered: true, name });
-	}
-
-	/**
-	 * Handle `GET /admin/connectors` -- list registered connectors.
-	 *
-	 * Returns a sanitised list (connection strings are never exposed).
-	 */
-	private async handleListConnectors(): Promise<Response> {
-		const connectors =
-			(await this.ctx.storage.get<Record<string, ConnectorConfig>>("connectors")) ?? {};
-
-		const list = Object.values(connectors).map((c) => ({
-			name: c.name,
-			type: c.type,
-			hasIngest: c.ingest !== undefined,
-		}));
-
-		return jsonResponse(list);
+		return jsonResponse(result.body, result.status);
 	}
 
 	/**
@@ -662,7 +473,9 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			return errorResponse("Corrupt checkpoint manifest", 500);
 		}
 
-		const context = await this.buildSyncRulesContext(request);
+		const syncRules = await this.configStore.getSyncRules(gatewayId);
+		const claims = this.extractClaims(request);
+		const context = buildSyncRulesContext(syncRules, claims);
 		const snapshotHlc = BigInt(manifest.snapshotHlc) as HLCTimestamp;
 
 		const { readable, writable } = new TransformStream<Uint8Array>();
@@ -717,13 +530,14 @@ export class SyncGatewayDO extends DurableObject<Env> {
 
 	/**
 	 * Handle `GET /admin/metrics` -- return buffer statistics.
+	 *
+	 * Delegates to the shared handleMetrics handler, adding the
+	 * DO-specific peakBufferBytes high-water mark.
 	 */
 	private async handleMetrics(): Promise<Response> {
 		const gateway = await this.getGateway();
-		return jsonResponse({
-			...gateway.bufferStats,
-			peakBufferBytes: this.peakBufferBytes,
-		});
+		const result = handleMetrics(gateway, { peakBufferBytes: this.peakBufferBytes });
+		return jsonResponse(result.body, result.status);
 	}
 
 	/**
@@ -772,16 +586,8 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		const [client, server] = [pair[0], pair[1]];
 
 		// Store claims and clientId from the authenticated request
-		const claimsHeader = request.headers.get("X-Auth-Claims");
+		const claims = this.extractClaims(request);
 		const clientId = request.headers.get("X-Client-Id");
-		let claims: ResolvedClaims = {};
-		if (claimsHeader) {
-			try {
-				claims = JSON.parse(claimsHeader) as ResolvedClaims;
-			} catch {
-				// Invalid claims header — use empty claims
-			}
-		}
 
 		this.ctx.acceptWebSocket(server);
 		(server as unknown as { serializeAttachment: (data: unknown) => void }).serializeAttachment({
@@ -856,11 +662,6 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				return;
 			}
 
-			if (decoded.value.deltas.length > MAX_DELTAS_PER_PUSH) {
-				ws.close(1008, "Too many deltas in a single push (max 10,000)");
-				return;
-			}
-
 			const pushResult = gateway.handlePush(decoded.value);
 			if (!pushResult.ok) {
 				this.sendProtoError(ws, pushResult.error);
@@ -893,9 +694,8 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			}
 
 			// Build sync rules context from stored claims
-			const rules = await this.loadSyncRules();
-			const context: SyncRulesContext | undefined =
-				rules && rules.buckets.length > 0 ? { claims: storedClaims, rules } : undefined;
+			const rules = await this.configStore.getSyncRules(this.ctx.id.toString());
+			const context = buildSyncRulesContext(rules, storedClaims);
 
 			// WebSocket pull: source adapters not supported via proto (HTTP only)
 			const pullResult = gateway.handlePull(decoded.value, context);
@@ -954,7 +754,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		if (sockets.length === 0) return;
 
 		// Load sync rules once for all sockets
-		const rules = await this.loadSyncRules();
+		const rules = await this.configStore.getSyncRules(this.ctx.id.toString());
 
 		for (const ws of sockets) {
 			try {

@@ -4,7 +4,6 @@ import {
 	AdapterNotFoundError,
 	Err,
 	HLC,
-	type HLCTimestamp,
 	Ok,
 	type RowDelta,
 	type SyncRulesContext,
@@ -12,18 +11,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { SyncGateway } from "../gateway";
 import type { GatewayConfig } from "../types";
-
-function makeDelta(opts: Partial<RowDelta> & { hlc: HLCTimestamp }): RowDelta {
-	return {
-		op: opts.op ?? "INSERT",
-		table: opts.table ?? "todos",
-		rowId: opts.rowId ?? `row-${Math.random().toString(36).slice(2)}`,
-		clientId: opts.clientId ?? "client-a",
-		columns: opts.columns ?? [{ column: "title", value: "Test" }],
-		hlc: opts.hlc,
-		deltaId: opts.deltaId ?? `delta-${Math.random().toString(36).slice(2)}`,
-	};
-}
+import { makeDelta } from "./helpers";
 
 /** Create a mock DatabaseAdapter that returns the given deltas from queryDeltasSince. */
 function mockDatabaseAdapter(

@@ -1,95 +1,11 @@
 import type { LakeAdapter } from "@lakesync/adapter";
-import type { DeltaOp, HLCTimestamp, Result, RowDelta, TableSchema } from "@lakesync/core";
-import { AdapterError, Err, HLC, Ok } from "@lakesync/core";
+import type { AdapterError, HLCTimestamp, Result, RowDelta, TableSchema } from "@lakesync/core";
+import { HLC, Ok } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
 import { SyncGateway } from "../gateway";
 import { SchemaManager } from "../schema-manager";
 import type { GatewayConfig } from "../types";
-
-/** Helper to build a RowDelta with sensible defaults */
-function makeDelta(opts: Partial<RowDelta> & { hlc: HLCTimestamp }): RowDelta {
-	return {
-		op: (opts.op ?? "UPDATE") as DeltaOp,
-		table: opts.table ?? "todos",
-		rowId: opts.rowId ?? "row-1",
-		clientId: opts.clientId ?? "client-a",
-		columns: opts.columns ?? [{ column: "title", value: "Test" }],
-		hlc: opts.hlc,
-		deltaId: opts.deltaId ?? `delta-${Math.random().toString(36).slice(2)}`,
-	};
-}
-
-/** Simple in-memory mock adapter */
-function createMockAdapter(): LakeAdapter & {
-	stored: Map<string, Uint8Array>;
-} {
-	const stored = new Map<string, Uint8Array>();
-	return {
-		stored,
-		async putObject(path: string, data: Uint8Array): Promise<Result<void, AdapterError>> {
-			stored.set(path, data);
-			return Ok(undefined);
-		},
-		async getObject(path: string): Promise<Result<Uint8Array, AdapterError>> {
-			const data = stored.get(path);
-			return data ? Ok(data) : Err(new AdapterError("Not found"));
-		},
-		async headObject(
-			path: string,
-		): Promise<Result<{ size: number; lastModified: Date }, AdapterError>> {
-			const data = stored.get(path);
-			return data
-				? Ok({ size: data.length, lastModified: new Date() })
-				: Err(new AdapterError("Not found"));
-		},
-		async listObjects(
-			prefix: string,
-		): Promise<Result<Array<{ key: string; size: number; lastModified: Date }>, AdapterError>> {
-			const results = [...stored.entries()]
-				.filter(([k]) => k.startsWith(prefix))
-				.map(([key, data]) => ({
-					key,
-					size: data.length,
-					lastModified: new Date(),
-				}));
-			return Ok(results);
-		},
-		async deleteObject(path: string): Promise<Result<void, AdapterError>> {
-			stored.delete(path);
-			return Ok(undefined);
-		},
-		async deleteObjects(paths: string[]): Promise<Result<void, AdapterError>> {
-			for (const p of paths) stored.delete(p);
-			return Ok(undefined);
-		},
-	};
-}
-
-/** Simple failing mock adapter for flush-failure tests */
-function createFailingAdapter(): LakeAdapter {
-	return {
-		async putObject(): Promise<Result<void, AdapterError>> {
-			return Err(new AdapterError("Simulated write failure"));
-		},
-		async getObject(): Promise<Result<Uint8Array, AdapterError>> {
-			return Err(new AdapterError("Not implemented"));
-		},
-		async headObject(): Promise<Result<{ size: number; lastModified: Date }, AdapterError>> {
-			return Err(new AdapterError("Not implemented"));
-		},
-		async listObjects(): Promise<
-			Result<Array<{ key: string; size: number; lastModified: Date }>, AdapterError>
-		> {
-			return Ok([]);
-		},
-		async deleteObject(): Promise<Result<void, AdapterError>> {
-			return Ok(undefined);
-		},
-		async deleteObjects(): Promise<Result<void, AdapterError>> {
-			return Ok(undefined);
-		},
-	};
-}
+import { createFailingLakeAdapter, createMockLakeAdapter, makeDelta } from "./helpers";
 
 const defaultConfig: GatewayConfig = {
 	gatewayId: "gw-test-1",
@@ -259,14 +175,12 @@ describe("SyncGateway", () => {
 			columns: [{ column: "title", value: "New Title" }],
 		});
 
-		// Push the first delta
 		gw.handlePush({
 			clientId: "client-a",
 			deltas: [d1],
 			lastSeenHlc: hlcLow,
 		});
 
-		// Push the second (conflicting) delta
 		gw.handlePush({
 			clientId: "client-b",
 			deltas: [d2],
@@ -379,9 +293,6 @@ describe("SyncGateway", () => {
 		expect(gw.bufferStats.logSize).toBe(2);
 		expect(gw.bufferStats.indexSize).toBe(2);
 
-		// Flush will drain the buffer (no adapter means it returns Err, but
-		// we can test drain indirectly through bufferStats after a successful flush)
-		// Instead, let's verify via push/pull cycle
 		const zeroHlc = HLC.encode(0, 0);
 		const pullBefore = gw.handlePull({
 			clientId: "client-b",
@@ -395,7 +306,7 @@ describe("SyncGateway", () => {
 	});
 
 	it("flush writes FlushEnvelope to mock adapter with correct key pattern", async () => {
-		const adapter = createMockAdapter();
+		const adapter = createMockLakeAdapter();
 		const gw = new SyncGateway(defaultConfig, adapter);
 
 		const delta = makeDelta({ hlc: hlcLow, deltaId: "delta-flush" });
@@ -435,7 +346,7 @@ describe("SyncGateway", () => {
 	});
 
 	it("flush failure retains buffer entries", async () => {
-		const adapter = createFailingAdapter();
+		const adapter = createFailingLakeAdapter();
 		const gw = new SyncGateway(defaultConfig, adapter);
 
 		const delta = makeDelta({ hlc: hlcLow });
@@ -520,7 +431,7 @@ describe("SyncGateway", () => {
 	it("flush resets flushing flag when adapter throws", async () => {
 		// Create an adapter whose putObject THROWS (not returns Err)
 		const throwingAdapter: LakeAdapter = {
-			...createMockAdapter(),
+			...createMockLakeAdapter(),
 			async putObject(): Promise<Result<void, AdapterError>> {
 				throw new Error("Unexpected adapter explosion");
 			},
@@ -557,7 +468,7 @@ describe("SyncGateway", () => {
 	it("concurrent flush returns already-in-progress", async () => {
 		// Create a slow adapter whose putObject resolves after a delay
 		const slowAdapter: LakeAdapter = {
-			...createMockAdapter(),
+			...createMockLakeAdapter(),
 			async putObject(_path: string, _data: Uint8Array): Promise<Result<void, AdapterError>> {
 				await new Promise((resolve) => setTimeout(resolve, 100));
 				return Ok(undefined);
@@ -987,13 +898,10 @@ describe("SyncGateway", () => {
 		// Flush only the "todos" table
 		const stats = gw.tableStats;
 		expect(stats).toHaveLength(2);
-
-		// After flushing just todos, only users should remain
-		// We test this via flushTable which internally calls drainTable
 	});
 
 	it("flushTable flushes single table while other table remains", async () => {
-		const adapter = createMockAdapter();
+		const adapter = createMockLakeAdapter();
 		const gw = new SyncGateway(defaultConfig, adapter);
 
 		const d1 = makeDelta({
@@ -1069,11 +977,48 @@ describe("SyncGateway", () => {
 	});
 
 	it("flushTable on empty table is a no-op", async () => {
-		const adapter = createMockAdapter();
+		const adapter = createMockLakeAdapter();
 		const gw = new SyncGateway(defaultConfig, adapter);
 
 		const result = await gw.flushTable("nonexistent");
 		expect(result.ok).toBe(true);
 		expect(adapter.stored.size).toBe(0);
+	});
+
+	it("handleAction delegates to ActionDispatcher", async () => {
+		const gw = new SyncGateway({
+			...defaultConfig,
+			actionHandlers: {
+				github: {
+					supportedActions: [{ actionType: "create_pr", description: "Create a PR" }],
+					executeAction: async (action) =>
+						Ok({
+							actionId: action.actionId,
+							data: { success: true },
+							serverHlc: 0n as HLCTimestamp,
+						}),
+				},
+			},
+		});
+
+		const result = await gw.handleAction({
+			clientId: "client-1",
+			actions: [
+				{
+					actionId: "a-1",
+					clientId: "client-1",
+					hlc: 100n as HLCTimestamp,
+					connector: "github",
+					actionType: "create_pr",
+					params: { title: "Test PR" },
+				},
+			],
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.results).toHaveLength(1);
+			expect(result.value.results[0]!.actionId).toBe("a-1");
+		}
 	});
 });

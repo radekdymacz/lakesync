@@ -382,10 +382,11 @@ describe("Data Integrity", () => {
 		openDbs.push(reader.db);
 
 		let pulled: number;
+		let _totalPulled = 0;
 		do {
 			clock.tick();
 			pulled = await reader.coordinator.pullFromGateway();
-			totalPulled += pulled;
+			_totalPulled += pulled;
 		} while (pulled > 0);
 
 		const rows = unwrapOrThrow(

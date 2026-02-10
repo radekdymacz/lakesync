@@ -18,7 +18,14 @@ npm install lakesync react
 ```
 
 ```ts
-import { LakeSyncProvider, useQuery, useMutation, useSyncStatus } from "lakesync/react";
+import {
+  LakeSyncProvider,
+  useQuery,
+  useMutation,
+  useSyncStatus,
+  useAction,
+  useActionDiscovery,
+} from "lakesync/react";
 ```
 
 ## LakeSyncProvider
@@ -176,42 +183,167 @@ interface UseSyncStatusResult {
 - **`queueDepth`** — Number of pending deltas in the outbox queue.
 - **`error`** — Last sync error. Cleared on next successful sync.
 
+## useAction
+
+Execute imperative actions against external systems via the gateway. Wraps `SyncCoordinator.executeAction()` and subscribes to `onActionComplete` events.
+
+```ts
+const { execute, lastResult, isPending } = useAction();
+
+await execute({
+  connector: "slack",
+  actionType: "send_message",
+  params: { channel: "#general", text: "Hello from LakeSync" },
+});
+```
+
+### Return value
+
+```ts
+interface UseActionResult {
+  /** Execute an action against a connector via the gateway. */
+  execute: (params: ActionParams) => Promise<void>;
+  /** Last action result (success or error). Null before first execution. */
+  lastResult: ActionResult | ActionErrorResult | null;
+  /** Whether an action is currently in flight. */
+  isPending: boolean;
+}
+
+interface ActionParams {
+  connector: string;
+  actionType: string;
+  params: Record<string, unknown>;
+  idempotencyKey?: string;
+}
+```
+
+- **`execute`** — queues the action and triggers immediate processing. The action flows through the gateway to the registered `ActionHandler`.
+- **`lastResult`** — updated via the `onActionComplete` event. Check `"data" in lastResult` to distinguish success from error.
+- **`isPending`** — `true` from the moment `execute` is called until `onActionComplete` fires.
+- **`idempotencyKey`** — optional deduplication key for at-most-once delivery.
+
+## useActionDiscovery
+
+Discover available connectors and their supported action types. Use this to build dynamic UI — no hardcoded connector names.
+
+```ts
+const { connectors, isLoading, error, refetch } = useActionDiscovery();
+
+for (const [name, actions] of Object.entries(connectors)) {
+  console.log(name, actions.map(a => a.actionType));
+}
+```
+
+### Return value
+
+```ts
+interface UseActionDiscoveryResult {
+  /** Map of connector name to supported action descriptors. */
+  connectors: Record<string, ActionDescriptor[]>;
+  /** Whether discovery is loading. */
+  isLoading: boolean;
+  /** Error from the last fetch, or null. */
+  error: LakeSyncError | null;
+  /** Manually re-fetch available actions. */
+  refetch: () => void;
+}
+```
+
+- **`connectors`** — empty object when no action handlers are registered or transport doesn't support discovery.
+- Fetches on mount; call `refetch()` if handlers change at runtime.
+- `ActionDescriptor` includes `actionType`, `description`, and optional `paramsSchema`.
+
 ## Full Example
 
 ```tsx
-import { LocalDB, SyncCoordinator, LocalTransport } from "@lakesync/client";
-import { LakeSyncProvider, useQuery, useMutation, useSyncStatus } from "@lakesync/react";
+import { LocalDB, SyncCoordinator, HttpTransport } from "@lakesync/client";
+import { MemoryActionQueue } from "@lakesync/client";
+import {
+  LakeSyncProvider,
+  useQuery,
+  useMutation,
+  useSyncStatus,
+  useAction,
+  useActionDiscovery,
+} from "@lakesync/react";
 
 // Setup (once, outside React)
-const db = await LocalDB.open({ name: "todos", backend: "memory" });
-const coordinator = new SyncCoordinator(db.value, transport);
+const db = (await LocalDB.open({ name: "app" })).value!;
+const transport = new HttpTransport({
+  baseUrl: "https://gateway.example.com",
+  gatewayId: "my-gw",
+  token: "...",
+});
+const coordinator = new SyncCoordinator(db, transport, {
+  actionQueue: new MemoryActionQueue(),
+});
 coordinator.startAutoSync();
 
 function App() {
   return (
     <LakeSyncProvider coordinator={coordinator}>
-      <TodoList />
+      <Dashboard />
     </LakeSyncProvider>
   );
 }
 
-function TodoList() {
+function Dashboard() {
   const { data: todos, isLoading } = useQuery<Todo>("SELECT * FROM todos");
-  const { insert } = useMutation();
-  const { queueDepth } = useSyncStatus();
+  const { insert, remove } = useMutation();
+  const { queueDepth, error: syncError } = useSyncStatus();
+  const { execute, isPending } = useAction();
+  const { connectors } = useActionDiscovery();
 
   if (isLoading) return <p>Loading...</p>;
 
   return (
     <div>
-      <p>{queueDepth} pending</p>
+      <header>
+        <span>{queueDepth} pending</span>
+        {syncError && <span>Sync error: {syncError.message}</span>}
+      </header>
+
       <button onClick={() => insert("todos", crypto.randomUUID(), { text: "New", done: 0 })}>
-        Add
+        Add Todo
       </button>
+
       <ul>
-        {todos.map(t => <li key={t._rowId}>{t.text}</li>)}
+        {todos.map(t => (
+          <li key={t._rowId}>
+            {t.text}
+            <button onClick={() => remove("todos", t._rowId)}>Delete</button>
+          </li>
+        ))}
       </ul>
+
+      {/* Dynamic action buttons from discovery */}
+      {Object.entries(connectors).map(([connector, actions]) =>
+        actions.map(action => (
+          <button
+            key={`${connector}:${action.actionType}`}
+            disabled={isPending}
+            onClick={() => execute({
+              connector,
+              actionType: action.actionType,
+              params: { /* action-specific params */ },
+            })}
+          >
+            {action.description}
+          </button>
+        ))
+      )}
     </div>
   );
 }
 ```
+
+## Hooks Summary
+
+| Hook | Purpose |
+|------|---------|
+| `useLakeSync()` | Raw SDK access (coordinator, tracker, invalidate) |
+| `useQuery(sql, params?)` | Reactive SQL queries with auto re-run |
+| `useMutation()` | Insert, update, remove with auto query invalidation |
+| `useSyncStatus()` | Sync lifecycle (syncing, queue depth, errors) |
+| `useAction()` | Execute imperative actions against connectors |
+| `useActionDiscovery()` | Discover available connectors and action types |

@@ -1,17 +1,7 @@
-import type { DatabaseAdapter } from "@lakesync/adapter";
-import { type HLCTimestamp, Ok } from "@lakesync/core";
-import { describe, expect, it, vi } from "vitest";
+import type { HLCTimestamp } from "@lakesync/core";
+import { describe, expect, it } from "vitest";
 import { SyncGateway } from "../gateway";
-
-function createMockAdapter(): DatabaseAdapter {
-	return {
-		insertDeltas: vi.fn().mockResolvedValue(Ok(undefined)),
-		queryDeltasSince: vi.fn().mockResolvedValue(Ok([])),
-		getLatestState: vi.fn().mockResolvedValue(Ok(null)),
-		ensureSchema: vi.fn().mockResolvedValue(Ok(undefined)),
-		close: vi.fn().mockResolvedValue(undefined),
-	};
-}
+import { createMockDatabaseAdapter } from "./helpers";
 
 describe("SyncGateway source management", () => {
 	it("listSources returns empty array initially", () => {
@@ -29,7 +19,7 @@ describe("SyncGateway source management", () => {
 			maxBufferBytes: 4_000_000,
 			maxBufferAgeMs: 30_000,
 		});
-		const adapter = createMockAdapter();
+		const adapter = createMockDatabaseAdapter();
 		gw.registerSource("pg-source", adapter);
 		expect(gw.listSources()).toEqual(["pg-source"]);
 	});
@@ -40,7 +30,7 @@ describe("SyncGateway source management", () => {
 			maxBufferBytes: 4_000_000,
 			maxBufferAgeMs: 30_000,
 		});
-		const adapter = createMockAdapter();
+		const adapter = createMockDatabaseAdapter();
 		gw.registerSource("pg-source", adapter);
 		gw.unregisterSource("pg-source");
 		expect(gw.listSources()).toEqual([]);
@@ -52,8 +42,8 @@ describe("SyncGateway source management", () => {
 			maxBufferBytes: 4_000_000,
 			maxBufferAgeMs: 30_000,
 		});
-		const adapter1 = createMockAdapter();
-		const adapter2 = createMockAdapter();
+		const adapter1 = createMockDatabaseAdapter();
+		const adapter2 = createMockDatabaseAdapter();
 		gw.registerSource("source", adapter1);
 		gw.registerSource("source", adapter2);
 		expect(gw.listSources()).toEqual(["source"]);
@@ -65,7 +55,7 @@ describe("SyncGateway source management", () => {
 			maxBufferBytes: 4_000_000,
 			maxBufferAgeMs: 30_000,
 		});
-		const adapter = createMockAdapter();
+		const adapter = createMockDatabaseAdapter();
 		gw.registerSource("my-src", adapter);
 
 		const result = await gw.handlePull({

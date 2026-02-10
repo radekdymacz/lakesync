@@ -109,6 +109,8 @@ class SyncCoordinator {
   pushToGateway(): Promise<void>;
   pullFromGateway(source?: string): Promise<number>;
   pullFrom(source: string): Promise<number>;
+  executeAction(params: { connector: string; actionType: string; params: Record<string, unknown>; idempotencyKey?: string }): Promise<void>;
+  describeActions(): Promise<Result<ActionDiscovery, LakeSyncError>>;
   startAutoSync(): void;
   stopAutoSync(): void;
   queueDepth(): Promise<number>;
@@ -118,10 +120,12 @@ class SyncCoordinator {
 }
 ```
 
-- **`syncOnce()`** — Perform a single sync cycle (pull then push, depending on `syncMode`). Includes initial checkpoint download on first sync.
+- **`syncOnce()`** — Perform a single sync cycle (pull then push, depending on `syncMode`). Includes initial checkpoint download on first sync. Also processes pending actions.
 - **`pushToGateway()`** — Push pending deltas from the queue to the gateway.
 - **`pullFromGateway(source?)`** — Pull remote deltas and apply them locally. Pass a `source` name for adapter-sourced pull.
 - **`pullFrom(source)`** — Convenience wrapper for `pullFromGateway(source)`.
+- **`executeAction(params)`** — Queue an imperative action for execution. Generates `actionId` and HLC automatically. Requires an `actionQueue` in config. Emits `onActionComplete` when the gateway responds.
+- **`describeActions()`** — Discover available connectors and their supported action types from the gateway. Returns empty connectors when the transport doesn't support discovery.
 - **`startAutoSync()`** — Start periodic sync + visibility change handler. Connects realtime transport if available.
 - **`stopAutoSync()`** — Stop periodic sync, remove listeners, disconnect transport.
 
@@ -136,11 +140,15 @@ interface SyncCoordinatorConfig {
   syncMode?: SyncMode;
   autoSyncIntervalMs?: number;       // default 10000 (10s)
   realtimeHeartbeatMs?: number;       // default 60000 (60s)
+  actionQueue?: ActionQueue;          // required for executeAction()
+  maxActionRetries?: number;          // default 5
 }
 ```
 
 - **`autoSyncIntervalMs`** — Polling interval for HTTP transports. Default 10 seconds.
 - **`realtimeHeartbeatMs`** — Polling interval when a realtime transport is active. Default 60 seconds. Acts as a safety net for deltas missed during brief disconnects.
+- **`actionQueue`** — Queue for imperative actions. Required to use `executeAction()`. Use `MemoryActionQueue` for development or `IDBActionQueue` for persistence.
+- **`maxActionRetries`** — Maximum retries before dead-lettering an action. Default 5.
 
 ### `SyncMode`
 
@@ -159,8 +167,11 @@ interface SyncEvents {
   onChange: (count: number) => void;
   onSyncComplete: () => void;
   onError: (error: Error) => void;
+  onActionComplete: (actionId: string, result: ActionResult | ActionErrorResult) => void;
 }
 ```
+
+- **`onActionComplete`** — Fired when an action succeeds or fails non-retryably. Check `"data" in result` to distinguish `ActionResult` from `ActionErrorResult`.
 
 ## Transports
 

@@ -1,20 +1,9 @@
-import type { DeltaOp, HLCTimestamp, RowDelta, SyncRulesContext } from "@lakesync/core";
+import type { SyncRulesContext } from "@lakesync/core";
 import { HLC } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
 import { SyncGateway } from "../gateway";
 import type { GatewayConfig } from "../types";
-
-function makeDelta(opts: Partial<RowDelta> & { hlc: HLCTimestamp }): RowDelta {
-	return {
-		op: (opts.op ?? "INSERT") as DeltaOp,
-		table: opts.table ?? "todos",
-		rowId: opts.rowId ?? `row-${Math.random().toString(36).slice(2)}`,
-		clientId: opts.clientId ?? "client-a",
-		columns: opts.columns ?? [{ column: "title", value: "Test" }],
-		hlc: opts.hlc,
-		deltaId: opts.deltaId ?? `delta-${Math.random().toString(36).slice(2)}`,
-	};
-}
+import { makeDelta } from "./helpers";
 
 function makeConfig(): GatewayConfig {
 	return {

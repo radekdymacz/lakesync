@@ -1,5 +1,7 @@
 export type { LakeSyncContextValue, LakeSyncProviderProps } from "./context";
 export { LakeSyncProvider, useLakeSync } from "./context";
+export type { ActionParams, UseActionDiscoveryResult, UseActionResult } from "./use-action";
+export { useAction, useActionDiscovery } from "./use-action";
 export type { UseMutationResult } from "./use-mutation";
 export { useMutation } from "./use-mutation";
 export type { UseQueryResult } from "./use-query";

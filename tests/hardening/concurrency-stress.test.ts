@@ -293,10 +293,11 @@ describe("Concurrency Stress", () => {
 		// Pull in a loop until no more
 		// Pull until complete
 		let pulled: number;
+		let _total = 0;
 		do {
 			clock.tick();
 			pulled = await reader.coordinator.pullFromGateway();
-			total += pulled;
+			_total += pulled;
 		} while (pulled > 0);
 
 		const rows = unwrapOrThrow(
@@ -452,9 +453,10 @@ describe("Concurrency Stress", () => {
 		clock.tick();
 		// Pull until complete
 		let pulled: number;
+		let _total = 0;
 		do {
 			pulled = await reader.coordinator.pullFromGateway();
-			total += pulled;
+			_total += pulled;
 		} while (pulled > 0);
 
 		const rows = unwrapOrThrow(

@@ -6,24 +6,33 @@ import {
 	type LakeAdapter,
 } from "@lakesync/adapter";
 import type {
-	ActionPush,
-	ConnectorConfig,
 	HLCTimestamp,
 	ResolvedClaims,
 	RowDelta,
-	SyncRulesConfig,
+	SyncResponse,
 	SyncRulesContext,
-	TableSchema,
 } from "@lakesync/core";
+import { bigintReplacer, filterDeltas, isActionHandler } from "@lakesync/core";
+import type { ConfigStore } from "@lakesync/gateway";
 import {
-	bigintReplacer,
-	bigintReviver,
-	filterDeltas,
-	isActionHandler,
-	validateConnectorConfig,
-	validateSyncRules,
-} from "@lakesync/core";
-import { SyncGateway, type SyncPull, type SyncPush } from "@lakesync/gateway";
+	DEFAULT_MAX_BUFFER_AGE_MS,
+	DEFAULT_MAX_BUFFER_BYTES,
+	type HandlerResult,
+	handleActionRequest,
+	handleFlushRequest,
+	handleListConnectors,
+	handleMetrics,
+	handlePullRequest,
+	handlePushRequest,
+	handleRegisterConnector,
+	handleSaveSchema,
+	handleSaveSyncRules,
+	handleUnregisterConnector,
+	MAX_PUSH_PAYLOAD_BYTES,
+	MemoryConfigStore,
+	SyncGateway,
+	type SyncPush,
+} from "@lakesync/gateway";
 import {
 	decodeSyncPull,
 	decodeSyncPush,
@@ -82,14 +91,7 @@ export interface GatewayServerConfig {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_PORT = 3000;
-const DEFAULT_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
-const DEFAULT_MAX_BUFFER_AGE_MS = 30_000;
 const DEFAULT_FLUSH_INTERVAL_MS = 30_000;
-const MAX_PUSH_PAYLOAD_BYTES = 1_048_576;
-const MAX_DELTAS_PER_PUSH = 10_000;
-const MAX_PULL_LIMIT = 10_000;
-const DEFAULT_PULL_LIMIT = 100;
-const VALID_COLUMN_TYPES = new Set(["string", "number", "boolean", "json", "null"]);
 const ADMIN_ACTIONS = new Set([
 	"flush",
 	"schema",
@@ -180,6 +182,15 @@ function sendError(
 	sendJson(res, { error: message }, status, extraHeaders);
 }
 
+/** Send a HandlerResult as HTTP response. */
+function sendResult(
+	res: ServerResponse,
+	result: HandlerResult,
+	corsH: Record<string, string>,
+): void {
+	sendJson(res, result.body, result.status, corsH);
+}
+
 // ---------------------------------------------------------------------------
 // Poller interface — shared lifecycle contract for all pollers
 // ---------------------------------------------------------------------------
@@ -219,14 +230,12 @@ export class GatewayServer {
 		GatewayServerConfig;
 	private httpServer: Server | null = null;
 	private flushTimer: ReturnType<typeof setInterval> | null = null;
-	private schemas = new Map<string, TableSchema>();
-	private syncRules = new Map<string, SyncRulesConfig>();
+	private configStore: ConfigStore;
 	private persistence: DeltaPersistence;
 	private resolvedPort = 0;
 	private wss: WebSocketServer | null = null;
 	private wsClients = new Map<WsWebSocket, { clientId: string; claims: Record<string, unknown> }>();
 	private pollers: SourcePoller[] = [];
-	private connectorConfigs = new Map<string, ConnectorConfig>();
 	private connectorAdapters = new Map<string, DatabaseAdapter>();
 	private connectorPollers = new Map<string, Poller>();
 	private sharedBuffer: SharedBuffer | null = null;
@@ -246,6 +255,8 @@ export class GatewayServer {
 			},
 			config.adapter,
 		);
+
+		this.configStore = new MemoryConfigStore();
 
 		this.persistence =
 			config.persistence === "sqlite"
@@ -425,7 +436,7 @@ export class GatewayServer {
 				return;
 			}
 
-			const context = this.buildWsSyncRulesContext(claims);
+			const context = await this.buildWsSyncRulesContext(claims);
 			// WebSocket pull is always from the buffer (no source adapter)
 			const pullResult = this.gateway.handlePull(
 				decoded.value,
@@ -451,8 +462,10 @@ export class GatewayServer {
 	/**
 	 * Build sync rules context from WebSocket client claims.
 	 */
-	private buildWsSyncRulesContext(claims: Record<string, unknown>): SyncRulesContext | undefined {
-		const rules = this.syncRules.get(this.config.gatewayId);
+	private async buildWsSyncRulesContext(
+		claims: Record<string, unknown>,
+	): Promise<SyncRulesContext | undefined> {
+		const rules = await this.configStore.getSyncRules(this.config.gatewayId);
 		if (!rules || rules.buckets.length === 0) {
 			return undefined;
 		}
@@ -469,7 +482,18 @@ export class GatewayServer {
 	): void {
 		if (deltas.length === 0) return;
 
-		const rules = this.syncRules.get(this.config.gatewayId);
+		// Read sync rules synchronously from the config store's cache.
+		// MemoryConfigStore's getSyncRules resolves immediately, but we need
+		// to handle it as a microtask to avoid making broadcastDeltas async.
+		void this.broadcastDeltasAsync(deltas, serverHlc, excludeClientId);
+	}
+
+	private async broadcastDeltasAsync(
+		deltas: RowDelta[],
+		serverHlc: HLCTimestamp,
+		excludeClientId: string,
+	): Promise<void> {
+		const rules = await this.configStore.getSyncRules(this.config.gatewayId);
 
 		for (const [ws, meta] of this.wsClients) {
 			if (meta.clientId === excludeClientId) continue;
@@ -512,7 +536,6 @@ export class GatewayServer {
 			await adapter.close();
 		}
 		this.connectorAdapters.clear();
-		this.connectorConfigs.clear();
 
 		// Stop ingest pollers
 		for (const poller of this.pollers) {
@@ -641,10 +664,10 @@ export class GatewayServer {
 				await this.handleFlush(res, corsH);
 				break;
 			case "schema":
-				await this.handleSaveSchema(req, res, corsH);
+				await this.handleSaveSchemaRoute(req, res, corsH);
 				break;
 			case "sync-rules":
-				await this.handleSaveSyncRules(req, res, corsH);
+				await this.handleSaveSyncRulesRoute(req, res, corsH);
 				break;
 			case "register-connector":
 				await this.handleRegisterConnector(req, res, corsH);
@@ -653,10 +676,10 @@ export class GatewayServer {
 				await this.handleUnregisterConnector(route.connectorName!, res, corsH);
 				break;
 			case "list-connectors":
-				this.handleListConnectors(res, corsH);
+				await this.handleListConnectorsRoute(res, corsH);
 				break;
 			case "metrics":
-				this.handleMetrics(res, corsH);
+				this.handleMetricsRoute(res, corsH);
 				break;
 			default:
 				sendError(res, "Not found", 404, corsH);
@@ -664,7 +687,7 @@ export class GatewayServer {
 	}
 
 	// -----------------------------------------------------------------------
-	// Route handlers
+	// Route handlers — thin wrappers around shared request handlers
 	// -----------------------------------------------------------------------
 
 	/**
@@ -676,68 +699,30 @@ export class GatewayServer {
 		corsH: Record<string, string>,
 		auth?: AuthClaims,
 	): Promise<void> {
+		// Content-Length guard stays in server (before reading body)
 		const contentLength = Number(req.headers["content-length"] ?? "0");
 		if (contentLength > MAX_PUSH_PAYLOAD_BYTES) {
 			sendError(res, "Payload too large (max 1 MiB)", 413, corsH);
 			return;
 		}
 
-		let body: SyncPush;
-		try {
-			const raw = await readBody(req);
-			body = JSON.parse(raw, bigintReviver) as SyncPush;
-		} catch {
-			sendError(res, "Invalid JSON body", 400, corsH);
-			return;
+		const raw = await readBody(req);
+		const result = handlePushRequest(this.gateway, raw, auth?.clientId, {
+			persistBatch: (deltas) => this.persistence.appendBatch(deltas),
+			clearPersistence: () => this.persistence.clear(),
+			broadcastFn: (deltas, serverHlc, excludeClientId) =>
+				this.broadcastDeltas(deltas, serverHlc, excludeClientId),
+		});
+
+		// Shared buffer write-through for cross-instance visibility
+		if (result.status === 200 && this.sharedBuffer) {
+			const pushResult = result.body as { deltas: RowDelta[]; serverHlc: HLCTimestamp };
+			if (pushResult.deltas.length > 0) {
+				await this.sharedBuffer.writeThroughPush(pushResult.deltas);
+			}
 		}
 
-		if (!body.clientId || !Array.isArray(body.deltas)) {
-			sendError(res, "Missing required fields: clientId, deltas", 400, corsH);
-			return;
-		}
-
-		if (auth && body.clientId !== auth.clientId) {
-			sendError(
-				res,
-				"Client ID mismatch: push clientId does not match authenticated identity",
-				403,
-				corsH,
-			);
-			return;
-		}
-
-		if (body.deltas.length > MAX_DELTAS_PER_PUSH) {
-			sendError(res, "Too many deltas in a single push (max 10,000)", 400, corsH);
-			return;
-		}
-
-		// Persist before processing (WAL-style)
-		this.persistence.appendBatch(body.deltas);
-
-		const result = this.gateway.handlePush(body);
-
-		if (!result.ok) {
-			const statusByCode: Record<string, number> = {
-				CLOCK_DRIFT: 409,
-				SCHEMA_MISMATCH: 422,
-				BACKPRESSURE: 503,
-			};
-			sendError(res, result.error.message, statusByCode[result.error.code] ?? 500, corsH);
-			return;
-		}
-
-		// Clear persisted deltas on success — they are now in the in-memory buffer
-		this.persistence.clear();
-
-		// Write-through to shared adapter for cross-instance visibility
-		if (this.sharedBuffer && result.value.deltas.length > 0) {
-			await this.sharedBuffer.writeThroughPush(result.value.deltas);
-		}
-
-		// Broadcast to connected WebSocket clients
-		this.broadcastDeltas(result.value.deltas, result.value.serverHlc, body.clientId);
-
-		sendJson(res, result.value, 200, corsH);
+		sendResult(res, result, corsH);
 	}
 
 	/**
@@ -749,54 +734,34 @@ export class GatewayServer {
 		corsH: Record<string, string>,
 		auth?: AuthClaims,
 	): Promise<void> {
-		const sinceParam = url.searchParams.get("since");
-		const clientId = url.searchParams.get("clientId");
-		const limitParam = url.searchParams.get("limit");
-		const source = url.searchParams.get("source");
+		const syncRules = await this.configStore.getSyncRules(this.config.gatewayId);
+		const result = await handlePullRequest(
+			this.gateway,
+			{
+				since: url.searchParams.get("since"),
+				clientId: url.searchParams.get("clientId"),
+				limit: url.searchParams.get("limit"),
+				source: url.searchParams.get("source"),
+			},
+			auth?.customClaims,
+			syncRules,
+		);
 
-		if (!sinceParam || !clientId) {
-			sendError(res, "Missing required query params: since, clientId", 400, corsH);
-			return;
-		}
-
-		let sinceHlc: HLCTimestamp;
-		try {
-			sinceHlc = BigInt(sinceParam) as HLCTimestamp;
-		} catch {
-			sendError(res, "Invalid 'since' parameter — must be a decimal integer", 400, corsH);
-			return;
-		}
-
-		const rawLimit = limitParam ? Number.parseInt(limitParam, 10) : DEFAULT_PULL_LIMIT;
-		if (Number.isNaN(rawLimit) || rawLimit < 1) {
-			sendError(res, "Invalid 'limit' parameter — must be a positive integer", 400, corsH);
-			return;
-		}
-		const maxDeltas = Math.min(rawLimit, MAX_PULL_LIMIT);
-
-		const msg: SyncPull = { clientId, sinceHlc, maxDeltas, ...(source ? { source } : {}) };
-		const context = this.buildSyncRulesContext(auth);
-
-		const result = source
-			? await this.gateway.handlePull(msg as SyncPull & { source: string }, context)
-			: this.gateway.handlePull(msg, context);
-
-		if (!result.ok) {
-			const err = result.error;
-			if (err.code === "ADAPTER_NOT_FOUND") {
-				sendError(res, err.message, 404, corsH);
-				return;
+		// Merge with shared buffer for cross-instance visibility
+		let body = result.body;
+		if (result.status === 200 && this.sharedBuffer) {
+			const sinceParam = url.searchParams.get("since");
+			if (sinceParam) {
+				try {
+					const sinceHlc = BigInt(sinceParam) as HLCTimestamp;
+					body = await this.sharedBuffer.mergePull(body as SyncResponse, sinceHlc);
+				} catch {
+					// If since parsing fails, pull handler already returned an error
+				}
 			}
-			sendError(res, err.message, 500, corsH);
-			return;
 		}
 
-		let response = result.value;
-		// Merge with shared adapter for cross-instance visibility
-		if (this.sharedBuffer) {
-			response = await this.sharedBuffer.mergePull(response, sinceHlc);
-		}
-		sendJson(res, response, 200, corsH);
+		sendJson(res, body, result.status, corsH);
 	}
 
 	/**
@@ -808,39 +773,9 @@ export class GatewayServer {
 		corsH: Record<string, string>,
 		auth?: AuthClaims,
 	): Promise<void> {
-		let body: ActionPush;
-		try {
-			const raw = await readBody(req);
-			body = JSON.parse(raw, bigintReviver) as ActionPush;
-		} catch {
-			sendError(res, "Invalid JSON body", 400, corsH);
-			return;
-		}
-
-		if (!body.clientId || !Array.isArray(body.actions)) {
-			sendError(res, "Missing required fields: clientId, actions", 400, corsH);
-			return;
-		}
-
-		if (auth && body.clientId !== auth.clientId) {
-			sendError(
-				res,
-				"Client ID mismatch: action clientId does not match authenticated identity",
-				403,
-				corsH,
-			);
-			return;
-		}
-
-		const context = auth?.customClaims ? { claims: auth.customClaims } : undefined;
-		const result = await this.gateway.handleAction(body, context);
-
-		if (!result.ok) {
-			sendError(res, result.error.message, 400, corsH);
-			return;
-		}
-
-		sendJson(res, result.value, 200, corsH);
+		const raw = await readBody(req);
+		const result = await handleActionRequest(this.gateway, raw, auth?.clientId, auth?.customClaims);
+		sendResult(res, result, corsH);
 	}
 
 	/** Handle `GET /sync/:gatewayId/actions` -- describe available action handlers. */
@@ -850,78 +785,32 @@ export class GatewayServer {
 
 	/** Handle `POST /admin/flush/:gatewayId` -- manual flush. */
 	private async handleFlush(res: ServerResponse, corsH: Record<string, string>): Promise<void> {
-		const result = await this.gateway.flush();
-		if (!result.ok) {
-			sendError(res, result.error.message, 500, corsH);
-			return;
-		}
-		this.persistence.clear();
-		sendJson(res, { flushed: true }, 200, corsH);
+		const result = await handleFlushRequest(this.gateway, {
+			clearPersistence: () => this.persistence.clear(),
+		});
+		sendResult(res, result, corsH);
 	}
 
 	/** Handle `POST /admin/schema/:gatewayId` -- save table schema. */
-	private async handleSaveSchema(
+	private async handleSaveSchemaRoute(
 		req: IncomingMessage,
 		res: ServerResponse,
 		corsH: Record<string, string>,
 	): Promise<void> {
-		let schema: TableSchema;
-		try {
-			const raw = await readBody(req);
-			schema = JSON.parse(raw) as TableSchema;
-		} catch {
-			sendError(res, "Invalid JSON body", 400, corsH);
-			return;
-		}
-
-		if (!schema.table || !Array.isArray(schema.columns)) {
-			sendError(res, "Missing required fields: table, columns", 400, corsH);
-			return;
-		}
-
-		for (const col of schema.columns) {
-			if (typeof col.name !== "string" || col.name.length === 0) {
-				sendError(res, "Each column must have a non-empty 'name' string", 400, corsH);
-				return;
-			}
-			if (!VALID_COLUMN_TYPES.has(col.type)) {
-				sendError(
-					res,
-					`Invalid column type "${col.type}" for column "${col.name}". Allowed: string, number, boolean, json, null`,
-					400,
-					corsH,
-				);
-				return;
-			}
-		}
-
-		this.schemas.set(this.config.gatewayId, schema);
-		sendJson(res, { saved: true }, 200, corsH);
+		const raw = await readBody(req);
+		const result = await handleSaveSchema(raw, this.configStore, this.config.gatewayId);
+		sendResult(res, result, corsH);
 	}
 
 	/** Handle `POST /admin/sync-rules/:gatewayId` -- save sync rules. */
-	private async handleSaveSyncRules(
+	private async handleSaveSyncRulesRoute(
 		req: IncomingMessage,
 		res: ServerResponse,
 		corsH: Record<string, string>,
 	): Promise<void> {
-		let config: unknown;
-		try {
-			const raw = await readBody(req);
-			config = JSON.parse(raw);
-		} catch {
-			sendError(res, "Invalid JSON body", 400, corsH);
-			return;
-		}
-
-		const validation = validateSyncRules(config);
-		if (!validation.ok) {
-			sendError(res, validation.error.message, 400, corsH);
-			return;
-		}
-
-		this.syncRules.set(this.config.gatewayId, config as SyncRulesConfig);
-		sendJson(res, { saved: true }, 200, corsH);
+		const raw = await readBody(req);
+		const result = await handleSaveSyncRules(raw, this.configStore, this.config.gatewayId);
+		sendResult(res, result, corsH);
 	}
 
 	// -----------------------------------------------------------------------
@@ -934,25 +823,21 @@ export class GatewayServer {
 		res: ServerResponse,
 		corsH: Record<string, string>,
 	): Promise<void> {
-		let body: unknown;
-		try {
-			const raw = await readBody(req);
-			body = JSON.parse(raw);
-		} catch {
-			sendError(res, "Invalid JSON body", 400, corsH);
+		const raw = await readBody(req);
+
+		// Use shared handler for validation and ConfigStore registration
+		const result = await handleRegisterConnector(raw, this.configStore);
+		if (result.status !== 200) {
+			sendResult(res, result, corsH);
 			return;
 		}
 
-		const validation = validateConnectorConfig(body);
-		if (!validation.ok) {
-			sendError(res, validation.error.message, 400, corsH);
-			return;
-		}
-
-		const config = validation.value;
-
-		if (this.connectorConfigs.has(config.name)) {
-			sendError(res, `Connector "${config.name}" already exists`, 409, corsH);
+		// Extract the registered config from the ConfigStore
+		const connectors = await this.configStore.getConnectors();
+		const registeredName = (result.body as { name: string }).name;
+		const config = connectors[registeredName];
+		if (!config) {
+			sendResult(res, result, corsH);
 			return;
 		}
 
@@ -964,9 +849,11 @@ export class GatewayServer {
 				const poller = new JiraSourcePoller(config.jira, ingestConfig, config.name, this.gateway);
 				poller.start();
 				this.connectorPollers.set(config.name, poller);
-				this.connectorConfigs.set(config.name, config);
-				sendJson(res, { registered: true, name: config.name }, 200, corsH);
+				sendResult(res, result, corsH);
 			} catch (err) {
+				// Rollback ConfigStore registration on failure
+				delete connectors[registeredName];
+				await this.configStore.setConnectors(connectors);
 				const message = err instanceof Error ? err.message : String(err);
 				sendError(res, `Failed to load Jira connector: ${message}`, 500, corsH);
 			}
@@ -986,9 +873,11 @@ export class GatewayServer {
 				);
 				poller.start();
 				this.connectorPollers.set(config.name, poller);
-				this.connectorConfigs.set(config.name, config);
-				sendJson(res, { registered: true, name: config.name }, 200, corsH);
+				sendResult(res, result, corsH);
 			} catch (err) {
+				// Rollback ConfigStore registration on failure
+				delete connectors[registeredName];
+				await this.configStore.setConnectors(connectors);
 				const message = err instanceof Error ? err.message : String(err);
 				sendError(res, `Failed to load Salesforce connector: ${message}`, 500, corsH);
 			}
@@ -998,6 +887,9 @@ export class GatewayServer {
 		// Create the database adapter
 		const adapterResult = createDatabaseAdapter(config);
 		if (!adapterResult.ok) {
+			// Rollback ConfigStore registration on failure
+			delete connectors[registeredName];
+			await this.configStore.setConnectors(connectors);
 			sendError(res, adapterResult.error.message, 500, corsH);
 			return;
 		}
@@ -1006,7 +898,6 @@ export class GatewayServer {
 
 		// Register with the gateway
 		this.gateway.registerSource(config.name, adapter);
-		this.connectorConfigs.set(config.name, config);
 		this.connectorAdapters.set(config.name, adapter);
 
 		// Auto-register as action handler if the adapter supports actions
@@ -1035,7 +926,7 @@ export class GatewayServer {
 			}
 		}
 
-		sendJson(res, { registered: true, name: config.name }, 200, corsH);
+		sendResult(res, result, corsH);
 	}
 
 	/** Handle `DELETE /admin/connectors/:gatewayId/:name` -- unregister a connector. */
@@ -1044,8 +935,10 @@ export class GatewayServer {
 		res: ServerResponse,
 		corsH: Record<string, string>,
 	): Promise<void> {
-		if (!this.connectorConfigs.has(name)) {
-			sendError(res, `Connector "${name}" not found`, 404, corsH);
+		// Use shared handler for ConfigStore removal
+		const result = await handleUnregisterConnector(name, this.configStore);
+		if (result.status !== 200) {
+			sendResult(res, result, corsH);
 			return;
 		}
 
@@ -1066,27 +959,36 @@ export class GatewayServer {
 		// Unregister from gateway
 		this.gateway.unregisterSource(name);
 		this.gateway.unregisterActionHandler(name);
-		this.connectorConfigs.delete(name);
 
-		sendJson(res, { unregistered: true, name }, 200, corsH);
+		sendResult(res, result, corsH);
 	}
 
 	/** Handle `GET /admin/connectors/:gatewayId` -- list registered connectors. */
-	private handleListConnectors(res: ServerResponse, corsH: Record<string, string>): void {
-		const list = Array.from(this.connectorConfigs.values()).map((c) => ({
-			name: c.name,
-			type: c.type,
-			hasIngest: c.ingest !== undefined,
+	private async handleListConnectorsRoute(
+		res: ServerResponse,
+		corsH: Record<string, string>,
+	): Promise<void> {
+		// Use shared handler to get base list, then augment with polling status
+		const result = await handleListConnectors(this.configStore);
+		if (result.status !== 200) {
+			sendResult(res, result, corsH);
+			return;
+		}
+
+		// Augment the list with live polling status
+		const list = result.body as Array<{ name: string; type: string; hasIngest: boolean }>;
+		const augmented = list.map((c) => ({
+			...c,
 			isPolling: this.connectorPollers.get(c.name)?.isRunning ?? false,
 		}));
 
-		sendJson(res, list, 200, corsH);
+		sendJson(res, augmented, 200, corsH);
 	}
 
 	/** Handle `GET /admin/metrics/:gatewayId` -- return buffer stats and process memory. */
-	private handleMetrics(res: ServerResponse, corsH: Record<string, string>): void {
-		const stats = this.gateway.bufferStats;
-		sendJson(res, { ...stats, process: process.memoryUsage() }, 200, corsH);
+	private handleMetricsRoute(res: ServerResponse, corsH: Record<string, string>): void {
+		const result = handleMetrics(this.gateway, { process: process.memoryUsage() });
+		sendResult(res, result, corsH);
 	}
 
 	// -----------------------------------------------------------------------
@@ -1118,20 +1020,6 @@ export class GatewayServer {
 				await lock.release(lockKey);
 			}
 		}
-	}
-
-	// -----------------------------------------------------------------------
-	// Sync rules context
-	// -----------------------------------------------------------------------
-
-	private buildSyncRulesContext(auth?: AuthClaims): SyncRulesContext | undefined {
-		const rules = this.syncRules.get(this.config.gatewayId);
-		if (!rules || rules.buckets.length === 0) {
-			return undefined;
-		}
-
-		const claims = auth?.customClaims ?? {};
-		return { claims, rules };
 	}
 
 	// -----------------------------------------------------------------------

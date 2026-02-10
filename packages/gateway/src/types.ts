@@ -13,14 +13,29 @@ export interface HandlePushResult {
 	deltas: RowDelta[];
 }
 
+/** Configuration for buffer thresholds (subset of GatewayConfig). */
+export interface BufferConfig {
+	/** Maximum buffer size in bytes before triggering flush. */
+	maxBufferBytes: number;
+	/** Maximum buffer age in milliseconds before triggering flush. */
+	maxBufferAgeMs: number;
+	/** Adaptive buffer configuration for wide-column deltas. */
+	adaptiveBufferConfig?: {
+		/** Average delta byte threshold above which flush triggers earlier. */
+		wideColumnThreshold: number;
+		/** Factor to reduce effective maxBufferBytes (0-1). */
+		reductionFactor: number;
+	};
+	/** Maximum buffer bytes before rejecting pushes (default: 2 × maxBufferBytes). */
+	maxBackpressureBytes?: number;
+	/** Maximum buffer bytes per table before auto-flushing that table. */
+	perTableBudgetBytes?: number;
+}
+
 /** Configuration for the sync gateway */
-export interface GatewayConfig {
+export interface GatewayConfig extends BufferConfig {
 	/** Unique gateway identifier */
 	gatewayId: string;
-	/** Maximum buffer size in bytes before triggering flush */
-	maxBufferBytes: number;
-	/** Maximum buffer age in milliseconds before triggering flush */
-	maxBufferAgeMs: number;
 	/** Flush output format. Defaults to "parquet". */
 	flushFormat?: "json" | "parquet";
 	/** Table schema — required for Parquet flush. */
@@ -33,17 +48,6 @@ export interface GatewayConfig {
 	adapter?: LakeAdapter | DatabaseAdapter;
 	/** Named source adapters for adapter-sourced pulls. */
 	sourceAdapters?: Record<string, DatabaseAdapter>;
-	/** Adaptive buffer configuration for wide-column deltas. */
-	adaptiveBufferConfig?: {
-		/** Average delta byte threshold above which flush triggers earlier. */
-		wideColumnThreshold: number;
-		/** Factor to reduce effective maxBufferBytes (0-1). */
-		reductionFactor: number;
-	};
-	/** Maximum buffer bytes before rejecting pushes (default: 2 × maxBufferBytes). */
-	maxBackpressureBytes?: number;
-	/** Maximum buffer bytes per table before auto-flushing that table. */
-	perTableBudgetBytes?: number;
 	/** Named action handlers for imperative action execution. */
 	actionHandlers?: Record<string, ActionHandler>;
 }

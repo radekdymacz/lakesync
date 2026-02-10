@@ -1,19 +1,9 @@
 import { type DatabaseAdapter, isDatabaseAdapter, type LakeAdapter } from "@lakesync/adapter";
 import {
-	buildPartitionSpec,
-	type DataFile,
-	lakeSyncTableName,
-	tableSchemaToIceberg,
-} from "@lakesync/catalogue";
-import {
-	type Action,
-	type ActionDescriptor,
 	type ActionDiscovery,
-	type ActionExecutionError,
 	type ActionHandler,
 	type ActionPush,
 	type ActionResponse,
-	type ActionResult,
 	type ActionValidationError,
 	type AdapterError,
 	AdapterNotFoundError,
@@ -24,7 +14,6 @@ import {
 	FlushError,
 	filterDeltas,
 	HLC,
-	type HLCTimestamp,
 	type IngestTarget,
 	Ok,
 	type Result,
@@ -36,58 +25,33 @@ import {
 	type SyncPush,
 	type SyncResponse,
 	type SyncRulesContext,
-	toError,
-	validateAction,
 } from "@lakesync/core";
-import { writeDeltasToParquet } from "@lakesync/parquet";
+import { ActionDispatcher } from "./action-dispatcher";
 import { DeltaBuffer } from "./buffer";
-import { bigintReplacer } from "./json";
-import type { FlushEnvelope, GatewayConfig, HandlePushResult } from "./types";
+import { flushEntries } from "./flush";
+import type { GatewayConfig, HandlePushResult } from "./types";
 
 export type { SyncPush, SyncPull, SyncResponse };
-
-/** Find the min and max HLC in a non-empty array of deltas. */
-function hlcRange(entries: RowDelta[]): { min: HLCTimestamp; max: HLCTimestamp } {
-	let min = entries[0]!.hlc;
-	let max = entries[0]!.hlc;
-	for (let i = 1; i < entries.length; i++) {
-		const hlc = entries[i]!.hlc;
-		if (HLC.compare(hlc, min) < 0) min = hlc;
-		if (HLC.compare(hlc, max) > 0) max = hlc;
-	}
-	return { min, max };
-}
 
 /**
  * Sync gateway -- coordinates delta ingestion, conflict resolution, and flush.
  *
- * Phase 1: plain TypeScript class (Phase 2 wraps in Cloudflare Durable Object).
+ * Thin facade composing ActionDispatcher, DeltaBuffer, and flushEntries.
  */
 export class SyncGateway implements IngestTarget {
 	private hlc: HLC;
-	private buffer: DeltaBuffer;
+	readonly buffer: DeltaBuffer;
+	readonly actions: ActionDispatcher;
 	private config: GatewayConfig;
 	private adapter: LakeAdapter | DatabaseAdapter | null;
 	private flushing = false;
-	private actionHandlers: Map<string, ActionHandler> = new Map();
-	private executedActions: Set<string> = new Set();
-	private idempotencyMap: Map<
-		string,
-		ActionResult | { actionId: string; code: string; message: string; retryable: boolean }
-	> = new Map();
 
 	constructor(config: GatewayConfig, adapter?: LakeAdapter | DatabaseAdapter) {
 		this.config = { sourceAdapters: {}, ...config };
 		this.hlc = new HLC();
 		this.buffer = new DeltaBuffer();
 		this.adapter = this.config.adapter ?? adapter ?? null;
-
-		// Register action handlers from config
-		if (config.actionHandlers) {
-			for (const [name, handler] of Object.entries(config.actionHandlers)) {
-				this.actionHandlers.set(name, handler);
-			}
-		}
+		this.actions = new ActionDispatcher(config.actionHandlers);
 	}
 
 	/** Restore drained entries back to the buffer for retry. */
@@ -279,8 +243,12 @@ export class SyncGateway implements IngestTarget {
 		return Ok({ deltas: sliced, serverHlc, hasMore });
 	}
 
+	// -----------------------------------------------------------------------
+	// Flush — delegates to flush module
+	// -----------------------------------------------------------------------
+
 	/**
-	 * Flush the buffer to the lake adapter.
+	 * Flush the buffer to the configured adapter.
 	 *
 	 * Writes deltas as either a Parquet file (default) or a JSON
 	 * {@link FlushEnvelope} to the adapter, depending on
@@ -302,131 +270,127 @@ export class SyncGateway implements IngestTarget {
 
 		this.flushing = true;
 
-		// Database adapter path — batch INSERT deltas directly
+		// Database adapter path — drain after flushing flag is set
 		if (isDatabaseAdapter(this.adapter)) {
 			const entries = this.buffer.drain();
 			if (entries.length === 0) {
 				this.flushing = false;
 				return Ok(undefined);
 			}
+
 			try {
-				const result = await this.adapter.insertDeltas(entries);
-				if (!result.ok) {
-					this.restoreEntries(entries);
-					return Err(new FlushError(`Database flush failed: ${result.error.message}`));
-				}
-				return Ok(undefined);
-			} catch (error: unknown) {
-				this.restoreEntries(entries);
-				return Err(new FlushError(`Unexpected database flush failure: ${toError(error).message}`));
+				return await flushEntries(entries, 0, {
+					adapter: this.adapter,
+					config: {
+						gatewayId: this.config.gatewayId,
+						flushFormat: this.config.flushFormat,
+						tableSchema: this.config.tableSchema,
+						catalogue: this.config.catalogue,
+					},
+					restoreEntries: (e) => this.restoreEntries(e),
+				});
 			} finally {
 				this.flushing = false;
 			}
 		}
 
-		// Lake adapter path — write to object storage as Parquet or JSON
+		// Lake adapter path
 		const byteSize = this.buffer.byteSize;
 		const entries = this.buffer.drain();
 
 		try {
-			const { min, max } = hlcRange(entries);
-			const date = new Date().toISOString().split("T")[0];
-			let objectKey: string;
-			let data: Uint8Array;
-			let contentType: string;
-
-			if (this.config.flushFormat === "json") {
-				const envelope: FlushEnvelope = {
-					version: 1,
+			return await flushEntries(entries, byteSize, {
+				adapter: this.adapter,
+				config: {
 					gatewayId: this.config.gatewayId,
-					createdAt: new Date().toISOString(),
-					hlcRange: { min, max },
-					deltaCount: entries.length,
-					byteSize,
-					deltas: entries,
-				};
-
-				objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.json`;
-				data = new TextEncoder().encode(JSON.stringify(envelope, bigintReplacer));
-				contentType = "application/json";
-			} else {
-				if (!this.config.tableSchema) {
-					this.restoreEntries(entries);
-					return Err(new FlushError("tableSchema required for Parquet flush"));
-				}
-
-				const parquetResult = await writeDeltasToParquet(entries, this.config.tableSchema);
-				if (!parquetResult.ok) {
-					this.restoreEntries(entries);
-					return Err(parquetResult.error);
-				}
-
-				objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.parquet`;
-				data = parquetResult.value;
-				contentType = "application/vnd.apache.parquet";
-			}
-
-			const result = await this.adapter.putObject(objectKey, data, contentType);
-			if (!result.ok) {
-				this.restoreEntries(entries);
-				return Err(new FlushError(`Failed to write flush envelope: ${result.error.message}`));
-			}
-
-			if (this.config.catalogue && this.config.tableSchema) {
-				await this.commitToCatalogue(objectKey, data.byteLength, entries.length);
-			}
-
-			return Ok(undefined);
-		} catch (error: unknown) {
-			this.restoreEntries(entries);
-			return Err(new FlushError(`Unexpected flush failure: ${toError(error).message}`));
+					flushFormat: this.config.flushFormat,
+					tableSchema: this.config.tableSchema,
+					catalogue: this.config.catalogue,
+				},
+				restoreEntries: (e) => this.restoreEntries(e),
+			});
 		} finally {
 			this.flushing = false;
 		}
 	}
 
 	/**
-	 * Best-effort catalogue commit. Registers the flushed Parquet file
-	 * as an Iceberg snapshot via Nessie. Errors are logged but do not
-	 * fail the flush — the Parquet file is the source of truth.
+	 * Flush a single table's deltas from the buffer.
+	 *
+	 * Drains only the specified table's deltas and flushes them,
+	 * leaving other tables in the buffer.
 	 */
-	private async commitToCatalogue(
-		objectKey: string,
-		fileSizeInBytes: number,
-		recordCount: number,
-	): Promise<void> {
-		const catalogue = this.config.catalogue!;
-		const schema = this.config.tableSchema!;
-
-		const { namespace, name } = lakeSyncTableName(schema.table);
-		const icebergSchema = tableSchemaToIceberg(schema);
-		const partitionSpec = buildPartitionSpec(icebergSchema);
-
-		// Ensure namespace exists (idempotent)
-		await catalogue.createNamespace(namespace);
-
-		// Ensure table exists (idempotent — catch 409)
-		const createResult = await catalogue.createTable(namespace, name, icebergSchema, partitionSpec);
-		if (!createResult.ok && createResult.error.statusCode !== 409) {
-			return;
+	async flushTable(table: string): Promise<Result<void, FlushError>> {
+		if (this.flushing) {
+			return Err(new FlushError("Flush already in progress"));
+		}
+		if (!this.adapter) {
+			return Err(new FlushError("No adapter configured"));
 		}
 
-		// Build DataFile reference
-		const dataFile: DataFile = {
-			content: "data",
-			"file-path": objectKey,
-			"file-format": "PARQUET",
-			"record-count": recordCount,
-			"file-size-in-bytes": fileSizeInBytes,
-		};
+		const entries = this.buffer.drainTable(table);
+		if (entries.length === 0) {
+			return Ok(undefined);
+		}
 
-		// Append file to table snapshot
-		const appendResult = await catalogue.appendFiles(namespace, name, [dataFile]);
-		if (!appendResult.ok && appendResult.error.statusCode === 409) {
-			// On 409 conflict, retry once with fresh metadata
-			await catalogue.appendFiles(namespace, name, [dataFile]);
+		this.flushing = true;
+
+		try {
+			return await flushEntries(
+				entries,
+				0,
+				{
+					adapter: this.adapter,
+					config: {
+						gatewayId: this.config.gatewayId,
+						flushFormat: this.config.flushFormat,
+						tableSchema: this.config.tableSchema,
+						catalogue: this.config.catalogue,
+					},
+					restoreEntries: (e) => this.restoreEntries(e),
+				},
+				table,
+			);
+		} finally {
+			this.flushing = false;
 		}
 	}
+
+	// -----------------------------------------------------------------------
+	// Actions — delegates to ActionDispatcher
+	// -----------------------------------------------------------------------
+
+	/** Handle an incoming action push from a client. */
+	async handleAction(
+		msg: ActionPush,
+		context?: AuthContext,
+	): Promise<Result<ActionResponse, ActionValidationError>> {
+		return this.actions.dispatch(msg, () => this.hlc.now(), context);
+	}
+
+	/** Register a named action handler. */
+	registerActionHandler(name: string, handler: ActionHandler): void {
+		this.actions.registerHandler(name, handler);
+	}
+
+	/** Unregister a named action handler. */
+	unregisterActionHandler(name: string): void {
+		this.actions.unregisterHandler(name);
+	}
+
+	/** List all registered action handler names. */
+	listActionHandlers(): string[] {
+		return this.actions.listHandlers();
+	}
+
+	/** Describe all registered action handlers and their supported actions. */
+	describeActions(): ActionDiscovery {
+		return this.actions.describe();
+	}
+
+	// -----------------------------------------------------------------------
+	// Source adapters
+	// -----------------------------------------------------------------------
 
 	/**
 	 * Register a named source adapter for adapter-sourced pulls.
@@ -456,93 +420,13 @@ export class SyncGateway implements IngestTarget {
 		return Object.keys(this.config.sourceAdapters!);
 	}
 
+	// -----------------------------------------------------------------------
+	// Buffer queries
+	// -----------------------------------------------------------------------
+
 	/** Get per-table buffer statistics. */
 	get tableStats(): Array<{ table: string; byteSize: number; deltaCount: number }> {
 		return this.buffer.tableStats();
-	}
-
-	/**
-	 * Flush a single table's deltas from the buffer.
-	 *
-	 * Drains only the specified table's deltas and flushes them,
-	 * leaving other tables in the buffer.
-	 */
-	async flushTable(table: string): Promise<Result<void, FlushError>> {
-		if (this.flushing) {
-			return Err(new FlushError("Flush already in progress"));
-		}
-		if (!this.adapter) {
-			return Err(new FlushError("No adapter configured"));
-		}
-
-		const entries = this.buffer.drainTable(table);
-		if (entries.length === 0) {
-			return Ok(undefined);
-		}
-
-		this.flushing = true;
-
-		// Database adapter path
-		if (isDatabaseAdapter(this.adapter)) {
-			try {
-				const result = await this.adapter.insertDeltas(entries);
-				if (!result.ok) {
-					this.restoreEntries(entries);
-					return Err(new FlushError(`Table flush failed: ${result.error.message}`));
-				}
-				return Ok(undefined);
-			} catch (error: unknown) {
-				this.restoreEntries(entries);
-				return Err(new FlushError(`Unexpected table flush failure: ${toError(error).message}`));
-			} finally {
-				this.flushing = false;
-			}
-		}
-
-		// Lake adapter path
-		try {
-			const { min, max } = hlcRange(entries);
-			const date = new Date().toISOString().split("T")[0];
-			let objectKey: string;
-			let data: Uint8Array;
-			let contentType: string;
-
-			if (this.config.flushFormat === "json" || !this.config.tableSchema) {
-				const envelope: FlushEnvelope = {
-					version: 1,
-					gatewayId: this.config.gatewayId,
-					createdAt: new Date().toISOString(),
-					hlcRange: { min, max },
-					deltaCount: entries.length,
-					byteSize: 0,
-					deltas: entries,
-				};
-				data = new TextEncoder().encode(JSON.stringify(envelope, bigintReplacer));
-				objectKey = `deltas/${date}/${this.config.gatewayId}/${table}-${min.toString()}-${max.toString()}.json`;
-				contentType = "application/json";
-			} else {
-				const parquetResult = await writeDeltasToParquet(entries, this.config.tableSchema);
-				if (!parquetResult.ok) {
-					this.restoreEntries(entries);
-					return Err(parquetResult.error);
-				}
-				data = parquetResult.value;
-				objectKey = `deltas/${date}/${this.config.gatewayId}/${table}-${min.toString()}-${max.toString()}.parquet`;
-				contentType = "application/vnd.apache.parquet";
-			}
-
-			const result = await this.adapter.putObject(objectKey, data, contentType);
-			if (!result.ok) {
-				this.restoreEntries(entries);
-				return Err(new FlushError(`Failed to write table flush: ${result.error.message}`));
-			}
-			return Ok(undefined);
-		} catch (error: unknown) {
-			this.restoreEntries(entries);
-			return Err(new FlushError(`Unexpected table flush failure: ${toError(error).message}`));
-		} finally {
-			this.flushing = false;
-		}
 	}
 
 	/**
@@ -584,164 +468,5 @@ export class SyncGateway implements IngestTarget {
 			indexSize: this.buffer.indexSize,
 			byteSize: this.buffer.byteSize,
 		};
-	}
-
-	// -----------------------------------------------------------------------
-	// Action handling
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Handle an incoming action push from a client.
-	 *
-	 * Iterates over actions, dispatches each to the registered ActionHandler
-	 * by connector name. Supports idempotency via actionId deduplication and
-	 * idempotencyKey mapping.
-	 *
-	 * @param msg - The action push containing one or more actions.
-	 * @param context - Optional auth context for permission checks.
-	 * @returns A `Result` containing results for each action.
-	 */
-	async handleAction(
-		msg: ActionPush,
-		context?: AuthContext,
-	): Promise<Result<ActionResponse, ActionValidationError>> {
-		const results: Array<
-			ActionResult | { actionId: string; code: string; message: string; retryable: boolean }
-		> = [];
-
-		for (const action of msg.actions) {
-			// Structural validation
-			const validation = validateAction(action);
-			if (!validation.ok) {
-				return Err(validation.error);
-			}
-
-			// Idempotency — check actionId
-			if (this.executedActions.has(action.actionId)) {
-				const cached = this.idempotencyMap.get(action.actionId);
-				if (cached) {
-					results.push(cached);
-					continue;
-				}
-				// Already executed but no cached result — skip
-				continue;
-			}
-
-			// Idempotency — check idempotencyKey
-			if (action.idempotencyKey) {
-				const cached = this.idempotencyMap.get(`idem:${action.idempotencyKey}`);
-				if (cached) {
-					results.push(cached);
-					continue;
-				}
-			}
-
-			// Resolve handler
-			const handler = this.actionHandlers.get(action.connector);
-			if (!handler) {
-				const errorResult = {
-					actionId: action.actionId,
-					code: "ACTION_NOT_SUPPORTED",
-					message: `No action handler registered for connector "${action.connector}"`,
-					retryable: false,
-				};
-				results.push(errorResult);
-				this.cacheActionResult(action, errorResult);
-				continue;
-			}
-
-			// Check action type is supported
-			const supported = handler.supportedActions.some((d) => d.actionType === action.actionType);
-			if (!supported) {
-				const errorResult = {
-					actionId: action.actionId,
-					code: "ACTION_NOT_SUPPORTED",
-					message: `Action type "${action.actionType}" not supported by connector "${action.connector}"`,
-					retryable: false,
-				};
-				results.push(errorResult);
-				this.cacheActionResult(action, errorResult);
-				continue;
-			}
-
-			// Execute
-			const execResult = await handler.executeAction(action, context);
-			if (execResult.ok) {
-				results.push(execResult.value);
-				this.cacheActionResult(action, execResult.value);
-			} else {
-				const err = execResult.error;
-				const errorResult = {
-					actionId: action.actionId,
-					code: err.code,
-					message: err.message,
-					retryable: "retryable" in err ? (err as ActionExecutionError).retryable : false,
-				};
-				results.push(errorResult);
-				// Only cache non-retryable errors — retryable errors should be retried
-				if (!errorResult.retryable) {
-					this.cacheActionResult(action, errorResult);
-				}
-			}
-		}
-
-		const serverHlc = this.hlc.now();
-		return Ok({ results, serverHlc });
-	}
-
-	/** Cache an action result for idempotency deduplication. */
-	private cacheActionResult(
-		action: Action,
-		result: ActionResult | { actionId: string; code: string; message: string; retryable: boolean },
-	): void {
-		this.executedActions.add(action.actionId);
-		this.idempotencyMap.set(action.actionId, result);
-		if (action.idempotencyKey) {
-			this.idempotencyMap.set(`idem:${action.idempotencyKey}`, result);
-		}
-	}
-
-	/**
-	 * Register a named action handler.
-	 *
-	 * @param name - Connector name (matches `Action.connector`).
-	 * @param handler - The action handler to register.
-	 */
-	registerActionHandler(name: string, handler: ActionHandler): void {
-		this.actionHandlers.set(name, handler);
-	}
-
-	/**
-	 * Unregister a named action handler.
-	 *
-	 * @param name - The connector name to remove.
-	 */
-	unregisterActionHandler(name: string): void {
-		this.actionHandlers.delete(name);
-	}
-
-	/**
-	 * List all registered action handler names.
-	 *
-	 * @returns Array of registered connector names.
-	 */
-	listActionHandlers(): string[] {
-		return [...this.actionHandlers.keys()];
-	}
-
-	/**
-	 * Describe all registered action handlers and their supported actions.
-	 *
-	 * Returns a map of connector name to its {@link ActionDescriptor} array,
-	 * enabling frontend discovery of available actions.
-	 *
-	 * @returns An {@link ActionDiscovery} object listing connectors and their actions.
-	 */
-	describeActions(): ActionDiscovery {
-		const connectors: Record<string, ActionDescriptor[]> = {};
-		for (const [name, handler] of this.actionHandlers) {
-			connectors[name] = handler.supportedActions;
-		}
-		return { connectors };
 	}
 }

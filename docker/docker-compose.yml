@@ -36,5 +36,34 @@ services:
     environment:
       NESSIE_VERSION_STORE_TYPE: IN_MEMORY
 
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: lakesync
+      POSTGRES_PASSWORD: lakesync123
+      POSTGRES_DB: lakesync_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lakesync"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: lakesync123
+      MYSQL_DATABASE: lakesync_test
+      MYSQL_USER: lakesync
+      MYSQL_PASSWORD: lakesync123
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "lakesync", "-plakesync123"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   minio-data:

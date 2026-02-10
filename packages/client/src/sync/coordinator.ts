@@ -1,11 +1,14 @@
 import {
 	type Action,
+	type ActionDiscovery,
 	type ActionErrorResult,
 	type ActionResult,
 	HLC,
 	type HLCTimestamp,
 	isActionError,
+	type LakeSyncError,
 	LWWResolver,
+	type Result,
 	type RowDelta,
 } from "@lakesync/core";
 import type { LocalDB } from "../db/local-db";
@@ -443,6 +446,19 @@ export class SyncCoordinator {
 			// Transport-level failure — nack all for retry
 			await this.actionQueue.nack(ids);
 		}
+	}
+
+	/**
+	 * Discover available connectors and their supported action types.
+	 *
+	 * Delegates to the transport's `describeActions()` method. Returns
+	 * empty connectors when the transport does not support discovery.
+	 */
+	async describeActions(): Promise<Result<ActionDiscovery, LakeSyncError>> {
+		if (!this.transport.describeActions) {
+			return { ok: true, value: { connectors: {} } };
+		}
+		return this.transport.describeActions();
 	}
 
 	/** Stop auto-sync and clean up listeners */
