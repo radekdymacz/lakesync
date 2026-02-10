@@ -1,5 +1,5 @@
 import type { DatabaseAdapter } from "@lakesync/adapter";
-import type { HLCTimestamp } from "@lakesync/core";
+import type { HLCTimestamp, RowDelta } from "@lakesync/core";
 
 /**
  * Interface for distributed locking across gateway-server instances.
@@ -30,24 +30,12 @@ export class AdapterBasedLock implements DistributedLock {
 	}
 
 	async acquire(key: string, ttlMs: number): Promise<boolean> {
-		const expiresAt = Date.now() + ttlMs;
 		try {
-			// Try to claim the lock via the adapter's raw query capability
-			// For now, use insertDeltas as a proxy — store lock as a special delta
-			// A proper implementation would use adapter-specific advisory locks
 			const result = await this.adapter.insertDeltas([
-				{
-					op: "INSERT" as const,
-					table: "__lakesync_locks",
-					rowId: key,
-					clientId: this.instanceId,
-					columns: [
-						{ column: "holder", value: this.instanceId },
-						{ column: "expires_at", value: expiresAt },
-					],
-					hlc: (BigInt(Date.now()) << 16n) as HLCTimestamp,
-					deltaId: `lock-${key}-${Date.now()}`,
-				},
+				this.makeLockDelta("INSERT", key, [
+					{ column: "holder", value: this.instanceId },
+					{ column: "expires_at", value: Date.now() + ttlMs },
+				]),
 			]);
 			return result.ok;
 		} catch {
@@ -57,19 +45,25 @@ export class AdapterBasedLock implements DistributedLock {
 
 	async release(key: string): Promise<void> {
 		try {
-			await this.adapter.insertDeltas([
-				{
-					op: "DELETE" as const,
-					table: "__lakesync_locks",
-					rowId: key,
-					clientId: this.instanceId,
-					columns: [],
-					hlc: (BigInt(Date.now()) << 16n) as HLCTimestamp,
-					deltaId: `unlock-${key}-${Date.now()}`,
-				},
-			]);
+			await this.adapter.insertDeltas([this.makeLockDelta("DELETE", key, [])]);
 		} catch {
 			// Best-effort release — TTL will expire the lock anyway
 		}
+	}
+
+	private makeLockDelta(
+		op: "INSERT" | "DELETE",
+		key: string,
+		columns: Array<{ column: string; value: unknown }>,
+	): RowDelta {
+		return {
+			op,
+			table: "__lakesync_locks",
+			rowId: key,
+			clientId: this.instanceId,
+			columns,
+			hlc: (BigInt(Date.now()) << 16n) as HLCTimestamp,
+			deltaId: `${op === "INSERT" ? "lock" : "unlock"}-${key}-${Date.now()}`,
+		};
 	}
 }

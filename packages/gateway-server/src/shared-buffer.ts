@@ -47,16 +47,12 @@ export class SharedBuffer {
 			}
 
 			const merged = [...localResult.deltas, ...additional];
-			merged.sort((a, b) => {
-				if (a.hlc < b.hlc) return -1;
-				if (a.hlc > b.hlc) return 1;
-				return 0;
-			});
+			merged.sort((a, b) => (a.hlc < b.hlc ? -1 : a.hlc > b.hlc ? 1 : 0));
 
 			return {
 				deltas: merged,
 				serverHlc: localResult.serverHlc,
-				hasMore: localResult.hasMore || additional.length > 0,
+				hasMore: true,
 			};
 		} catch {
 			return localResult; // Fallback to local-only on error

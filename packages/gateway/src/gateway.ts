@@ -14,6 +14,7 @@ import {
 	FlushError,
 	filterDeltas,
 	HLC,
+	type HLCTimestamp,
 	Ok,
 	type Result,
 	type RowDelta,
@@ -33,6 +34,18 @@ import type { FlushEnvelope, GatewayConfig, HandlePushResult } from "./types";
 
 export type { SyncPush, SyncPull, SyncResponse };
 
+/** Find the min and max HLC in a non-empty array of deltas. */
+function hlcRange(entries: RowDelta[]): { min: HLCTimestamp; max: HLCTimestamp } {
+	let min = entries[0]!.hlc;
+	let max = entries[0]!.hlc;
+	for (let i = 1; i < entries.length; i++) {
+		const hlc = entries[i]!.hlc;
+		if (HLC.compare(hlc, min) < 0) min = hlc;
+		if (HLC.compare(hlc, max) > 0) max = hlc;
+	}
+	return { min, max };
+}
+
 /**
  * Sync gateway -- coordinates delta ingestion, conflict resolution, and flush.
  *
@@ -46,14 +59,10 @@ export class SyncGateway {
 	private flushing = false;
 
 	constructor(config: GatewayConfig, adapter?: LakeAdapter | DatabaseAdapter) {
-		this.config = config;
-		// Ensure sourceAdapters map always exists for dynamic registration
-		if (!this.config.sourceAdapters) {
-			this.config.sourceAdapters = {};
-		}
+		this.config = { sourceAdapters: {}, ...config };
 		this.hlc = new HLC();
 		this.buffer = new DeltaBuffer();
-		this.adapter = config.adapter ?? adapter ?? null;
+		this.adapter = this.config.adapter ?? adapter ?? null;
 	}
 
 	/** Restore drained entries back to the buffer for retry. */
@@ -279,41 +288,29 @@ export class SyncGateway {
 				const result = await this.adapter.insertDeltas(entries);
 				if (!result.ok) {
 					this.restoreEntries(entries);
-					this.flushing = false;
 					return Err(new FlushError(`Database flush failed: ${result.error.message}`));
 				}
 				return Ok(undefined);
 			} catch (error: unknown) {
 				this.restoreEntries(entries);
-				const message = toError(error).message;
-				return Err(new FlushError(`Unexpected database flush failure: ${message}`));
+				return Err(new FlushError(`Unexpected database flush failure: ${toError(error).message}`));
 			} finally {
 				this.flushing = false;
 			}
 		}
 
 		// Lake adapter path — write to object storage as Parquet or JSON
-		// Capture byte size before draining (avoids recomputing)
 		const byteSize = this.buffer.byteSize;
 		const entries = this.buffer.drain();
 
 		try {
-			// Find HLC range across all entries
-			let min = entries[0]!.hlc;
-			let max = entries[0]!.hlc;
-			for (let i = 1; i < entries.length; i++) {
-				const hlc = entries[i]!.hlc;
-				if (HLC.compare(hlc, min) < 0) min = hlc;
-				if (HLC.compare(hlc, max) > 0) max = hlc;
-			}
-
+			const { min, max } = hlcRange(entries);
 			const date = new Date().toISOString().split("T")[0];
 			let objectKey: string;
 			let data: Uint8Array;
 			let contentType: string;
 
 			if (this.config.flushFormat === "json") {
-				// Explicit JSON flush path
 				const envelope: FlushEnvelope = {
 					version: 1,
 					gatewayId: this.config.gatewayId,
@@ -325,11 +322,9 @@ export class SyncGateway {
 				};
 
 				objectKey = `deltas/${date}/${this.config.gatewayId}/${min.toString()}-${max.toString()}.json`;
-				const jsonStr = JSON.stringify(envelope, bigintReplacer);
-				data = new TextEncoder().encode(jsonStr);
+				data = new TextEncoder().encode(JSON.stringify(envelope, bigintReplacer));
 				contentType = "application/json";
 			} else {
-				// Default: Parquet flush path
 				if (!this.config.tableSchema) {
 					this.restoreEntries(entries);
 					return Err(new FlushError("tableSchema required for Parquet flush"));
@@ -347,24 +342,19 @@ export class SyncGateway {
 			}
 
 			const result = await this.adapter.putObject(objectKey, data, contentType);
-
 			if (!result.ok) {
-				// Flush failed — restore buffer entries so they can be retried
 				this.restoreEntries(entries);
 				return Err(new FlushError(`Failed to write flush envelope: ${result.error.message}`));
 			}
 
-			// After successful adapter write, commit to catalogue (best-effort)
 			if (this.config.catalogue && this.config.tableSchema) {
 				await this.commitToCatalogue(objectKey, data.byteLength, entries.length);
 			}
 
 			return Ok(undefined);
 		} catch (error: unknown) {
-			// Unexpected throw (e.g. adapter threw instead of returning Err) — restore buffer
 			this.restoreEntries(entries);
-			const message = toError(error).message;
-			return Err(new FlushError(`Unexpected flush failure: ${message}`));
+			return Err(new FlushError(`Unexpected flush failure: ${toError(error).message}`));
 		} finally {
 			this.flushing = false;
 		}
@@ -473,14 +463,12 @@ export class SyncGateway {
 				const result = await this.adapter.insertDeltas(entries);
 				if (!result.ok) {
 					this.restoreEntries(entries);
-					this.flushing = false;
 					return Err(new FlushError(`Table flush failed: ${result.error.message}`));
 				}
 				return Ok(undefined);
 			} catch (error: unknown) {
 				this.restoreEntries(entries);
-				const message = toError(error).message;
-				return Err(new FlushError(`Unexpected table flush failure: ${message}`));
+				return Err(new FlushError(`Unexpected table flush failure: ${toError(error).message}`));
 			} finally {
 				this.flushing = false;
 			}
@@ -488,15 +476,11 @@ export class SyncGateway {
 
 		// Lake adapter path
 		try {
-			let min = entries[0]!.hlc;
-			let max = entries[0]!.hlc;
-			for (let i = 1; i < entries.length; i++) {
-				const hlc = entries[i]!.hlc;
-				if (HLC.compare(hlc, min) < 0) min = hlc;
-				if (HLC.compare(hlc, max) > 0) max = hlc;
-			}
-
+			const { min, max } = hlcRange(entries);
 			const date = new Date().toISOString().split("T")[0];
+			let objectKey: string;
+			let data: Uint8Array;
+			let contentType: string;
 
 			if (this.config.flushFormat === "json" || !this.config.tableSchema) {
 				const envelope: FlushEnvelope = {
@@ -508,36 +492,29 @@ export class SyncGateway {
 					byteSize: 0,
 					deltas: entries,
 				};
-				const jsonStr = JSON.stringify(envelope, bigintReplacer);
-				const data = new TextEncoder().encode(jsonStr);
-				const objectKey = `deltas/${date}/${this.config.gatewayId}/${table}-${min.toString()}-${max.toString()}.json`;
-				const result = await this.adapter.putObject(objectKey, data, "application/json");
-				if (!result.ok) {
-					this.restoreEntries(entries);
-					return Err(new FlushError(`Failed to write table flush: ${result.error.message}`));
-				}
+				data = new TextEncoder().encode(JSON.stringify(envelope, bigintReplacer));
+				objectKey = `deltas/${date}/${this.config.gatewayId}/${table}-${min.toString()}-${max.toString()}.json`;
+				contentType = "application/json";
 			} else {
 				const parquetResult = await writeDeltasToParquet(entries, this.config.tableSchema);
 				if (!parquetResult.ok) {
 					this.restoreEntries(entries);
 					return Err(parquetResult.error);
 				}
-				const objectKey = `deltas/${date}/${this.config.gatewayId}/${table}-${min.toString()}-${max.toString()}.parquet`;
-				const result = await this.adapter.putObject(
-					objectKey,
-					parquetResult.value,
-					"application/vnd.apache.parquet",
-				);
-				if (!result.ok) {
-					this.restoreEntries(entries);
-					return Err(new FlushError(`Failed to write table flush: ${result.error.message}`));
-				}
+				data = parquetResult.value;
+				objectKey = `deltas/${date}/${this.config.gatewayId}/${table}-${min.toString()}-${max.toString()}.parquet`;
+				contentType = "application/vnd.apache.parquet";
+			}
+
+			const result = await this.adapter.putObject(objectKey, data, contentType);
+			if (!result.ok) {
+				this.restoreEntries(entries);
+				return Err(new FlushError(`Failed to write table flush: ${result.error.message}`));
 			}
 			return Ok(undefined);
 		} catch (error: unknown) {
 			this.restoreEntries(entries);
-			const message = toError(error).message;
-			return Err(new FlushError(`Unexpected table flush failure: ${message}`));
+			return Err(new FlushError(`Unexpected table flush failure: ${toError(error).message}`));
 		} finally {
 			this.flushing = false;
 		}

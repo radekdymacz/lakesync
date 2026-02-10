@@ -179,12 +179,7 @@ export function mergePullResponses(responses: SyncResponse[]): SyncResponse {
 		}
 	}
 
-	// Sort by HLC ascending for consistent ordering
-	allDeltas.sort((a, b) => {
-		if (a.hlc < b.hlc) return -1;
-		if (a.hlc > b.hlc) return 1;
-		return 0;
-	});
+	allDeltas.sort((a, b) => (a.hlc < b.hlc ? -1 : a.hlc > b.hlc ? 1 : 0));
 
 	return { deltas: allDeltas, serverHlc: maxServerHlc, hasMore };
 }
@@ -376,51 +371,43 @@ export async function handleShardedPush(
 	);
 
 	let maxServerHlc: HLCTimestamp = 0n as HLCTimestamp;
-	let totalAccepted = 0;
 	for (const result of pushResults) {
 		if (result.serverHlc > maxServerHlc) {
 			maxServerHlc = result.serverHlc;
 		}
 	}
-	totalAccepted = pushBody.deltas.length;
+	const totalAccepted = pushBody.deltas.length;
 
-	// Cross-shard broadcast: for each shard that got deltas, notify all OTHER shards
+	// Cross-shard broadcast: notify shards that did NOT receive deltas
 	// so their WebSocket clients see the updates (fire-and-forget)
 	const allIds = allShardGatewayIds(config);
-	const broadcastPromises: Promise<unknown>[] = [];
+	const broadcastPromises: Promise<Response>[] = [];
 
 	for (const [sourceShardId, shardDeltas] of partitions) {
-		const targetIds = allIds.filter((id) => id !== sourceShardId);
-		if (targetIds.length === 0 || shardDeltas.length === 0) continue;
+		if (shardDeltas.length === 0) continue;
 
 		const payload = JSON.stringify(
-			{
-				deltas: shardDeltas,
-				serverHlc: maxServerHlc,
-				excludeClientId: pushBody.clientId,
-			},
+			{ deltas: shardDeltas, serverHlc: maxServerHlc, excludeClientId: pushBody.clientId },
 			bigintReplacer,
 		);
 
-		for (const targetId of targetIds) {
+		const broadcastUrl = new URL(request.url);
+		broadcastUrl.pathname = "/internal/broadcast";
+		const urlStr = broadcastUrl.toString();
+
+		for (const targetId of allIds) {
+			if (targetId === sourceShardId) continue;
+			const stub = doNamespace.get(doNamespace.idFromName(targetId));
 			broadcastPromises.push(
-				(async () => {
-					try {
-						const id = doNamespace.idFromName(targetId);
-						const stub = doNamespace.get(id);
-						const broadcastUrl = new URL(request.url);
-						broadcastUrl.pathname = "/internal/broadcast";
-						await stub.fetch(
-							new Request(broadcastUrl.toString(), {
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: payload,
-							}),
-						);
-					} catch {
-						// Best-effort broadcast — silently skip failures
-					}
-				})(),
+				stub
+					.fetch(
+						new Request(urlStr, {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: payload,
+						}),
+					)
+					.catch(() => new Response(null, { status: 500 })),
 			);
 		}
 	}
@@ -563,30 +550,28 @@ export async function handleShardedCheckpoint(
 	// Fan out checkpoint to all shards
 	const responses = await Promise.all(
 		allGatewayIds.map(async (gatewayId) => {
-			const id = doNamespace.idFromName(gatewayId);
-			const stub = doNamespace.get(id);
-			const doUrl = new URL(request.url);
-			doUrl.pathname = "/checkpoint";
+			const stub = doNamespace.get(doNamespace.idFromName(gatewayId));
 			try {
 				return await stub.fetch(
-					new Request(doUrl.toString(), { method: "GET", headers: request.headers }),
+					createDoRequest(request.url, "/checkpoint", "GET", request.headers),
 				);
 			} catch {
-				return null; // Skip failed shards
+				return null;
 			}
 		}),
 	);
 
 	// Collect and merge deltas from all shards
 	const allDeltas: RowDelta[] = [];
-	let maxCheckpointHlc = "0";
+	let maxCheckpointHlc = 0n;
 
 	for (const resp of responses) {
 		if (!resp || !resp.ok) continue;
 
 		const hlcHeader = resp.headers.get("X-Checkpoint-Hlc");
-		if (hlcHeader && BigInt(hlcHeader) > BigInt(maxCheckpointHlc)) {
-			maxCheckpointHlc = hlcHeader;
+		if (hlcHeader) {
+			const hlc = BigInt(hlcHeader);
+			if (hlc > maxCheckpointHlc) maxCheckpointHlc = hlc;
 		}
 
 		const body = new Uint8Array(await resp.arrayBuffer());
@@ -596,16 +581,9 @@ export async function handleShardedCheckpoint(
 		allDeltas.push(...decoded.value.deltas);
 	}
 
-	// Sort by HLC ascending
-	allDeltas.sort((a, b) => {
-		if (a.hlc < b.hlc) return -1;
-		if (a.hlc > b.hlc) return 1;
-		return 0;
-	});
+	allDeltas.sort((a, b) => (a.hlc < b.hlc ? -1 : a.hlc > b.hlc ? 1 : 0));
 
-	// Re-encode as single proto response
-	// TODO: This still accumulates all deltas in memory — streaming cross-shard checkpoint is future work
-	const snapshotHlc = BigInt(maxCheckpointHlc) as HLCTimestamp;
+	const snapshotHlc = maxCheckpointHlc as HLCTimestamp;
 	const encoded = encodeSyncResponse({
 		deltas: allDeltas,
 		serverHlc: snapshotHlc,
@@ -623,7 +601,7 @@ export async function handleShardedCheckpoint(
 		status: 200,
 		headers: {
 			"Content-Type": "application/octet-stream",
-			"X-Checkpoint-Hlc": maxCheckpointHlc,
+			"X-Checkpoint-Hlc": maxCheckpointHlc.toString(),
 		},
 	});
 }

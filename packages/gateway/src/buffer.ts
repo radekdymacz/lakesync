@@ -126,26 +126,13 @@ export class DeltaBuffer {
 		const tableDeltas = this.tableLog.get(table) ?? [];
 		if (tableDeltas.length === 0) return [];
 
-		const tableDeltaIds = new Set<string>();
-		for (const delta of tableDeltas) {
-			tableDeltaIds.add(delta.deltaId);
-		}
-
 		// Remove from main log
 		this.log = this.log.filter((d) => d.table !== table);
 
-		// Remove from index
+		// Remove from index and deltaIds
 		for (const delta of tableDeltas) {
-			const key = rowKey(delta.table, delta.rowId);
-			const indexed = this.index.get(key);
-			if (indexed && indexed.table === table) {
-				this.index.delete(key);
-			}
-		}
-
-		// Remove from deltaIds
-		for (const id of tableDeltaIds) {
-			this.deltaIds.delete(id);
+			this.index.delete(rowKey(delta.table, delta.rowId));
+			this.deltaIds.delete(delta.deltaId);
 		}
 
 		// Adjust byte tracking

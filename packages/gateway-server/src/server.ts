@@ -88,6 +88,15 @@ const MAX_DELTAS_PER_PUSH = 10_000;
 const MAX_PULL_LIMIT = 10_000;
 const DEFAULT_PULL_LIMIT = 100;
 const VALID_COLUMN_TYPES = new Set(["string", "number", "boolean", "json", "null"]);
+const ADMIN_ACTIONS = new Set([
+	"flush",
+	"schema",
+	"sync-rules",
+	"register-connector",
+	"unregister-connector",
+	"list-connectors",
+	"metrics",
+]);
 
 // ---------------------------------------------------------------------------
 // Route matching
@@ -100,76 +109,30 @@ interface RouteMatch {
 	connectorName?: string;
 }
 
+/** Route definitions: [method, pattern, action, captureConnectorName?] */
+const ROUTES: Array<[string, RegExp, string, boolean?]> = [
+	["POST", /^\/sync\/([^/]+)\/push$/, "push"],
+	["GET", /^\/sync\/([^/]+)\/pull$/, "pull"],
+	["GET", /^\/sync\/([^/]+)\/ws$/, "ws"],
+	["POST", /^\/admin\/flush\/([^/]+)$/, "flush"],
+	["POST", /^\/admin\/schema\/([^/]+)$/, "schema"],
+	["POST", /^\/admin\/sync-rules\/([^/]+)$/, "sync-rules"],
+	["POST", /^\/admin\/connectors\/([^/]+)$/, "register-connector"],
+	["GET", /^\/admin\/connectors\/([^/]+)$/, "list-connectors"],
+	["DELETE", /^\/admin\/connectors\/([^/]+)\/([^/]+)$/, "unregister-connector", true],
+	["GET", /^\/admin\/metrics\/([^/]+)$/, "metrics"],
+];
+
 function matchRoute(pathname: string, method: string): RouteMatch | null {
-	// POST /sync/:gatewayId/push
-	{
-		const match = pathname.match(/^\/sync\/([^/]+)\/push$/);
-		if (match && method === "POST") {
-			return { gatewayId: match[1]!, action: "push" };
-		}
-	}
-	// GET /sync/:gatewayId/pull
-	{
-		const match = pathname.match(/^\/sync\/([^/]+)\/pull$/);
-		if (match && method === "GET") {
-			return { gatewayId: match[1]!, action: "pull" };
-		}
-	}
-	// POST /admin/flush/:gatewayId
-	{
-		const match = pathname.match(/^\/admin\/flush\/([^/]+)$/);
-		if (match && method === "POST") {
-			return { gatewayId: match[1]!, action: "flush" };
-		}
-	}
-	// POST /admin/schema/:gatewayId
-	{
-		const match = pathname.match(/^\/admin\/schema\/([^/]+)$/);
-		if (match && method === "POST") {
-			return { gatewayId: match[1]!, action: "schema" };
-		}
-	}
-	// POST /admin/sync-rules/:gatewayId
-	{
-		const match = pathname.match(/^\/admin\/sync-rules\/([^/]+)$/);
-		if (match && method === "POST") {
-			return { gatewayId: match[1]!, action: "sync-rules" };
-		}
-	}
-	// POST /admin/connectors/:gatewayId
-	{
-		const match = pathname.match(/^\/admin\/connectors\/([^/]+)$/);
-		if (match && method === "POST") {
-			return { gatewayId: match[1]!, action: "register-connector" };
-		}
-	}
-	// GET /admin/connectors/:gatewayId
-	{
-		const match = pathname.match(/^\/admin\/connectors\/([^/]+)$/);
-		if (match && method === "GET") {
-			return { gatewayId: match[1]!, action: "list-connectors" };
-		}
-	}
-	// DELETE /admin/connectors/:gatewayId/:name
-	{
-		const match = pathname.match(/^\/admin\/connectors\/([^/]+)\/([^/]+)$/);
-		if (match && method === "DELETE") {
-			return { gatewayId: match[1]!, action: "unregister-connector", connectorName: match[2]! };
-		}
-	}
-	// GET /admin/metrics/:gatewayId
-	{
-		const match = pathname.match(/^\/admin\/metrics\/([^/]+)$/);
-		if (match && method === "GET") {
-			return { gatewayId: match[1]!, action: "metrics" };
-		}
-	}
-	// WebSocket /sync/:gatewayId/ws
-	{
-		const match = pathname.match(/^\/sync\/([^/]+)\/ws$/);
-		if (match && method === "GET") {
-			return { gatewayId: match[1]!, action: "ws" };
-		}
+	for (const [m, pattern, action, hasConnector] of ROUTES) {
+		if (method !== m) continue;
+		const match = pathname.match(pattern);
+		if (!match) continue;
+		return {
+			gatewayId: match[1]!,
+			action,
+			...(hasConnector ? { connectorName: match[2]! } : {}),
+		};
 	}
 	return null;
 }
@@ -651,19 +614,9 @@ export class GatewayServer {
 			}
 
 			// Admin route protection
-			if (
-				route.action === "flush" ||
-				route.action === "schema" ||
-				route.action === "sync-rules" ||
-				route.action === "register-connector" ||
-				route.action === "unregister-connector" ||
-				route.action === "list-connectors" ||
-				route.action === "metrics"
-			) {
-				if (auth.role !== "admin") {
-					sendError(res, "Admin role required", 403, corsH);
-					return;
-				}
+			if (ADMIN_ACTIONS.has(route.action) && auth.role !== "admin") {
+				sendError(res, "Admin role required", 403, corsH);
+				return;
 			}
 		}
 
@@ -754,20 +707,12 @@ export class GatewayServer {
 		const result = this.gateway.handlePush(body);
 
 		if (!result.ok) {
-			const err = result.error;
-			if (err.code === "CLOCK_DRIFT") {
-				sendError(res, err.message, 409, corsH);
-				return;
-			}
-			if (err.code === "SCHEMA_MISMATCH") {
-				sendError(res, err.message, 422, corsH);
-				return;
-			}
-			if (err.code === "BACKPRESSURE") {
-				sendError(res, err.message, 503, corsH);
-				return;
-			}
-			sendError(res, err.message, 500, corsH);
+			const statusByCode: Record<string, number> = {
+				CLOCK_DRIFT: 409,
+				SCHEMA_MISMATCH: 422,
+				BACKPRESSURE: 503,
+			};
+			sendError(res, result.error.message, statusByCode[result.error.code] ?? 500, corsH);
 			return;
 		}
 

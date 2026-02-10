@@ -311,16 +311,12 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		if (!result.ok) {
 			const err = result.error;
 			logger.warn("push_error", { code: err.code, message: err.message });
-			if (err.code === "CLOCK_DRIFT") {
-				return errorResponse(err.message, 409);
-			}
-			if (err.code === "SCHEMA_MISMATCH") {
-				return errorResponse(err.message, 422);
-			}
-			if (err.code === "BACKPRESSURE") {
-				return errorResponse(err.message, 503);
-			}
-			return errorResponse(err.message, 500);
+			const statusByCode: Record<string, number> = {
+				CLOCK_DRIFT: 409,
+				SCHEMA_MISMATCH: 422,
+				BACKPRESSURE: 503,
+			};
+			return errorResponse(err.message, statusByCode[err.code] ?? 500);
 		}
 
 		// Track peak buffer usage
@@ -879,8 +875,8 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	 * individual sockets are silently caught (the socket may have closed).
 	 */
 	private async broadcastDeltas(
-		deltas: import("@lakesync/core").RowDelta[],
-		serverHlc: import("@lakesync/core").HLCTimestamp,
+		deltas: RowDelta[],
+		serverHlc: HLCTimestamp,
 		excludeClientId: string,
 	): Promise<void> {
 		if (deltas.length === 0) return;

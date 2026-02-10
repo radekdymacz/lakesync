@@ -305,9 +305,8 @@ async function handleShardedRoute(
 	if (route.doPath === "/admin/metrics") {
 		const gatewayIds = allShardGatewayIds(config);
 		const responses = await Promise.all(
-			gatewayIds.map(async (gatewayId) => {
-				const id = env.SYNC_GATEWAY.idFromName(gatewayId);
-				const stub = env.SYNC_GATEWAY.get(id);
+			gatewayIds.map(async (gid) => {
+				const stub = env.SYNC_GATEWAY.get(env.SYNC_GATEWAY.idFromName(gid));
 				const doUrl = new URL(request.url);
 				doUrl.pathname = "/admin/metrics";
 				return stub.fetch(
@@ -316,30 +315,19 @@ async function handleShardedRoute(
 			}),
 		);
 
-		let totalLogSize = 0;
-		let totalIndexSize = 0;
-		let totalByteSize = 0;
+		const totals = { logSize: 0, indexSize: 0, byteSize: 0 };
 		for (const resp of responses) {
-			if (resp.ok) {
-				const stats = (await resp.json()) as {
-					logSize: number;
-					indexSize: number;
-					byteSize: number;
-				};
-				totalLogSize += stats.logSize;
-				totalIndexSize += stats.indexSize;
-				totalByteSize += stats.byteSize;
-			}
+			if (!resp.ok) continue;
+			const stats = (await resp.json()) as typeof totals;
+			totals.logSize += stats.logSize;
+			totals.indexSize += stats.indexSize;
+			totals.byteSize += stats.byteSize;
 		}
 
-		return new Response(
-			JSON.stringify({
-				logSize: totalLogSize,
-				indexSize: totalIndexSize,
-				byteSize: totalByteSize,
-			}),
-			{ status: 200, headers: { "Content-Type": "application/json" } },
-		);
+		return new Response(JSON.stringify(totals), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		});
 	}
 
 	// Admin operations — fan out to all shards

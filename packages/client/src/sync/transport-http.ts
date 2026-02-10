@@ -153,9 +153,9 @@ export class HttpTransport implements SyncTransport {
 				);
 			}
 
+			const deltas = await readStreamingCheckpointDeltas(response);
 			const hlcHeader = response.headers.get("X-Checkpoint-Hlc");
-			const { deltas, serverHlc } = await readStreamingCheckpoint(response);
-			const snapshotHlc = hlcHeader ? (BigInt(hlcHeader) as HLCTimestamp) : serverHlc;
+			const snapshotHlc = hlcHeader ? (BigInt(hlcHeader) as HLCTimestamp) : (0n as HLCTimestamp);
 			return Ok({ deltas, snapshotHlc });
 		} catch (error) {
 			const cause = toError(error);
@@ -167,32 +167,25 @@ export class HttpTransport implements SyncTransport {
 }
 
 /**
- * Read a streaming checkpoint response containing length-prefixed proto frames.
+ * Read length-prefixed proto frames from a streaming checkpoint response.
  *
  * Each frame is: 4-byte big-endian length prefix + proto-encoded SyncResponse.
- * Collects all deltas across frames and returns the server HLC from the header.
+ * Collects all deltas across frames.
  */
-async function readStreamingCheckpoint(
-	response: Response,
-): Promise<{ deltas: RowDelta[]; serverHlc: HLCTimestamp }> {
+async function readStreamingCheckpointDeltas(response: Response): Promise<RowDelta[]> {
 	const reader = response.body!.getReader();
 	const allDeltas: RowDelta[] = [];
-	const hlcHeader = response.headers.get("X-Checkpoint-Hlc");
-	const serverHlc = hlcHeader ? (BigInt(hlcHeader) as HLCTimestamp) : (0n as HLCTimestamp);
-
 	let buffer = new Uint8Array(0);
 
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) break;
 
-		// Append to buffer
 		const newBuffer = new Uint8Array(buffer.length + value.length);
 		newBuffer.set(buffer);
 		newBuffer.set(value, buffer.length);
 		buffer = newBuffer;
 
-		// Process complete frames
 		while (buffer.length >= 4) {
 			const frameLength = new DataView(buffer.buffer, buffer.byteOffset).getUint32(0, false);
 			if (buffer.length < 4 + frameLength) break;
@@ -207,5 +200,5 @@ async function readStreamingCheckpoint(
 		}
 	}
 
-	return { deltas: allDeltas, serverHlc };
+	return allDeltas;
 }

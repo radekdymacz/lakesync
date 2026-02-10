@@ -187,7 +187,6 @@ export class Compactor {
 					}
 				}
 			}
-			// parseResult.value is now eligible for GC — no reference kept
 		}
 
 		// Convert resolved states to output format
@@ -197,9 +196,15 @@ export class Compactor {
 		for (const [, state] of rowStates) {
 			// A row is deleted if the DELETE HLC is >= all column HLCs
 			// (i.e. no column was written after the delete)
-			const isDeleted =
-				state.deleteHlc > 0n &&
-				[...state.columns.values()].every((col) => HLC.compare(state.deleteHlc, col.hlc) >= 0);
+			let isDeleted = state.deleteHlc > 0n;
+			if (isDeleted) {
+				for (const col of state.columns.values()) {
+					if (HLC.compare(state.deleteHlc, col.hlc) < 0) {
+						isDeleted = false;
+						break;
+					}
+				}
+			}
 
 			if (isDeleted || state.columns.size === 0) {
 				deletedRows.push({ table: state.table, rowId: state.rowId });
