@@ -68,9 +68,22 @@ interface ColumnDelta {
 ```ts
 interface TableSchema {
   table: string;
+  sourceTable?: string;
   columns: Array<{ name: string; type: "string" | "number" | "boolean" | "json" | "null" }>;
+  primaryKey?: string[];
+  softDelete?: boolean;
+  externalIdColumn?: string;
 }
 ```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `table` | *required* | Destination table name |
+| `sourceTable` | `table` | Delta table name to match against (for renaming destination tables) |
+| `columns` | *required* | Column definitions with type hints |
+| `primaryKey` | `["row_id"]` | Composite primary key columns. Each entry must be `"row_id"` or exist in `columns`. |
+| `softDelete` | `true` | When true, tombstoned rows get `deleted_at` set instead of being hard-deleted |
+| `externalIdColumn` | — | Column for upsert conflict resolution (adds a UNIQUE constraint). Must exist in `columns`. |
 
 ### `SyncPush` / `SyncPull` / `SyncResponse`
 

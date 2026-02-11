@@ -352,6 +352,7 @@ describe("MySQLAdapter", () => {
 				{ name: "title", type: "string" },
 				{ name: "done", type: "boolean" },
 			],
+			softDelete: false,
 		};
 
 		it("returns Ok without querying for empty deltas", async () => {
@@ -374,6 +375,7 @@ describe("MySQLAdapter", () => {
 			expect(createSql).toContain("CREATE TABLE IF NOT EXISTS `todos`");
 			expect(createSql).toContain("props JSON NOT NULL DEFAULT ('{}')");
 			expect(createSql).toContain("synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+			expect(createSql).toContain("PRIMARY KEY (`row_id`)");
 		});
 
 		it("generates UPSERT with ON DUPLICATE KEY UPDATE, excludes props, includes synced_at", async () => {

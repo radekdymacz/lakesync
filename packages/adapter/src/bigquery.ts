@@ -11,7 +11,13 @@ import {
 import type { DatabaseAdapter } from "./db-types";
 import { lakeSyncTypeToBigQuery } from "./db-types";
 import type { Materialisable } from "./materialise";
-import { buildSchemaIndex, groupDeltasByTable } from "./materialise";
+import {
+	buildSchemaIndex,
+	groupDeltasByTable,
+	isSoftDelete,
+	resolveConflictColumns,
+	resolvePrimaryKey,
+} from "./materialise";
 import { mergeLatestState, wrapAsync } from "./shared";
 
 /**
@@ -248,17 +254,23 @@ CLUSTER BY \`table\`, hlc`,
 				const schema = schemaIndex.get(sourceTable);
 				if (!schema) continue;
 
+				const pk = resolvePrimaryKey(schema);
+				const conflictCols = resolveConflictColumns(schema);
+				const soft = isSoftDelete(schema);
+
 				// Ensure destination table exists
 				const colDefs = schema.columns
 					.map((c) => `${c.name} ${lakeSyncTypeToBigQuery(c.type)}`)
 					.join(", ");
+				const deletedAtCol = soft ? `,\n\tdeleted_at TIMESTAMP` : "";
 				await this.client.query({
 					query: `CREATE TABLE IF NOT EXISTS \`${this.dataset}.${schema.table}\` (
 	row_id STRING NOT NULL,
 	${colDefs},
-	props JSON DEFAULT '{}',
+	props JSON DEFAULT '{}'${deletedAtCol},
 	synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()
-)`,
+)
+CLUSTER BY ${pk.map((c) => (c === "row_id" ? "row_id" : c)).join(", ")}`,
 					location: this.location,
 				});
 
@@ -314,31 +326,40 @@ ORDER BY hlc ASC`,
 						const colSelects = schema.columns
 							.map((col, ci) => `@c${ci}_${i} AS ${col.name}`)
 							.join(", ");
+						const deletedAtSelect = soft ? ", CAST(NULL AS TIMESTAMP) AS deleted_at" : "";
 						selects.push(
-							`SELECT @rid_${i} AS row_id, ${colSelects}, CURRENT_TIMESTAMP() AS synced_at`,
+							`SELECT @rid_${i} AS row_id, ${colSelects}${deletedAtSelect}, CURRENT_TIMESTAMP() AS synced_at`,
 						);
 					}
 
+					const mergeOn = conflictCols
+						.map((c) => `t.${c === "row_id" ? "row_id" : c} = s.${c === "row_id" ? "row_id" : c}`)
+						.join(" AND ");
+
 					const updateSet = schema.columns.map((col) => `${col.name} = s.${col.name}`).join(", ");
-					const insertCols = [
+					const softUpdateExtra = soft ? ", deleted_at = s.deleted_at" : "";
+
+					const insertColsList = [
 						"row_id",
 						...schema.columns.map((c) => c.name),
 						"props",
+						...(soft ? ["deleted_at"] : []),
 						"synced_at",
 					].join(", ");
-					const insertVals = [
+					const insertValsList = [
 						"s.row_id",
 						...schema.columns.map((c) => `s.${c.name}`),
 						"'{}'",
+						...(soft ? ["s.deleted_at"] : []),
 						"s.synced_at",
 					].join(", ");
 
 					const mergeSql = `MERGE \`${this.dataset}.${schema.table}\` AS t
 USING (${selects.join(" UNION ALL ")}) AS s
-ON t.row_id = s.row_id
-WHEN MATCHED THEN UPDATE SET ${updateSet}, synced_at = s.synced_at
-WHEN NOT MATCHED THEN INSERT (${insertCols})
-VALUES (${insertVals})`;
+ON ${mergeOn}
+WHEN MATCHED THEN UPDATE SET ${updateSet}${softUpdateExtra}, synced_at = s.synced_at
+WHEN NOT MATCHED THEN INSERT (${insertColsList})
+VALUES (${insertValsList})`;
 
 					await this.client.query({
 						query: mergeSql,
@@ -347,13 +368,21 @@ VALUES (${insertVals})`;
 					});
 				}
 
-				// DELETE tombstoned rows
+				// DELETE / soft-delete tombstoned rows
 				if (deleteRowIds.length > 0) {
-					await this.client.query({
-						query: `DELETE FROM \`${this.dataset}.${schema.table}\` WHERE row_id IN UNNEST(@rowIds)`,
-						params: { rowIds: deleteRowIds },
-						location: this.location,
-					});
+					if (soft) {
+						await this.client.query({
+							query: `UPDATE \`${this.dataset}.${schema.table}\` SET deleted_at = CURRENT_TIMESTAMP(), synced_at = CURRENT_TIMESTAMP() WHERE row_id IN UNNEST(@rowIds)`,
+							params: { rowIds: deleteRowIds },
+							location: this.location,
+						});
+					} else {
+						await this.client.query({
+							query: `DELETE FROM \`${this.dataset}.${schema.table}\` WHERE row_id IN UNNEST(@rowIds)`,
+							params: { rowIds: deleteRowIds },
+							location: this.location,
+						});
+					}
 				}
 			}
 		}, "Failed to materialise deltas");

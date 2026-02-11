@@ -152,6 +152,44 @@ export function validateSchemaBody(raw: string): Result<TableSchema, RequestErro
 		}
 	}
 
+	const columnNames = new Set(schema.columns.map((c) => c.name));
+
+	// Validate primaryKey
+	if (schema.primaryKey !== undefined) {
+		if (!Array.isArray(schema.primaryKey) || schema.primaryKey.length === 0) {
+			return Err({ status: 400, message: "primaryKey must be a non-empty array of strings" });
+		}
+		for (const pk of schema.primaryKey) {
+			if (typeof pk !== "string") {
+				return Err({ status: 400, message: "primaryKey must be a non-empty array of strings" });
+			}
+			if (pk !== "row_id" && !columnNames.has(pk)) {
+				return Err({
+					status: 400,
+					message: `primaryKey column "${pk}" must be "row_id" or exist in columns`,
+				});
+			}
+		}
+	}
+
+	// Validate softDelete
+	if (schema.softDelete !== undefined && typeof schema.softDelete !== "boolean") {
+		return Err({ status: 400, message: "softDelete must be a boolean" });
+	}
+
+	// Validate externalIdColumn
+	if (schema.externalIdColumn !== undefined) {
+		if (typeof schema.externalIdColumn !== "string" || schema.externalIdColumn.length === 0) {
+			return Err({ status: 400, message: "externalIdColumn must be a non-empty string" });
+		}
+		if (!columnNames.has(schema.externalIdColumn)) {
+			return Err({
+				status: 400,
+				message: `externalIdColumn "${schema.externalIdColumn}" must exist in columns`,
+			});
+		}
+	}
+
 	return Ok(schema);
 }
 

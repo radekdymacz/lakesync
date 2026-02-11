@@ -10,7 +10,13 @@ import {
 import { Pool, type PoolConfig } from "pg";
 import type { DatabaseAdapter, DatabaseAdapterConfig } from "./db-types";
 import type { Materialisable } from "./materialise";
-import { buildSchemaIndex, groupDeltasByTable } from "./materialise";
+import {
+	buildSchemaIndex,
+	groupDeltasByTable,
+	isSoftDelete,
+	resolveConflictColumns,
+	resolvePrimaryKey,
+} from "./materialise";
 import { mergeLatestState, wrapAsync } from "./shared";
 
 const POSTGRES_TYPE_MAP: Record<TableSchema["columns"][number]["type"], string> = {
@@ -173,16 +179,27 @@ CREATE INDEX IF NOT EXISTS idx_lakesync_deltas_table_row ON lakesync_deltas ("ta
 				if (!schema) continue;
 
 				const dest = schema.table;
+				const pk = resolvePrimaryKey(schema);
+				const conflictCols = resolveConflictColumns(schema);
+				const soft = isSoftDelete(schema);
+
 				const columnDefs = schema.columns
 					.map((c) => `"${c.name}" ${POSTGRES_TYPE_MAP[c.type]}`)
 					.join(", ");
 
+				const pkConstraint = `PRIMARY KEY (${pk.map((c) => `"${c}"`).join(", ")})`;
+				const deletedAtCol = soft ? `,\n\tdeleted_at TIMESTAMPTZ` : "";
+				const uniqueConstraint = schema.externalIdColumn
+					? `,\n\tUNIQUE ("${schema.externalIdColumn}")`
+					: "";
+
 				await this.pool.query(
 					`CREATE TABLE IF NOT EXISTS "${dest}" (
-	row_id TEXT PRIMARY KEY,
+	row_id TEXT NOT NULL,
 	${columnDefs},
-	props JSONB NOT NULL DEFAULT '{}',
-	synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
+	props JSONB NOT NULL DEFAULT '{}'${deletedAtCol},
+	synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	${pkConstraint}${uniqueConstraint}
 )`,
 				);
 
@@ -220,7 +237,10 @@ CREATE INDEX IF NOT EXISTS idx_lakesync_deltas_table_row ON lakesync_deltas ("ta
 
 				if (upserts.length > 0) {
 					const colNames = schema.columns.map((c) => c.name);
-					const allCols = ["row_id", ...colNames, "synced_at"];
+					const baseCols = ["row_id", ...colNames];
+					const allCols = soft
+						? [...baseCols, "deleted_at", "synced_at"]
+						: [...baseCols, "synced_at"];
 					const colList = allCols.map((c) => `"${c}"`).join(", ");
 
 					const values: unknown[] = [];
@@ -237,21 +257,31 @@ CREATE INDEX IF NOT EXISTS idx_lakesync_deltas_table_row ON lakesync_deltas ("ta
 						for (const col of colNames) {
 							values.push(u.state[col] ?? null);
 						}
+						if (soft) values.push(null); // deleted_at = NULL (un-delete)
 						values.push(new Date());
 					}
 
-					const updateSet = [...colNames, "synced_at"]
-						.map((c) => `"${c}" = EXCLUDED."${c}"`)
-						.join(", ");
+					const conflictList = conflictCols.map((c) => `"${c}"`).join(", ");
+					const updateCols = soft
+						? [...colNames, "deleted_at", "synced_at"]
+						: [...colNames, "synced_at"];
+					const updateSet = updateCols.map((c) => `"${c}" = EXCLUDED."${c}"`).join(", ");
 
 					await this.pool.query(
-						`INSERT INTO "${dest}" (${colList}) VALUES ${valueRows.join(", ")} ON CONFLICT (row_id) DO UPDATE SET ${updateSet}`,
+						`INSERT INTO "${dest}" (${colList}) VALUES ${valueRows.join(", ")} ON CONFLICT (${conflictList}) DO UPDATE SET ${updateSet}`,
 						values,
 					);
 				}
 
 				if (deleteIds.length > 0) {
-					await this.pool.query(`DELETE FROM "${dest}" WHERE row_id = ANY($1)`, [deleteIds]);
+					if (soft) {
+						await this.pool.query(
+							`UPDATE "${dest}" SET deleted_at = now(), synced_at = now() WHERE row_id = ANY($1)`,
+							[deleteIds],
+						);
+					} else {
+						await this.pool.query(`DELETE FROM "${dest}" WHERE row_id = ANY($1)`, [deleteIds]);
+					}
 				}
 			}
 		}, "Failed to materialise deltas");

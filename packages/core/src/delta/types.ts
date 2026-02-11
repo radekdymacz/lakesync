@@ -39,6 +39,12 @@ export interface TableSchema {
 		name: string;
 		type: "string" | "number" | "boolean" | "json" | "null";
 	}>;
+	/** Composite primary key columns. Defaults to `["row_id"]`. Each entry must be `"row_id"` or exist in `columns`. */
+	primaryKey?: string[];
+	/** When true (default), tombstoned rows are soft-deleted (`deleted_at` set) instead of hard-deleted. */
+	softDelete?: boolean;
+	/** When set, upsert resolves on this column (UNIQUE constraint) instead of the primary key. Must exist in `columns`. */
+	externalIdColumn?: string;
 }
 
 /** Composite key utility — avoids string concatenation bugs */

@@ -9,7 +9,12 @@ import {
 import mysql from "mysql2/promise";
 import type { DatabaseAdapter, DatabaseAdapterConfig } from "./db-types";
 import type { Materialisable } from "./materialise";
-import { buildSchemaIndex, groupDeltasByTable } from "./materialise";
+import {
+	buildSchemaIndex,
+	groupDeltasByTable,
+	isSoftDelete,
+	resolvePrimaryKey,
+} from "./materialise";
 import { mergeLatestState, wrapAsync } from "./shared";
 
 /**
@@ -149,7 +154,8 @@ export class MySQLAdapter implements DatabaseAdapter, Materialisable {
 	 *
 	 * For each table with a matching schema, merges delta history into the
 	 * latest row state and upserts into the destination table. Tombstoned
-	 * rows are deleted. The `props` column is never touched.
+	 * rows are soft-deleted (default) or hard-deleted. The `props` column
+	 * is never touched.
 	 */
 	async materialise(
 		deltas: RowDelta[],
@@ -167,13 +173,22 @@ export class MySQLAdapter implements DatabaseAdapter, Materialisable {
 				const schema = schemaIndex.get(tableName);
 				if (!schema) continue;
 
+				const pk = resolvePrimaryKey(schema);
+				const soft = isSoftDelete(schema);
+
 				// Ensure destination table exists
 				const typedCols = schema.columns
 					.map((col) => `\`${col.name}\` ${lakeSyncTypeToMySQL(col.type)}`)
 					.join(", ");
 
+				const pkConstraint = `PRIMARY KEY (${pk.map((c) => `\`${c}\``).join(", ")})`;
+				const deletedAtCol = soft ? `, deleted_at TIMESTAMP NULL` : "";
+				const uniqueConstraint = schema.externalIdColumn
+					? `, UNIQUE KEY (\`${schema.externalIdColumn}\`)`
+					: "";
+
 				await this.pool.execute(
-					`CREATE TABLE IF NOT EXISTS \`${schema.table}\` (row_id VARCHAR(255) PRIMARY KEY, ${typedCols}, props JSON NOT NULL DEFAULT ('{}'), synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+					`CREATE TABLE IF NOT EXISTS \`${schema.table}\` (row_id VARCHAR(255) NOT NULL, ${typedCols}, props JSON NOT NULL DEFAULT ('{}')${deletedAtCol}, synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, ${pkConstraint}${uniqueConstraint})`,
 				);
 
 				// Query delta history for affected rows
@@ -210,9 +225,9 @@ export class MySQLAdapter implements DatabaseAdapter, Materialisable {
 				// UPSERT rows
 				if (upserts.length > 0) {
 					const cols = schema.columns.map((c) => c.name);
-					const valuePlaceholders = upserts
-						.map(() => `(?, ${cols.map(() => "?").join(", ")}, NOW())`)
-						.join(", ");
+					const valuePlaceholders = soft
+						? upserts.map(() => `(?, ${cols.map(() => "?").join(", ")}, NULL, NOW())`).join(", ")
+						: upserts.map(() => `(?, ${cols.map(() => "?").join(", ")}, NOW())`).join(", ");
 
 					const values: unknown[] = [];
 					for (const { rowId, state } of upserts) {
@@ -223,20 +238,31 @@ export class MySQLAdapter implements DatabaseAdapter, Materialisable {
 					}
 
 					const updateCols = cols.map((c) => `\`${c}\` = VALUES(\`${c}\`)`).join(", ");
+					const softUpdateExtra = soft ? ", deleted_at = NULL" : "";
+					const colList = soft
+						? `row_id, ${cols.map((c) => `\`${c}\``).join(", ")}, deleted_at, synced_at`
+						: `row_id, ${cols.map((c) => `\`${c}\``).join(", ")}, synced_at`;
 
 					await this.pool.execute(
-						`INSERT INTO \`${schema.table}\` (row_id, ${cols.map((c) => `\`${c}\``).join(", ")}, synced_at) VALUES ${valuePlaceholders} ON DUPLICATE KEY UPDATE ${updateCols}, synced_at = VALUES(synced_at)`,
+						`INSERT INTO \`${schema.table}\` (${colList}) VALUES ${valuePlaceholders} ON DUPLICATE KEY UPDATE ${updateCols}${softUpdateExtra}, synced_at = VALUES(synced_at)`,
 						values,
 					);
 				}
 
-				// DELETE tombstoned rows
+				// DELETE / soft-delete tombstoned rows
 				if (deleteIds.length > 0) {
 					const delPlaceholders = deleteIds.map(() => "?").join(", ");
-					await this.pool.execute(
-						`DELETE FROM \`${schema.table}\` WHERE row_id IN (${delPlaceholders})`,
-						deleteIds,
-					);
+					if (soft) {
+						await this.pool.execute(
+							`UPDATE \`${schema.table}\` SET deleted_at = NOW(), synced_at = NOW() WHERE row_id IN (${delPlaceholders})`,
+							deleteIds,
+						);
+					} else {
+						await this.pool.execute(
+							`DELETE FROM \`${schema.table}\` WHERE row_id IN (${delPlaceholders})`,
+							deleteIds,
+						);
+					}
 				}
 			}
 		}, "Failed to materialise deltas");

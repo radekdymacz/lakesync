@@ -378,6 +378,7 @@ describe("BigQueryAdapter", () => {
 				{ name: "title", type: "string" },
 				{ name: "done", type: "boolean" },
 			],
+			softDelete: false,
 		};
 
 		it("returns Ok without querying when deltas are empty", async () => {
@@ -431,14 +432,15 @@ describe("BigQueryAdapter", () => {
 
 			expect(sql).toContain("MERGE `test_dataset.todos` AS t");
 			expect(sql).toContain("ON t.row_id = s.row_id");
-			// UPDATE SET should contain columns + synced_at, but NOT props
-			expect(sql).toContain(
-				"WHEN MATCHED THEN UPDATE SET title = s.title, done = s.done, synced_at = s.synced_at",
-			);
+			// UPDATE SET should contain columns + synced_at, but NOT props or deleted_at
+			expect(sql).toContain("title = s.title");
+			expect(sql).toContain("done = s.done");
+			expect(sql).toContain("synced_at = s.synced_at");
 			// props should NOT appear in the UPDATE SET line
 			const updateLine = sql.split("\n").find((l) => l.includes("UPDATE SET"));
 			expect(updateLine).toBeDefined();
 			expect(updateLine).not.toContain("props");
+			expect(updateLine).not.toContain("deleted_at");
 		});
 
 		it("INSERT includes props with default '{}' value", async () => {

@@ -1,7 +1,14 @@
 import type { HLCTimestamp, RowDelta, TableSchema } from "@lakesync/core";
 import { Ok } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
-import { buildSchemaIndex, groupDeltasByTable, isMaterialisable } from "../materialise";
+import {
+	buildSchemaIndex,
+	groupDeltasByTable,
+	isMaterialisable,
+	isSoftDelete,
+	resolveConflictColumns,
+	resolvePrimaryKey,
+} from "../materialise";
 
 function makeDelta(overrides: Partial<RowDelta> = {}): RowDelta {
 	return {
@@ -120,5 +127,89 @@ describe("buildSchemaIndex", () => {
 		expect(result.size).toBe(2);
 		expect(result.get("todos")!.table).toBe("todos");
 		expect(result.get("jira_issues")!.table).toBe("tickets");
+	});
+});
+
+describe("resolvePrimaryKey", () => {
+	it("defaults to ['row_id'] when primaryKey is not set", () => {
+		const schema: TableSchema = {
+			table: "todos",
+			columns: [{ name: "title", type: "string" }],
+		};
+		expect(resolvePrimaryKey(schema)).toEqual(["row_id"]);
+	});
+
+	it("returns custom primaryKey when set", () => {
+		const schema: TableSchema = {
+			table: "orders",
+			columns: [
+				{ name: "org_id", type: "string" },
+				{ name: "order_id", type: "string" },
+			],
+			primaryKey: ["org_id", "order_id"],
+		};
+		expect(resolvePrimaryKey(schema)).toEqual(["org_id", "order_id"]);
+	});
+});
+
+describe("resolveConflictColumns", () => {
+	it("defaults to primary key when externalIdColumn is not set", () => {
+		const schema: TableSchema = {
+			table: "todos",
+			columns: [{ name: "title", type: "string" }],
+		};
+		expect(resolveConflictColumns(schema)).toEqual(["row_id"]);
+	});
+
+	it("uses custom primaryKey when externalIdColumn is not set", () => {
+		const schema: TableSchema = {
+			table: "orders",
+			columns: [
+				{ name: "org_id", type: "string" },
+				{ name: "order_id", type: "string" },
+			],
+			primaryKey: ["org_id", "order_id"],
+		};
+		expect(resolveConflictColumns(schema)).toEqual(["org_id", "order_id"]);
+	});
+
+	it("uses externalIdColumn when set", () => {
+		const schema: TableSchema = {
+			table: "users",
+			columns: [
+				{ name: "name", type: "string" },
+				{ name: "ext_id", type: "string" },
+			],
+			externalIdColumn: "ext_id",
+		};
+		expect(resolveConflictColumns(schema)).toEqual(["ext_id"]);
+	});
+});
+
+describe("isSoftDelete", () => {
+	it("defaults to true when softDelete is not set", () => {
+		const schema: TableSchema = {
+			table: "todos",
+			columns: [{ name: "title", type: "string" }],
+		};
+		expect(isSoftDelete(schema)).toBe(true);
+	});
+
+	it("returns true when softDelete is explicitly true", () => {
+		const schema: TableSchema = {
+			table: "todos",
+			columns: [{ name: "title", type: "string" }],
+			softDelete: true,
+		};
+		expect(isSoftDelete(schema)).toBe(true);
+	});
+
+	it("returns false when softDelete is explicitly false", () => {
+		const schema: TableSchema = {
+			table: "todos",
+			columns: [{ name: "title", type: "string" }],
+			softDelete: false,
+		};
+		expect(isSoftDelete(schema)).toBe(false);
 	});
 });

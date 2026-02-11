@@ -36,7 +36,7 @@ Source connectors poll external APIs on an interval and push changes into the sy
 ## Key Features
 
 - **Pluggable adapters** — `DatabaseAdapter` for SQL-like sources, `LakeAdapter` for object storage. Both are bidirectional. Cross-backend flows via sync rules.
-- **Materialise protocol** — Adapters that implement `Materialisable` can materialise flushed deltas into queryable destination tables with a hybrid column model (synced columns + extensible `props JSONB`).
+- **Materialise protocol** — Adapters that implement `Materialisable` can materialise flushed deltas into queryable destination tables with a hybrid column model (synced columns + extensible `props JSONB`). Supports composite primary keys, soft delete (default), and external ID deduplication.
 - **Source polling** — `BaseSourcePoller` provides lifecycle management, chunked push, and memory-managed ingestion with automatic backpressure and flush. Connectors extend it to poll any external API.
 - **Adapter-sourced pull** — Pull data from named source adapters (BigQuery, Postgres, etc.) directly into local SQLite. The gateway queries the adapter and applies sync rules before returning filtered deltas.
 - **Sync rules DSL** — Declarative bucket-based filtering with `eq`/`in`/`neq`/`gt`/`lt`/`gte`/`lte` operators and `jwt:` claim references. Pure function evaluation via `filterDeltas()`.

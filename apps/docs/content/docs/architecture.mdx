@@ -275,6 +275,7 @@ Destination tables follow a **hybrid column model**:
 
 - **Synced columns** — written by the materialiser, derived from `TableSchema.columns`
 - **`props JSONB DEFAULT '{}'`** — consumer-extensible column, never touched by the materialiser
+- **`deleted_at`** — set on soft-delete (enabled by default), `NULL` for live rows
 - **`synced_at`** — updated on every materialise cycle
 
 ```mermaid
@@ -293,6 +294,70 @@ import { isMaterialisable } from "@lakesync/adapter";
 if (isMaterialisable(adapter)) {
   await adapter.materialise(deltas, schemas);
 }
+```
+
+### Composite Primary Keys
+
+By default, destination tables use `row_id` as their primary key. Set `primaryKey` on `TableSchema` to use a composite key:
+
+```ts
+const schema: TableSchema = {
+  table: "order_items",
+  columns: [
+    { name: "order_id", type: "string" },
+    { name: "product_id", type: "string" },
+    { name: "quantity", type: "number" },
+  ],
+  primaryKey: ["order_id", "product_id"],
+};
+```
+
+Each entry must be `"row_id"` or an existing column name. All three database adapters (Postgres, MySQL, BigQuery) generate the appropriate `PRIMARY KEY` constraint.
+
+### Soft Delete
+
+Tombstoned rows are **soft-deleted by default** — the materialiser sets `deleted_at` to the current timestamp instead of removing the row. This preserves audit trails and enables un-delete when a row is re-inserted.
+
+Set `softDelete: false` to opt out and hard-delete tombstoned rows:
+
+```ts
+const schema: TableSchema = {
+  table: "events",
+  columns: [{ name: "payload", type: "json" }],
+  softDelete: false, // DELETE instead of UPDATE SET deleted_at
+};
+```
+
+When soft delete is enabled (the default), upserting a previously deleted row automatically clears `deleted_at` back to `NULL`.
+
+### External ID Column
+
+When integrating with external systems (Jira, Salesforce, etc.), rows often have an external identifier that should be used for deduplication instead of `row_id`. Set `externalIdColumn` to resolve upserts on that column:
+
+```ts
+const schema: TableSchema = {
+  table: "jira_issues",
+  columns: [
+    { name: "jira_key", type: "string" },
+    { name: "summary", type: "string" },
+    { name: "status", type: "string" },
+  ],
+  externalIdColumn: "jira_key",
+};
+```
+
+This adds a `UNIQUE` constraint on the column and uses it for `ON CONFLICT` targeting (Postgres/BigQuery) or `ON DUPLICATE KEY` resolution (MySQL). The primary key remains unchanged.
+
+### Helper Functions
+
+Three helpers are exported from `@lakesync/adapter` for use in custom materialisation logic:
+
+```ts
+import { resolvePrimaryKey, resolveConflictColumns, isSoftDelete } from "@lakesync/adapter";
+
+resolvePrimaryKey(schema);      // string[] — defaults to ["row_id"]
+resolveConflictColumns(schema); // string[] — externalIdColumn or PK
+isSoftDelete(schema);           // boolean — defaults to true
 ```
 
 ## Checkpoints

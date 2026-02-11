@@ -345,6 +345,120 @@ describe("validateSchemaBody", () => {
 			expect(result.error.status).toBe(400);
 		}
 	});
+
+	it("returns Ok for a schema with all new fields", () => {
+		const raw = JSON.stringify({
+			table: "orders",
+			columns: [
+				{ name: "org_id", type: "string" },
+				{ name: "order_id", type: "string" },
+				{ name: "ext_ref", type: "string" },
+			],
+			primaryKey: ["org_id", "order_id"],
+			softDelete: true,
+			externalIdColumn: "ext_ref",
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.primaryKey).toEqual(["org_id", "order_id"]);
+			expect(result.value.softDelete).toBe(true);
+			expect(result.value.externalIdColumn).toBe("ext_ref");
+		}
+	});
+
+	it("allows primaryKey with row_id entry", () => {
+		const raw = JSON.stringify({
+			table: "users",
+			columns: [{ name: "name", type: "string" }],
+			primaryKey: ["row_id"],
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(true);
+	});
+
+	it("returns error for empty primaryKey array", () => {
+		const raw = JSON.stringify({
+			table: "users",
+			columns: [{ name: "name", type: "string" }],
+			primaryKey: [],
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.status).toBe(400);
+			expect(result.error.message).toContain("primaryKey");
+		}
+	});
+
+	it("returns error for primaryKey referencing non-existent column", () => {
+		const raw = JSON.stringify({
+			table: "users",
+			columns: [{ name: "name", type: "string" }],
+			primaryKey: ["missing_col"],
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.status).toBe(400);
+			expect(result.error.message).toContain("missing_col");
+		}
+	});
+
+	it("returns error for non-boolean softDelete", () => {
+		const raw = JSON.stringify({
+			table: "users",
+			columns: [{ name: "name", type: "string" }],
+			softDelete: "yes",
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.status).toBe(400);
+			expect(result.error.message).toContain("softDelete");
+		}
+	});
+
+	it("returns error for externalIdColumn referencing non-existent column", () => {
+		const raw = JSON.stringify({
+			table: "users",
+			columns: [{ name: "name", type: "string" }],
+			externalIdColumn: "ghost",
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.status).toBe(400);
+			expect(result.error.message).toContain("ghost");
+		}
+	});
+
+	it("returns error for empty externalIdColumn string", () => {
+		const raw = JSON.stringify({
+			table: "users",
+			columns: [{ name: "name", type: "string" }],
+			externalIdColumn: "",
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.status).toBe(400);
+			expect(result.error.message).toContain("externalIdColumn");
+		}
+	});
+
+	it("allows softDelete false", () => {
+		const raw = JSON.stringify({
+			table: "users",
+			columns: [{ name: "name", type: "string" }],
+			softDelete: false,
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.softDelete).toBe(false);
+		}
+	});
 });
 
 // ---------------------------------------------------------------------------

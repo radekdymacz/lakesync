@@ -44,6 +44,29 @@ export function isMaterialisable(adapter: unknown): adapter is Materialisable {
 }
 
 /**
+ * Resolve the primary key columns for a table schema.
+ * Defaults to `["row_id"]` when not explicitly set.
+ */
+export function resolvePrimaryKey(schema: TableSchema): string[] {
+	return schema.primaryKey ?? ["row_id"];
+}
+
+/**
+ * Resolve the conflict columns used for upsert ON CONFLICT targeting.
+ * When `externalIdColumn` is set, upserts resolve on that column instead of the PK.
+ */
+export function resolveConflictColumns(schema: TableSchema): string[] {
+	return schema.externalIdColumn ? [schema.externalIdColumn] : resolvePrimaryKey(schema);
+}
+
+/**
+ * Whether tombstoned rows should be soft-deleted (default) or hard-deleted.
+ */
+export function isSoftDelete(schema: TableSchema): boolean {
+	return schema.softDelete !== false;
+}
+
+/**
  * Group deltas by their table name, collecting the set of affected row IDs per table.
  *
  * @param deltas - The deltas to group.

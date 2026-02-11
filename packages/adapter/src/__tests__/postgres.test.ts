@@ -329,6 +329,7 @@ describe("PostgresAdapter", () => {
 				{ name: "title", type: "string" },
 				{ name: "done", type: "boolean" },
 			],
+			softDelete: false,
 		};
 
 		it("returns Ok without querying for empty deltas", async () => {
@@ -366,6 +367,7 @@ describe("PostgresAdapter", () => {
 			expect(createSql).toContain('"done" BOOLEAN');
 			expect(createSql).toContain("props JSONB NOT NULL DEFAULT '{}'");
 			expect(createSql).toContain("synced_at TIMESTAMPTZ NOT NULL DEFAULT now()");
+			expect(createSql).toContain('PRIMARY KEY ("row_id")');
 		});
 
 		it("UPSERT SQL excludes props and includes synced_at in SET clause", async () => {
@@ -389,7 +391,7 @@ describe("PostgresAdapter", () => {
 
 			const upsertSql = mockQuery.mock.calls[2]![0] as string;
 			expect(upsertSql).toContain("INSERT INTO");
-			expect(upsertSql).toContain("ON CONFLICT (row_id) DO UPDATE SET");
+			expect(upsertSql).toContain('ON CONFLICT ("row_id") DO UPDATE SET');
 			expect(upsertSql).toContain('"title" = EXCLUDED."title"');
 			expect(upsertSql).toContain('"done" = EXCLUDED."done"');
 			expect(upsertSql).toContain('"synced_at" = EXCLUDED."synced_at"');
