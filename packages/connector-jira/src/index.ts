@@ -1,5 +1,6 @@
-import { registerPollerFactory } from "@lakesync/core";
+import { registerOutputSchemas, registerPollerFactory } from "@lakesync/core";
 import { JiraSourcePoller } from "./poller";
+import { JIRA_TABLE_SCHEMAS } from "./schemas";
 import type { JiraIngestConfig } from "./types";
 
 export { JiraClient } from "./client";
@@ -18,6 +19,9 @@ export type {
 	JiraProjectPage,
 	JiraSearchResponse,
 } from "./types";
+
+// Auto-register output schemas so listConnectorDescriptors() includes table info.
+registerOutputSchemas("jira", JIRA_TABLE_SCHEMAS);
 
 // Auto-register poller factory so createPoller("jira", ...) works.
 registerPollerFactory("jira", (config, gateway) => {

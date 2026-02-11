@@ -3,6 +3,7 @@ import {
 	type ActionDiscovery,
 	type ActionErrorResult,
 	type ActionResult,
+	type ConnectorDescriptor,
 	HLC,
 	type HLCTimestamp,
 	isActionError,
@@ -459,6 +460,19 @@ export class SyncCoordinator {
 			return { ok: true, value: { connectors: {} } };
 		}
 		return this.transport.describeActions();
+	}
+
+	/**
+	 * List available connector types and their configuration schemas.
+	 *
+	 * Delegates to the transport's `listConnectorTypes()` method. Returns
+	 * an empty array when the transport does not support it.
+	 */
+	async listConnectorTypes(): Promise<Result<ConnectorDescriptor[], LakeSyncError>> {
+		if (!this.transport.listConnectorTypes) {
+			return { ok: true, value: [] };
+		}
+		return this.transport.listConnectorTypes();
 	}
 
 	/** Stop auto-sync and clean up listeners */

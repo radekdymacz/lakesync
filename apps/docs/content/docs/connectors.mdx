@@ -621,6 +621,133 @@ interface IngestTarget extends PushTarget {
 
 Use `isIngestTarget(target)` to check at runtime whether a target supports flush.
 
+## Connector Discovery
+
+The gateway exposes a `GET /connectors/types` endpoint that returns machine-readable metadata for all supported connector types. This enables UIs to dynamically render "Add Connector" forms without hardcoding per-type config shapes.
+
+### Endpoint
+
+```
+GET /connectors/types
+```
+
+**No authentication required** — this returns static metadata, not instance-specific data. Available on both gateway-server and gateway-worker.
+
+**Response:**
+
+```json
+[
+  {
+    "type": "postgres",
+    "displayName": "PostgreSQL",
+    "description": "PostgreSQL relational database connector.",
+    "category": "database",
+    "configSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "connectionString": { "type": "string", "description": "..." }
+      },
+      "required": ["connectionString"]
+    },
+    "ingestSchema": { ... },
+    "outputTables": null
+  },
+  {
+    "type": "jira",
+    "displayName": "Jira",
+    "description": "Atlassian Jira Cloud issue tracker connector.",
+    "category": "api",
+    "configSchema": { ... },
+    "ingestSchema": { ... },
+    "outputTables": [
+      { "table": "jira_issues", "columns": [...] },
+      { "table": "jira_comments", "columns": [...] },
+      { "table": "jira_projects", "columns": [...] }
+    ]
+  }
+]
+```
+
+### ConnectorDescriptor
+
+Each entry in the response is a `ConnectorDescriptor`:
+
+```ts
+interface ConnectorDescriptor {
+  type: ConnectorType;                          // "postgres" | "jira" | ...
+  displayName: string;                          // "PostgreSQL"
+  description: string;                          // Short description
+  category: "database" | "api";                 // Determines ingest model
+  configSchema: Record<string, unknown>;        // JSON Schema draft-07
+  ingestSchema: Record<string, unknown>;        // JSON Schema for ingest config
+  outputTables: ReadonlyArray<TableSchema> | null; // null for DB connectors
+}
+```
+
+- **`configSchema`** — JSON Schema describing the connector-specific config object (e.g. `connectionString` for Postgres, `domain`/`email`/`apiToken` for Jira). Use this to render form fields dynamically.
+- **`ingestSchema`** — JSON Schema for the ingest configuration. Database connectors require a `tables` array; API connectors only accept `intervalMs`.
+- **`outputTables`** — For API connectors, describes the tables the connector produces. `null` for database connectors (tables are user-defined via ingest config).
+
+### React Hook
+
+The `useConnectorTypes` hook fetches connector types from the gateway and returns them reactively:
+
+```tsx
+import { useConnectorTypes } from "@lakesync/react";
+
+function AddConnectorForm() {
+  const { types, isLoading, error, refetch } = useConnectorTypes();
+
+  if (isLoading) return <p>Loading...</p>;
+  if (error) return <p>Error: {error.message}</p>;
+
+  return (
+    <select>
+      {types.map((t) => (
+        <option key={t.type} value={t.type}>
+          {t.displayName}
+        </option>
+      ))}
+    </select>
+  );
+}
+```
+
+### Custom Connectors
+
+Register custom connector types at module load time using `registerConnectorDescriptor`:
+
+```ts
+import { registerConnectorDescriptor } from "@lakesync/core";
+
+registerConnectorDescriptor({
+  type: "cloudwatch" as ConnectorType,
+  displayName: "CloudWatch",
+  description: "AWS CloudWatch Logs connector.",
+  category: "api",
+  configSchema: {
+    $schema: "http://json-schema.org/draft-07/schema#",
+    type: "object",
+    properties: {
+      logGroupName: { type: "string" },
+      region: { type: "string" },
+    },
+    required: ["logGroupName", "region"],
+  },
+  ingestSchema: { ... },
+  outputTables: null,
+});
+```
+
+Custom descriptors appear in `GET /connectors/types` and `useConnectorTypes()` alongside built-in types.
+
+### curl Example
+
+```bash
+curl https://gateway.example.com/connectors/types
+```
+
 ## Security
 
 - All connector routes require a JWT with `role: "admin"`.

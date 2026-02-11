@@ -21,6 +21,7 @@ import {
 	handleActionRequest,
 	handleFlushRequest,
 	handleListConnectors,
+	handleListConnectorTypes,
 	handleMetrics,
 	handlePullRequest,
 	handlePushRequest,
@@ -601,6 +602,13 @@ export class GatewayServer {
 		// Health check — unauthenticated
 		if (pathname === "/health" && method === "GET") {
 			sendJson(res, { status: "ok" }, 200, corsH);
+			return;
+		}
+
+		// Connector types — unauthenticated (static metadata)
+		if (pathname === "/connectors/types" && method === "GET") {
+			const result = handleListConnectorTypes();
+			sendResult(res, result, corsH);
 			return;
 		}
 

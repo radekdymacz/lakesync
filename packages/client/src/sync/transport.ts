@@ -2,6 +2,7 @@ import type {
 	ActionDiscovery,
 	ActionPush,
 	ActionResponse,
+	ConnectorDescriptor,
 	HLCTimestamp,
 	LakeSyncError,
 	Result,
@@ -33,6 +34,8 @@ export interface SyncTransport {
 	executeAction?(msg: ActionPush): Promise<Result<ActionResponse, LakeSyncError>>;
 	/** Discover available connectors and their supported action types. */
 	describeActions?(): Promise<Result<ActionDiscovery, LakeSyncError>>;
+	/** List available connector types and their configuration schemas. */
+	listConnectorTypes?(): Promise<Result<ConnectorDescriptor[], LakeSyncError>>;
 
 	/** Whether this transport supports real-time server push. */
 	readonly supportsRealtime?: boolean;

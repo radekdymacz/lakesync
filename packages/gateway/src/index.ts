@@ -32,6 +32,7 @@ export {
 	handleActionRequest,
 	handleFlushRequest,
 	handleListConnectors,
+	handleListConnectorTypes,
 	handleMetrics,
 	handlePullRequest,
 	handlePushRequest,

@@ -2,6 +2,7 @@ import type {
 	ActionDiscovery,
 	ActionPush,
 	ActionResponse,
+	ConnectorDescriptor,
 	HLCTimestamp,
 	LakeSyncError,
 	Result,
@@ -188,6 +189,43 @@ export class HttpTransport implements SyncTransport {
 			const cause = toError(error);
 			return Err(
 				new LSError(`Describe actions request failed: ${cause.message}`, "TRANSPORT_ERROR", cause),
+			);
+		}
+	}
+
+	/**
+	 * List available connector types and their configuration schemas.
+	 *
+	 * Sends a GET request to the unauthenticated `/connectors/types` endpoint.
+	 */
+	async listConnectorTypes(): Promise<Result<ConnectorDescriptor[], LakeSyncError>> {
+		const url = `${this.baseUrl}/connectors/types`;
+
+		try {
+			const response = await this._fetch(url, {
+				method: "GET",
+			});
+
+			if (!response.ok) {
+				const text = await response.text().catch(() => "Unknown error");
+				return Err(
+					new LSError(
+						`List connector types failed (${response.status}): ${text}`,
+						"TRANSPORT_ERROR",
+					),
+				);
+			}
+
+			const data = (await response.json()) as ConnectorDescriptor[];
+			return Ok(data);
+		} catch (error) {
+			const cause = toError(error);
+			return Err(
+				new LSError(
+					`List connector types request failed: ${cause.message}`,
+					"TRANSPORT_ERROR",
+					cause,
+				),
 			);
 		}
 	}

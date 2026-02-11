@@ -1,5 +1,6 @@
-import { registerPollerFactory } from "@lakesync/core";
+import { registerOutputSchemas, registerPollerFactory } from "@lakesync/core";
 import { SalesforceSourcePoller } from "./poller";
+import { SALESFORCE_TABLE_SCHEMAS } from "./schemas";
 import type { SalesforceIngestConfig } from "./types";
 
 export { SalesforceClient } from "./client";
@@ -18,6 +19,9 @@ export type {
 	SfLead,
 	SfOpportunity,
 } from "./types";
+
+// Auto-register output schemas so listConnectorDescriptors() includes table info.
+registerOutputSchemas("salesforce", SALESFORCE_TABLE_SCHEMAS);
 
 // Auto-register poller factory so createPoller("salesforce", ...) works.
 registerPollerFactory("salesforce", (config, gateway) => {

@@ -1,5 +1,9 @@
 import type { HLCTimestamp, ResolvedClaims, RowDelta, SyncRulesConfig } from "@lakesync/core";
-import { validateConnectorConfig, validateSyncRules } from "@lakesync/core";
+import {
+	listConnectorDescriptors,
+	validateConnectorConfig,
+	validateSyncRules,
+} from "@lakesync/core";
 import type { ConfigStore } from "./config-store";
 import type { SyncGateway } from "./gateway";
 import {
@@ -255,6 +259,13 @@ export async function handleListConnectors(store: ConfigStore): Promise<HandlerR
 	}));
 
 	return { status: 200, body: list };
+}
+
+/**
+ * Handle listing available connector types (static metadata).
+ */
+export function handleListConnectorTypes(): HandlerResult {
+	return { status: 200, body: listConnectorDescriptors() };
 }
 
 /**

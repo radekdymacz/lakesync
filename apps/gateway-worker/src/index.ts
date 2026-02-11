@@ -180,6 +180,16 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 		});
 	}
 
+	// Connector types — unauthenticated (static metadata)
+	if (path === "/connectors/types" && method === "GET") {
+		const { handleListConnectorTypes } = await import("@lakesync/gateway");
+		const result = handleListConnectorTypes();
+		return new Response(JSON.stringify(result.body), {
+			status: result.status,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
+
 	// ── Authentication ──────────────────────────────────────────────
 	const token = extractBearerToken(request) ?? url.searchParams.get("token");
 	if (!token) {
