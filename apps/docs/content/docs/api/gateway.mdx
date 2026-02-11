@@ -37,6 +37,7 @@ interface GatewayConfig {
   maxBackpressureBytes?: number;
   perTableBudgetBytes?: number;
   actionHandlers?: Record<string, ActionHandler>;
+  schemas?: ReadonlyArray<TableSchema>;
 }
 ```
 
@@ -52,6 +53,7 @@ interface GatewayConfig {
 | `maxBackpressureBytes` | `2 × maxBufferBytes` | Reject pushes above this threshold |
 | `perTableBudgetBytes` | — | Per-table budget for auto-flush |
 | `actionHandlers` | — | Named action handlers for imperative actions |
+| `schemas` | — | Table schemas for materialisation after flush (see [Materialise Protocol](/docs/architecture#materialise-protocol)) |
 
 **Example:**
 
@@ -311,6 +313,10 @@ The `@lakesync/gateway-server` package wraps `SyncGateway` in a standalone HTTP 
 | `POST` | `/admin/flush/:id` | JWT | Trigger flush |
 | `POST` | `/admin/schema/:id` | JWT | Update schema |
 | `POST` | `/admin/sync-rules/:id` | JWT | Update sync rules |
+| `POST` | `/admin/connectors/:id` | JWT (admin) | Register a connector |
+| `GET` | `/admin/connectors/:id` | JWT (admin) | List connectors |
+| `DELETE` | `/admin/connectors/:id/:name` | JWT (admin) | Unregister a connector |
+| `GET` | `/sync/:id/metrics` | JWT | Buffer statistics |
 | `GET` | `/health` | None | Health check |
 
 ### Configuration
@@ -319,15 +325,19 @@ The `@lakesync/gateway-server` package wraps `SyncGateway` in a standalone HTTP 
 import { GatewayServer } from "@lakesync/gateway-server";
 
 const server = new GatewayServer({
-  gateway,
+  gatewayId: "my-gw",
   port: 8080,
+  adapter: s3Adapter,                    // optional storage adapter
+  maxBufferBytes: 4 * 1024 * 1024,       // default 4 MiB
+  maxBufferAgeMs: 30_000,                // default 30s
   jwtSecret: process.env.JWT_SECRET,     // optional — disables auth when absent
-  corsOrigins: ["http://localhost:5173"], // optional CORS origins
+  allowedOrigins: ["http://localhost:5173"], // optional CORS origins
   persistence: "sqlite",                 // "memory" (default) or "sqlite"
   flushIntervalMs: 30_000,              // periodic flush interval (default 30s)
+  ingestSources: [],                     // optional polling ingest sources
 });
 
-server.start();
+await server.start();
 ```
 
 ## Gateway Worker (Cloudflare)

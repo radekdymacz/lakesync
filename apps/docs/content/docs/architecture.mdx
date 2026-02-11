@@ -267,6 +267,34 @@ The `BaseSourcePoller` includes a **memory-managed ingestion pipeline**. Pollers
 
 See [Source Polling Ingest](/docs/source-polling) for database polling setup and [Dynamic Connectors](/docs/connectors) for API connectors like Jira and Salesforce.
 
+## Materialise Protocol
+
+After flushing deltas to a storage adapter, the gateway can optionally **materialise** them into queryable destination tables. Adapters that implement the `Materialisable` interface produce a denormalised, up-to-date table from the delta log — making the data directly queryable via SQL without replaying deltas.
+
+Destination tables follow a **hybrid column model**:
+
+- **Synced columns** — written by the materialiser, derived from `TableSchema.columns`
+- **`props JSONB DEFAULT '{}'`** — consumer-extensible column, never touched by the materialiser
+- **`synced_at`** — updated on every materialise cycle
+
+```mermaid
+flowchart LR
+    GW[Gateway] -->|flush| Adapter[DatabaseAdapter]
+    Adapter -->|materialise| DT[Destination Table]
+    DT -->|SELECT| Consumer[SQL Queries]
+    Note[props JSONB — consumer-extensible]
+```
+
+The `isMaterialisable(adapter)` type guard checks at runtime whether an adapter supports materialisation. The gateway triggers materialisation automatically after a successful flush when `schemas` are configured in `GatewayConfig`.
+
+```ts
+import { isMaterialisable } from "@lakesync/adapter";
+
+if (isMaterialisable(adapter)) {
+  await adapter.materialise(deltas, schemas);
+}
+```
+
 ## Checkpoints
 
 For initial sync (when `lastSyncedHlc === 0`), the client downloads a **checkpoint** — a complete snapshot of the current state. Checkpoints are:

@@ -17,7 +17,47 @@ pnpm add lakesync
 bun add lakesync
 ```
 
-## Quick Start
+## Quick Start (createClient)
+
+The fastest way to get started — `createClient` opens a database, registers schemas, creates a transport, and starts auto-sync in one call:
+
+```ts
+import { createClient } from "lakesync/client";
+
+const client = await createClient({
+  name: "my-app",
+  clientId: "client-1",
+  schemas: [
+    {
+      table: "todos",
+      columns: [
+        { name: "title", type: "string" },
+        { name: "completed", type: "number" },
+      ],
+    },
+  ],
+  gateway: {
+    url: "https://your-gateway.example.com",
+    gatewayId: "gw-1",
+    token: "your-jwt-token",
+  },
+});
+
+// Insert, update, delete via the tracker
+await client.coordinator.tracker.insert("todos", "todo-1", {
+  title: "Build something great",
+  completed: 0,
+});
+
+// When done
+await client.destroy();
+```
+
+`createClient` returns a `LakeSyncClient` with `coordinator`, `db`, `transport`, and a `destroy()` method.
+
+## Manual Setup
+
+For more control (custom transports, local development, WebSocket), construct the pieces yourself.
 
 ### 1. Open a Local Database
 
@@ -114,5 +154,7 @@ await coordinator.tracker.delete("todos", "todo-1");
 
 - [Architecture](/docs/architecture) — Understand HLCs, deltas, and conflict resolution
 - [Real-Time Sync](/docs/real-time) — Sub-second sync via WebSocket broadcasting
+- [React Hooks](/docs/api/react) — `useQuery`, `useMutation`, `useSyncStatus` for React apps
+- [Actions](/docs/actions) — Execute imperative operations against external systems
 - [Core API](/docs/api/core) — Explore the core package exports
 - [Client SDK](/docs/api/client) — LocalDB, SyncCoordinator, and transports

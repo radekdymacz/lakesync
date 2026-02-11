@@ -5,6 +5,60 @@ description: API reference for @lakesync/client — LocalDB, SyncCoordinator, tr
 
 The `@lakesync/client` package provides the browser-side SDK for building local-first applications with LakeSync.
 
+## createClient
+
+One-call factory that opens a database, registers schemas, creates an HTTP transport, and starts auto-sync.
+
+```ts
+function createClient(config: CreateClientConfig): Promise<LakeSyncClient>;
+```
+
+### `CreateClientConfig`
+
+```ts
+interface CreateClientConfig {
+  name: string;
+  schemas: TableSchema[];
+  clientId: string;
+  gateway: {
+    url: string;
+    gatewayId: string;
+    token?: string;
+  };
+  autoSyncMs?: number;       // default 10000, 0 to disable
+  backend?: "idb" | "memory";
+  queue?: SyncQueue;
+  coordinatorConfig?: Omit<SyncCoordinatorConfig, "queue" | "clientId" | "autoSyncIntervalMs">;
+}
+```
+
+### `LakeSyncClient`
+
+```ts
+interface LakeSyncClient {
+  coordinator: SyncCoordinator;
+  db: LocalDB;
+  transport: SyncTransport;
+  destroy(): Promise<void>;
+}
+```
+
+**Example:**
+
+```ts
+import { createClient } from "lakesync/client";
+
+const client = await createClient({
+  name: "my-app",
+  clientId: "client-1",
+  schemas: [{ table: "todos", columns: [{ name: "title", type: "string" }] }],
+  gateway: { url: "https://gw.example.com", gatewayId: "gw-1", token: "jwt..." },
+});
+
+await client.coordinator.tracker.insert("todos", "todo-1", { title: "Hello" });
+await client.destroy();
+```
+
 ## LocalDB
 
 SQLite database running in the browser via sql.js WASM, with optional IndexedDB snapshot persistence.
@@ -318,6 +372,40 @@ class IDBQueue implements SyncQueue {
 ```
 
 Note: `IDBQueue` serialises `HLCTimestamp` to string internally because IndexedDB's `structuredClone` cannot handle `bigint`.
+
+### `ActionQueue` (interface)
+
+Outbox-pattern queue for imperative actions. Required by `SyncCoordinator.executeAction()`.
+
+```ts
+interface ActionQueue {
+  push(action: Action): Promise<Result<ActionQueueEntry, LakeSyncError>>;
+  peek(limit: number): Promise<Result<ActionQueueEntry[], LakeSyncError>>;
+  markSending(ids: string[]): Promise<Result<void, LakeSyncError>>;
+  ack(ids: string[]): Promise<Result<void, LakeSyncError>>;
+  nack(ids: string[]): Promise<Result<void, LakeSyncError>>;
+  depth(): Promise<Result<number, LakeSyncError>>;
+  clear(): Promise<Result<void, LakeSyncError>>;
+}
+```
+
+### `MemoryActionQueue`
+
+In-memory action queue for development and testing.
+
+```ts
+class MemoryActionQueue implements ActionQueue {}
+```
+
+### `IDBActionQueue`
+
+IndexedDB-backed action queue for production use. Persists actions across page refreshes.
+
+```ts
+class IDBActionQueue implements ActionQueue {
+  constructor(dbName?: string);
+}
+```
 
 ## Schema Synchronisation
 

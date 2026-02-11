@@ -93,6 +93,10 @@ const adapter = new FanOutAdapter({
 
 The `FanOutAdapter` writes to a primary adapter synchronously and replicates to secondaries in the background. Secondary failures never block the write path.
 
+### Materialise — queryable destination tables
+
+Adapters that implement the `Materialisable` interface automatically create queryable destination tables after each flush. Every synced column is derived from the `TableSchema`, plus a `props JSONB` column for consumer-extensible metadata and a `synced_at` timestamp. Tombstoned rows are deleted. The `PostgresAdapter` supports this out of the box.
+
 ### Tier — age-based lifecycle
 
 ```typescript
@@ -168,6 +172,64 @@ Declarative bucket-based filtering with JWT claim references. The gateway evalua
   }]
 }
 ```
+
+## Actions
+
+Actions are imperative operations dispatched through the gateway to external systems. Connectors register `ActionHandler`s that declare supported action types, enabling frontend discovery. The gateway handles idempotency (via `actionId` and `idempotencyKey`), validation, and routing.
+
+```typescript
+// Discover available actions
+const discovery = gateway.describeActions();
+// → { connectors: { "slack": [{ actionType: "send_message", ... }] } }
+
+// Execute an action
+const result = await gateway.handleAction({
+  clientId: "client-1",
+  actions: [{
+    actionId: "abc-123",
+    clientId: "client-1",
+    hlc: hlc.now(),
+    connector: "slack",
+    actionType: "send_message",
+    params: { channel: "#general", text: "Hello" },
+  }],
+});
+```
+
+## React Hooks
+
+`lakesync/react` provides reactive hooks that wire directly into the sync coordinator.
+
+```tsx
+import { LakeSyncProvider, useQuery, useMutation, useAction, useSyncStatus } from "lakesync/react";
+
+function App() {
+  return (
+    <LakeSyncProvider coordinator={coordinator}>
+      <TodoList />
+    </LakeSyncProvider>
+  );
+}
+
+function TodoList() {
+  const { rows } = useQuery("SELECT * FROM todos ORDER BY created_at DESC");
+  const { insert, update, remove } = useMutation();
+  const { execute } = useAction();
+  const { isOnline, isSyncing } = useSyncStatus();
+
+  return (
+    <ul>
+      {rows.map(todo => (
+        <li key={todo.id} onClick={() => update("todos", todo.id, { completed: 1 })}>
+          {todo.title}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+Queries re-run automatically when remote deltas arrive. Actions dispatch imperative operations to connectors. `useActionDiscovery()` enables dynamic UI based on registered action handlers.
 
 ## Quick Start
 
@@ -319,8 +381,12 @@ graph TB
 - **Adapter composition** — `CompositeAdapter` (route by table), `FanOutAdapter` (replicate writes), `LifecycleAdapter` (hot/cold tiers). All implement `DatabaseAdapter` so they nest freely.
 - **Table sharding** — split a tenant's traffic across multiple Durable Objects by table name. The shard router fans out pushes and merges pull results automatically.
 - **Adapter-sourced pull** — clients can pull directly from named source adapters (e.g. a BigQuery dataset) via the gateway, with sync rules filtering applied.
-- **Real-time WebSocket sync** — `WebSocketTransport` maintains a persistent connection to the gateway server, with server-initiated broadcast of new deltas to connected clients.
-- **Source connectors** — `BaseSourcePoller` provides a memory-managed ingestion pipeline. Connectors (Jira, Salesforce) poll external APIs and push deltas into the gateway with backpressure-aware streaming.
+- **Real-time WebSocket sync** — `WebSocketTransport` maintains a persistent connection to the gateway server, with server-initiated broadcast of new deltas to connected clients. Binary protobuf framing with auto-reconnect and exponential backoff.
+- **Source connectors** — `BaseSourcePoller` provides a memory-managed ingestion pipeline. Connectors (Jira, Salesforce) poll external APIs and push deltas into the gateway with backpressure-aware streaming. Dynamic registration via `createPoller()` factory — import a connector package and it auto-registers.
+- **Source polling** — two strategies for change detection: cursor-based (e.g. Jira's `updated` field) and diff-based (snapshot comparison for APIs without cursor support). Both use memory-bounded accumulation with configurable chunk size and memory budget.
+- **Actions** — imperative operations dispatched through the gateway to connector-registered `ActionHandler`s. Supports idempotency, discovery, and validation. Decoupled from sync — actions go to external systems, deltas come back.
+- **Materialise** — opt-in `Materialisable` interface for adapters that can project deltas into queryable destination tables. Auto-invoked after flush. Hybrid column model: synced columns + `props JSONB` + `synced_at`.
+- **Gateway decomposition** — `SyncGateway` is a thin facade composing `DeltaBuffer` (append log + row index), `ActionDispatcher` (action routing + idempotency), `SchemaManager` (validation), and `flushEntries` (adapter flush).
 
 ## Packages
 
@@ -328,7 +394,7 @@ graph TB
 |---------|-------------|
 | [`@lakesync/core`](packages/core) | HLC timestamps, delta types, LWW conflict resolution, sync rules, Result type |
 | [`@lakesync/client`](packages/client) | Client SDK: SyncCoordinator, SyncTracker, LocalDB, transports, queues, initial sync |
-| [`@lakesync/gateway`](packages/gateway) | Sync gateway with delta buffer, conflict resolution, adapter-sourced pull, dual-adapter flush |
+| [`@lakesync/gateway`](packages/gateway) | Sync gateway: SyncGateway facade, DeltaBuffer, ActionDispatcher, SchemaManager, adapter-sourced pull |
 | [`@lakesync/gateway-server`](packages/gateway-server) | Self-hosted gateway server (Node.js / Bun) with SQLite persistence, JWT auth, and WebSocket support |
 | [`@lakesync/adapter`](packages/adapter) | Storage adapters: MinIO/S3, Postgres, MySQL, BigQuery, Composite, FanOut, Lifecycle, migration tooling |
 | [`@lakesync/proto`](packages/proto) | Protobuf codec for the wire protocol |
@@ -354,7 +420,7 @@ graph TB
 | Cloudflare R2 | `LakeAdapter` (MinIO-compatible) | Production-ready |
 | AWS S3 | `LakeAdapter` (MinIO-compatible) | Production-ready |
 | MinIO | `LakeAdapter` | Production-ready |
-| PostgreSQL | `DatabaseAdapter` (PostgresAdapter) | Implemented |
+| PostgreSQL | `DatabaseAdapter` + `Materialisable` | Implemented |
 | MySQL | `DatabaseAdapter` (MySQLAdapter) | Implemented |
 | BigQuery | `DatabaseAdapter` (BigQueryAdapter) | Implemented |
 | Composite (route by table) | `CompositeAdapter` | Implemented |
@@ -365,7 +431,7 @@ graph TB
 
 ## Status
 
-Experimental, but real. All planned phases are implemented and tested: core sync engine, conflict resolution, client SDK, Cloudflare Workers gateway, self-hosted gateway server with WebSocket support, React bindings, compaction, checkpoint generation, sync rules (with extended comparison operators), initial sync, database adapters (Postgres, MySQL, BigQuery), composite routing, fan-out replication, lifecycle tiering, table sharding, adapter-sourced pull, and source connectors (Jira, Salesforce) with memory-managed ingestion. API is not yet stable — expect breaking changes.
+Experimental, but real. All planned phases are implemented and tested: core sync engine, conflict resolution, client SDK, Cloudflare Workers gateway, self-hosted gateway server with WebSocket support, React bindings, compaction, checkpoint generation, sync rules (with extended comparison operators), initial sync, database adapters (Postgres, MySQL, BigQuery), composite routing, fan-out replication, lifecycle tiering, table sharding, adapter-sourced pull, source connectors (Jira, Salesforce) with memory-managed ingestion, imperative actions with discovery and idempotency, and the materialise protocol for queryable destination tables. API is not yet stable — expect breaking changes.
 
 ## Contributing
 

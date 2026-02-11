@@ -440,6 +440,37 @@ interface PollerMemoryConfig {
 }
 ```
 
+## Poller Factories
+
+Register and create source pollers by connector type.
+
+```ts
+function registerPollerFactory(
+  type: string,
+  factory: PollerFactory,
+): void;
+
+function createPoller(
+  type: string,
+  config: ConnectorConfig,
+  gateway: PushTarget,
+): BaseSourcePoller;
+
+type PollerFactory = (config: ConnectorConfig, gateway: PushTarget) => BaseSourcePoller;
+```
+
+Connector packages (`@lakesync/connector-jira`, `@lakesync/connector-salesforce`) auto-register their factories on import, so `createPoller("jira", config, gateway)` works without manual registration.
+
+### `CallbackPushTarget`
+
+A simple `PushTarget` that forwards pushes to a callback. Useful for testing.
+
+```ts
+class CallbackPushTarget implements PushTarget {
+  constructor(fn: (push: SyncPush) => unknown);
+}
+```
+
 ## Auth
 
 ```ts
