@@ -29,6 +29,12 @@ export interface RowDelta {
 	deltaId: string;
 }
 
+/** Valid column types as a const tuple — single source of truth for both type and runtime validation. */
+export const COLUMN_TYPES = ["string", "number", "boolean", "json", "null"] as const;
+
+/** A valid column type. */
+export type ColumnType = (typeof COLUMN_TYPES)[number];
+
 /** Minimal schema for Phase 1. Column allow-list + type hints. */
 export interface TableSchema {
 	/** Destination table name (what gets created in the database). */
@@ -37,7 +43,7 @@ export interface TableSchema {
 	sourceTable?: string;
 	columns: Array<{
 		name: string;
-		type: "string" | "number" | "boolean" | "json" | "null";
+		type: ColumnType;
 	}>;
 	/** Composite primary key columns. Defaults to `["row_id"]`. Each entry must be `"row_id"` or exist in `columns`. */
 	primaryKey?: string[];

@@ -3,10 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { CompositeAdapter } from "../composite";
 import type { DatabaseAdapter } from "../db-types";
-
-function hlc(n: number): HLCTimestamp {
-	return BigInt(n) as HLCTimestamp;
-}
+import { hlc } from "./test-helpers";
 
 function makeDelta(overrides: Partial<RowDelta> & { table: string; hlc: HLCTimestamp }): RowDelta {
 	return {

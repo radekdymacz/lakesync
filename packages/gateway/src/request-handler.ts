@@ -8,6 +8,7 @@ import type { ConfigStore } from "./config-store";
 import type { SyncGateway } from "./gateway";
 import {
 	buildSyncRulesContext,
+	parseJson,
 	parsePullParams,
 	pushErrorToStatus,
 	validateActionBody,
@@ -180,12 +181,11 @@ export async function handleSaveSyncRules(
 	store: ConfigStore,
 	gatewayId: string,
 ): Promise<HandlerResult> {
-	let config: unknown;
-	try {
-		config = JSON.parse(raw);
-	} catch {
-		return { status: 400, body: { error: "Invalid JSON body" } };
+	const parsed = parseJson<unknown>(raw);
+	if (!parsed.ok) {
+		return { status: parsed.error.status, body: { error: parsed.error.message } };
 	}
+	const config = parsed.value;
 
 	const validation = validateSyncRules(config);
 	if (!validation.ok) {
@@ -203,12 +203,11 @@ export async function handleRegisterConnector(
 	raw: string,
 	store: ConfigStore,
 ): Promise<HandlerResult> {
-	let body: unknown;
-	try {
-		body = JSON.parse(raw);
-	} catch {
-		return { status: 400, body: { error: "Invalid JSON body" } };
+	const parsed = parseJson<unknown>(raw);
+	if (!parsed.ok) {
+		return { status: parsed.error.status, body: { error: parsed.error.message } };
 	}
+	const body = parsed.value;
 
 	const validation = validateConnectorConfig(body);
 	if (!validation.ok) {

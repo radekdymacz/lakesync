@@ -4,10 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { DatabaseAdapter } from "../db-types";
 import { FanOutAdapter } from "../fan-out";
 import type { Materialisable } from "../materialise";
-
-function hlc(n: number): HLCTimestamp {
-	return BigInt(n) as HLCTimestamp;
-}
+import { hlc } from "./test-helpers";
 
 function makeDelta(overrides: Partial<RowDelta> & { table: string; hlc: HLCTimestamp }): RowDelta {
 	return {

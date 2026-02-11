@@ -288,7 +288,8 @@ async function handleShardedRoute(
 
 	// Push — partition deltas by shard and fan out
 	if (route.doPath === "/push") {
-		return handleShardedPush(config, request, env.SYNC_GATEWAY);
+		const headerClientId = request.headers.get("X-Client-Id");
+		return handleShardedPush(config, request, env.SYNC_GATEWAY, headerClientId);
 	}
 
 	// Pull — fan out to all shards and merge

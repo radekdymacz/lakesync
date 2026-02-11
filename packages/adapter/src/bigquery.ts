@@ -18,7 +18,7 @@ import {
 	resolveConflictColumns,
 	resolvePrimaryKey,
 } from "./materialise";
-import { mergeLatestState, wrapAsync } from "./shared";
+import { groupAndMerge, mergeLatestState, wrapAsync } from "./shared";
 
 /**
  * Configuration for the BigQuery adapter.
@@ -284,32 +284,9 @@ ORDER BY hlc ASC`,
 					location: this.location,
 				});
 
-				// Group by row_id and merge to latest state
-				const rowGroups = new Map<string, Array<{ columns: string | ColumnDelta[]; op: string }>>();
-				for (const row of deltaRows as Array<{
-					row_id: string;
-					columns: string | ColumnDelta[];
-					op: string;
-				}>) {
-					let group = rowGroups.get(row.row_id);
-					if (!group) {
-						group = [];
-						rowGroups.set(row.row_id, group);
-					}
-					group.push({ columns: row.columns, op: row.op });
-				}
-
-				const upserts: Array<{ rowId: string; state: Record<string, unknown> }> = [];
-				const deleteRowIds: string[] = [];
-
-				for (const [rowId, group] of rowGroups) {
-					const state = mergeLatestState(group);
-					if (state === null) {
-						deleteRowIds.push(rowId);
-					} else {
-						upserts.push({ rowId, state });
-					}
-				}
+				const { upserts, deleteIds: deleteRowIds } = groupAndMerge(
+					deltaRows as Array<{ row_id: string; columns: string | ColumnDelta[]; op: string }>,
+				);
 
 				// MERGE upserts
 				if (upserts.length > 0) {

@@ -17,7 +17,7 @@ import {
 	resolveConflictColumns,
 	resolvePrimaryKey,
 } from "./materialise";
-import { mergeLatestState, wrapAsync } from "./shared";
+import { groupAndMerge, mergeLatestState, wrapAsync } from "./shared";
 
 const POSTGRES_TYPE_MAP: Record<TableSchema["columns"][number]["type"], string> = {
 	string: "TEXT",
@@ -211,29 +211,13 @@ CREATE INDEX IF NOT EXISTS idx_lakesync_deltas_table_row ON lakesync_deltas ("ta
 					[sourceTable, rowIdArray],
 				);
 
-				// Group results by row_id
-				const byRowId = new Map<string, Array<{ columns: string | ColumnDelta[]; op: string }>>();
-				for (const row of deltaResult.rows) {
-					const rid = row.row_id as string;
-					let arr = byRowId.get(rid);
-					if (!arr) {
-						arr = [];
-						byRowId.set(rid, arr);
-					}
-					arr.push(row as { columns: string | ColumnDelta[]; op: string });
-				}
-
-				const upserts: Array<{ rowId: string; state: Record<string, unknown> }> = [];
-				const deleteIds: string[] = [];
-
-				for (const [rowId, rows] of byRowId) {
-					const state = mergeLatestState(rows);
-					if (state !== null) {
-						upserts.push({ rowId, state });
-					} else {
-						deleteIds.push(rowId);
-					}
-				}
+				const { upserts, deleteIds } = groupAndMerge(
+					deltaResult.rows as Array<{
+						row_id: string;
+						columns: string | ColumnDelta[];
+						op: string;
+					}>,
+				);
 
 				if (upserts.length > 0) {
 					const colNames = schema.columns.map((c) => c.name);

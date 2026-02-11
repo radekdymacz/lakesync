@@ -51,6 +51,7 @@ export type {
 } from "./types";
 export {
 	buildSyncRulesContext,
+	parseJson,
 	parsePullParams,
 	pushErrorToStatus,
 	type RequestError,

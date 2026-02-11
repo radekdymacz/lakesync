@@ -1,5 +1,6 @@
 import type { HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
 import { bigintReplacer, bigintReviver } from "@lakesync/core";
+import { validatePushBody } from "@lakesync/gateway";
 import { decodeSyncResponse, encodeSyncResponse } from "@lakesync/proto";
 import { logger } from "./logger";
 
@@ -293,31 +294,25 @@ function createDoRequest(
  * @param config - Shard configuration.
  * @param request - Original push request.
  * @param doNamespace - Durable Object namespace binding.
+ * @param headerClientId - Client ID from auth header (for mismatch check).
  * @returns Aggregated push response.
  */
 export async function handleShardedPush(
 	config: ShardConfig,
 	request: Request,
 	doNamespace: DurableObjectNamespace,
+	headerClientId?: string | null,
 ): Promise<Response> {
-	// Read and parse the push body
+	// Validate the push body (JSON parsing, field checks, client ID mismatch, delta limit)
 	const rawBody = await request.text();
-	let pushBody: { clientId: string; deltas: RowDelta[]; lastSeenHlc: unknown };
-	try {
-		pushBody = JSON.parse(rawBody, bigintReviver) as typeof pushBody;
-	} catch {
-		return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
-			status: 400,
+	const validation = validatePushBody(rawBody, headerClientId);
+	if (!validation.ok) {
+		return new Response(JSON.stringify({ error: validation.error.message }), {
+			status: validation.error.status,
 			headers: { "Content-Type": "application/json" },
 		});
 	}
-
-	if (!pushBody.clientId || !Array.isArray(pushBody.deltas)) {
-		return new Response(JSON.stringify({ error: "Missing required fields: clientId, deltas" }), {
-			status: 400,
-			headers: { "Content-Type": "application/json" },
-		});
-	}
+	const pushBody = validation.value;
 
 	// Partition deltas by shard
 	const partitions = partitionDeltasByShard(config, pushBody.deltas);

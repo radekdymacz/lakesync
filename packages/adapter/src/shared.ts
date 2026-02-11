@@ -1,5 +1,36 @@
 import { AdapterError, type ColumnDelta, Err, Ok, type Result } from "@lakesync/core";
 
+/**
+ * Group raw delta rows by row_id, merge to latest state, and partition into upserts and deletes.
+ */
+export function groupAndMerge(
+	rows: Array<{ row_id: string; columns: string | ColumnDelta[]; op: string }>,
+): { upserts: Array<{ rowId: string; state: Record<string, unknown> }>; deleteIds: string[] } {
+	const byRowId = new Map<string, Array<{ columns: string | ColumnDelta[]; op: string }>>();
+	for (const row of rows) {
+		let arr = byRowId.get(row.row_id);
+		if (!arr) {
+			arr = [];
+			byRowId.set(row.row_id, arr);
+		}
+		arr.push(row);
+	}
+
+	const upserts: Array<{ rowId: string; state: Record<string, unknown> }> = [];
+	const deleteIds: string[] = [];
+
+	for (const [rowId, group] of byRowId) {
+		const state = mergeLatestState(group);
+		if (state !== null) {
+			upserts.push({ rowId, state });
+		} else {
+			deleteIds.push(rowId);
+		}
+	}
+
+	return { upserts, deleteIds };
+}
+
 /** Normalise a caught value into an Error or undefined. */
 export function toCause(error: unknown): Error | undefined {
 	return error instanceof Error ? error : undefined;

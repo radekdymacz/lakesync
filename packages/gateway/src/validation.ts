@@ -22,6 +22,18 @@ export interface RequestError {
 	message: string;
 }
 
+/** Parse a JSON string, returning Err on invalid JSON. */
+export function parseJson<T>(
+	raw: string,
+	reviver?: (key: string, value: unknown) => unknown,
+): Result<T, RequestError> {
+	try {
+		return Ok(JSON.parse(raw, reviver) as T);
+	} catch {
+		return Err({ status: 400, message: "Invalid JSON body" });
+	}
+}
+
 /**
  * Validate and parse a push request body.
  * Handles JSON parsing with bigint revival.
@@ -30,12 +42,9 @@ export function validatePushBody(
 	raw: string,
 	headerClientId?: string | null,
 ): Result<SyncPush, RequestError> {
-	let body: SyncPush;
-	try {
-		body = JSON.parse(raw, bigintReviver) as SyncPush;
-	} catch {
-		return Err({ status: 400, message: "Invalid JSON body" });
-	}
+	const parsed = parseJson<SyncPush>(raw, bigintReviver);
+	if (!parsed.ok) return parsed;
+	const body = parsed.value;
 
 	if (!body.clientId || !Array.isArray(body.deltas)) {
 		return Err({ status: 400, message: "Missing required fields: clientId, deltas" });
@@ -104,12 +113,9 @@ export function validateActionBody(
 	raw: string,
 	headerClientId?: string | null,
 ): Result<ActionPush, RequestError> {
-	let body: ActionPush;
-	try {
-		body = JSON.parse(raw, bigintReviver) as ActionPush;
-	} catch {
-		return Err({ status: 400, message: "Invalid JSON body" });
-	}
+	const parsed = parseJson<ActionPush>(raw, bigintReviver);
+	if (!parsed.ok) return parsed;
+	const body = parsed.value;
 
 	if (!body.clientId || !Array.isArray(body.actions)) {
 		return Err({ status: 400, message: "Missing required fields: clientId, actions" });
@@ -129,12 +135,9 @@ export function validateActionBody(
  * Validate a table schema body.
  */
 export function validateSchemaBody(raw: string): Result<TableSchema, RequestError> {
-	let schema: TableSchema;
-	try {
-		schema = JSON.parse(raw) as TableSchema;
-	} catch {
-		return Err({ status: 400, message: "Invalid JSON body" });
-	}
+	const parsed = parseJson<TableSchema>(raw);
+	if (!parsed.ok) return parsed;
+	const schema = parsed.value;
 
 	if (!schema.table || !Array.isArray(schema.columns)) {
 		return Err({ status: 400, message: "Missing required fields: table, columns" });

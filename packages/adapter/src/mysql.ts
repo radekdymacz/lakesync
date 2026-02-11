@@ -1,5 +1,6 @@
 import {
 	type AdapterError,
+	type ColumnDelta,
 	type HLCTimestamp,
 	Ok,
 	type Result,
@@ -15,7 +16,7 @@ import {
 	isSoftDelete,
 	resolvePrimaryKey,
 } from "./materialise";
-import { mergeLatestState, wrapAsync } from "./shared";
+import { groupAndMerge, mergeLatestState, wrapAsync } from "./shared";
 
 /**
  * Map a LakeSync column type to a MySQL column definition.
@@ -199,28 +200,9 @@ export class MySQLAdapter implements DatabaseAdapter, Materialisable {
 					[tableName, ...rowIdArray],
 				);
 
-				// Group by row_id and merge
-				const byRow = new Map<string, Array<{ columns: string; op: string }>>();
-				for (const row of rows as Array<{ row_id: string; columns: string; op: string }>) {
-					let list = byRow.get(row.row_id);
-					if (!list) {
-						list = [];
-						byRow.set(row.row_id, list);
-					}
-					list.push(row);
-				}
-
-				const upserts: Array<{ rowId: string; state: Record<string, unknown> }> = [];
-				const deleteIds: string[] = [];
-
-				for (const [rowId, rowDeltas] of byRow) {
-					const state = mergeLatestState(rowDeltas);
-					if (state === null) {
-						deleteIds.push(rowId);
-					} else {
-						upserts.push({ rowId, state });
-					}
-				}
+				const { upserts, deleteIds } = groupAndMerge(
+					rows as Array<{ row_id: string; columns: string | ColumnDelta[]; op: string }>,
+				);
 
 				// UPSERT rows
 				if (upserts.length > 0) {

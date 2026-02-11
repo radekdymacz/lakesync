@@ -9,10 +9,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { DatabaseAdapter } from "../db-types";
 import { migrateAdapter } from "../migrate";
-
-function hlc(n: number): HLCTimestamp {
-	return BigInt(n) as HLCTimestamp;
-}
+import { hlc } from "./test-helpers";
 
 function makeDelta(
 	overrides: Partial<RowDelta> & { table: string; hlc: HLCTimestamp; deltaId: string },
