@@ -1,4 +1,12 @@
-import type { AdapterError, Result, RowDelta, TableSchema } from "@lakesync/core";
+import type { ColumnDelta } from "@lakesync/core";
+import {
+	type AdapterError,
+	Ok,
+	type Result,
+	type RowDelta,
+	type TableSchema,
+} from "@lakesync/core";
+import { groupAndMerge, wrapAsync } from "./shared";
 
 /**
  * Opt-in capability for adapters that can materialise deltas into destination tables.
@@ -101,4 +109,112 @@ export function buildSchemaIndex(schemas: ReadonlyArray<TableSchema>): Map<strin
 		index.set(key, schema);
 	}
 	return index;
+}
+
+// ---------------------------------------------------------------------------
+// Shared materialise algorithm: SqlDialect + QueryExecutor + executeMaterialise
+// ---------------------------------------------------------------------------
+
+/** Minimal query interface for executing SQL against a database. */
+export interface QueryExecutor {
+	query(sql: string, params: unknown[]): Promise<void>;
+	queryRows(
+		sql: string,
+		params: unknown[],
+	): Promise<Array<{ row_id: string; columns: string | ColumnDelta[]; op: string }>>;
+}
+
+/**
+ * SQL dialect interface — encapsulates the syntactic differences between
+ * Postgres, MySQL, and BigQuery for the materialise algorithm.
+ */
+export interface SqlDialect {
+	/** Generate CREATE TABLE IF NOT EXISTS for the destination table. */
+	createDestinationTable(
+		dest: string,
+		schema: TableSchema,
+		pk: string[],
+		softDelete: boolean,
+	): { sql: string; params: unknown[] };
+
+	/** Generate a query to fetch delta history for a set of affected row IDs. */
+	queryDeltaHistory(sourceTable: string, rowIds: string[]): { sql: string; params: unknown[] };
+
+	/** Generate an upsert statement for the merged row states. */
+	buildUpsert(
+		dest: string,
+		schema: TableSchema,
+		conflictCols: string[],
+		softDelete: boolean,
+		upserts: Array<{ rowId: string; state: Record<string, unknown> }>,
+	): { sql: string; params: unknown[] };
+
+	/** Generate a delete (hard or soft) statement for tombstoned row IDs. */
+	buildDelete(
+		dest: string,
+		deleteIds: string[],
+		softDelete: boolean,
+	): { sql: string; params: unknown[] };
+}
+
+/**
+ * Execute the shared materialise algorithm using the provided dialect and executor.
+ *
+ * Algorithm: group by table -> build schema index -> for each table:
+ * create dest table -> query history -> merge -> upsert -> delete.
+ *
+ * @param executor - Executes SQL statements against the database.
+ * @param dialect - Generates dialect-specific SQL.
+ * @param deltas - The deltas that were just flushed.
+ * @param schemas - Table schemas defining destination tables and column mappings.
+ */
+export async function executeMaterialise(
+	executor: QueryExecutor,
+	dialect: SqlDialect,
+	deltas: RowDelta[],
+	schemas: ReadonlyArray<TableSchema>,
+): Promise<Result<void, AdapterError>> {
+	if (deltas.length === 0) {
+		return Ok(undefined);
+	}
+
+	return wrapAsync(async () => {
+		const grouped = groupDeltasByTable(deltas);
+		const schemaIndex = buildSchemaIndex(schemas);
+
+		for (const [tableName, rowIds] of grouped) {
+			const schema = schemaIndex.get(tableName);
+			if (!schema) continue;
+
+			const dest = schema.table;
+			const pk = resolvePrimaryKey(schema);
+			const conflictCols = resolveConflictColumns(schema);
+			const soft = isSoftDelete(schema);
+
+			// 1. Create destination table
+			const createStmt = dialect.createDestinationTable(dest, schema, pk, soft);
+			await executor.query(createStmt.sql, createStmt.params);
+
+			// 2. Query delta history for affected rows
+			const sourceTable = schema.sourceTable ?? schema.table;
+			const rowIdArray = [...rowIds];
+			const historyStmt = dialect.queryDeltaHistory(sourceTable, rowIdArray);
+			const rows = await executor.queryRows(historyStmt.sql, historyStmt.params);
+
+			// 3. Merge to latest state
+			const { upserts, deleteIds } = groupAndMerge(rows);
+
+			// 4. Upsert live rows
+			if (upserts.length > 0) {
+				const upsertStmt = dialect.buildUpsert(dest, schema, conflictCols, soft, upserts);
+				await executor.query(upsertStmt.sql, upsertStmt.params);
+			}
+
+			// 5. Delete / soft-delete tombstoned rows
+			if (deleteIds.length > 0) {
+				const deleteStmt = dialect.buildDelete(dest, deleteIds, soft);
+				await executor.query(deleteStmt.sql, deleteStmt.params);
+			}
+		}
+	}, "Failed to materialise deltas");
 }

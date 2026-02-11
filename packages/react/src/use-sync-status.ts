@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useLakeSync } from "./context";
+import { useLakeSyncStable } from "./context";
 
 /** Return type of `useSyncStatus`. */
 export interface UseSyncStatusResult {
@@ -12,57 +12,73 @@ export interface UseSyncStatusResult {
 /**
  * Observe the sync lifecycle.
  *
- * Tracks whether a sync is in progress, last successful sync time,
- * outbox queue depth, and the most recent sync error (cleared on success).
+ * Reads `coordinator.state` directly for sync status and subscribes to
+ * events only for invalidation (re-reading the state snapshot).
+ * Uses the stable context so it does not re-render on data version changes.
  */
 export function useSyncStatus(): UseSyncStatusResult {
-	const { coordinator, dataVersion } = useLakeSync();
-	const [isSyncing, setIsSyncing] = useState(false);
-	const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
-	const [queueDepth, setQueueDepth] = useState(0);
-	const [error, setError] = useState<Error | null>(null);
+	const { coordinator } = useLakeSyncStable();
+	const [status, setStatus] = useState<UseSyncStatusResult>({
+		isSyncing: false,
+		lastSyncTime: null,
+		queueDepth: 0,
+		error: null,
+	});
 
-	const refreshQueueDepth = useCallback(async () => {
+	const refreshStatus = useCallback(async () => {
+		const state = coordinator.state;
 		const depth = await coordinator.queueDepth();
-		setQueueDepth(depth);
+		setStatus((prev) => ({
+			isSyncing: state.syncing,
+			lastSyncTime: state.lastSyncTime,
+			queueDepth: depth,
+			error: prev.error,
+		}));
 	}, [coordinator]);
 
 	useEffect(() => {
+		const handleSyncStart = () => {
+			setStatus((prev) => ({ ...prev, isSyncing: true }));
+		};
+
 		const handleSyncComplete = () => {
-			setIsSyncing(false);
-			setLastSyncTime(coordinator.lastSyncTime);
-			setError(null);
-			refreshQueueDepth();
+			const state = coordinator.state;
+			setStatus((prev) => ({
+				...prev,
+				isSyncing: false,
+				lastSyncTime: state.lastSyncTime,
+				error: null,
+			}));
+			refreshStatus();
 		};
 
 		const handleError = (err: Error) => {
-			setIsSyncing(false);
-			setError(err);
+			setStatus((prev) => ({
+				...prev,
+				isSyncing: false,
+				error: err,
+			}));
 		};
 
 		const handleChange = () => {
-			refreshQueueDepth();
+			refreshStatus();
 		};
 
+		coordinator.on("onSyncStart", handleSyncStart);
 		coordinator.on("onSyncComplete", handleSyncComplete);
 		coordinator.on("onError", handleError);
 		coordinator.on("onChange", handleChange);
 
-		// Initial queue depth
-		refreshQueueDepth();
+		// Initial status read
+		refreshStatus();
 
 		return () => {
+			coordinator.off("onSyncStart", handleSyncStart);
 			coordinator.off("onSyncComplete", handleSyncComplete);
 			coordinator.off("onError", handleError);
 			coordinator.off("onChange", handleChange);
 		};
-	}, [coordinator, refreshQueueDepth]);
+	}, [coordinator, refreshStatus]);
 
-	// Also refresh queue depth when dataVersion changes (local mutations)
-	useEffect(() => {
-		void dataVersion;
-		refreshQueueDepth();
-	}, [dataVersion, refreshQueueDepth]);
-
-	return { isSyncing, lastSyncTime, queueDepth, error };
+	return status;
 }

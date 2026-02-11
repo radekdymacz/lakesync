@@ -99,25 +99,27 @@ export interface ConnectorIngestConfig {
 /**
  * Configuration for a dynamically registered connector (data source).
  *
- * Each connector maps to a named {@link DatabaseAdapter} in the gateway,
- * optionally with an ingest poller that pushes detected changes into
- * the sync buffer.
+ * Discriminated union keyed on `type` — each variant carries exactly
+ * its own connection config. No optional fields from other types.
  */
-export interface ConnectorConfig {
-	/** Unique connector name (used as source adapter key). */
-	name: string;
-	/** Connector type — determines which adapter implementation to instantiate. */
-	type: ConnectorType;
-	/** PostgreSQL connection configuration (required when type is "postgres"). */
-	postgres?: PostgresConnectorConfig;
-	/** MySQL connection configuration (required when type is "mysql"). */
-	mysql?: MySQLConnectorConfig;
-	/** BigQuery connection configuration (required when type is "bigquery"). */
-	bigquery?: BigQueryConnectorConfig;
-	/** Jira Cloud connection configuration (required when type is "jira"). */
-	jira?: JiraConnectorConfig;
-	/** Salesforce CRM connection configuration (required when type is "salesforce"). */
-	salesforce?: SalesforceConnectorConfig;
-	/** Optional ingest polling configuration. */
-	ingest?: ConnectorIngestConfig;
-}
+export type ConnectorConfig =
+	| {
+			type: "postgres";
+			name: string;
+			postgres: PostgresConnectorConfig;
+			ingest?: ConnectorIngestConfig;
+	  }
+	| { type: "mysql"; name: string; mysql: MySQLConnectorConfig; ingest?: ConnectorIngestConfig }
+	| {
+			type: "bigquery";
+			name: string;
+			bigquery: BigQueryConnectorConfig;
+			ingest?: ConnectorIngestConfig;
+	  }
+	| { type: "jira"; name: string; jira: JiraConnectorConfig; ingest?: ConnectorIngestConfig }
+	| {
+			type: "salesforce";
+			name: string;
+			salesforce: SalesforceConnectorConfig;
+			ingest?: ConnectorIngestConfig;
+	  };

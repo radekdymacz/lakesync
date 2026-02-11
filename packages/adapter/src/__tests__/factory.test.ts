@@ -45,51 +45,35 @@ describe("createDatabaseAdapter", () => {
 		}
 	});
 
-	it("returns Err when postgres config is missing postgres field", () => {
-		const config = {
-			name: "pg",
-			type: "postgres",
-		} as ConnectorConfig;
+	it("returns Err for jira connector type", () => {
+		const config: ConnectorConfig = {
+			name: "jira",
+			type: "jira",
+			jira: { domain: "test", email: "a@b.com", apiToken: "tok" },
+		};
 		const result = createDatabaseAdapter(config);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error.message).toContain("postgres");
+			expect(result.error.message).toContain("jira");
 		}
 	});
 
-	it("returns Err when mysql config is missing mysql field", () => {
-		const config = {
-			name: "my",
-			type: "mysql",
-		} as ConnectorConfig;
+	it("returns Err for salesforce connector type", () => {
+		const config: ConnectorConfig = {
+			name: "sf",
+			type: "salesforce",
+			salesforce: {
+				instanceUrl: "https://test.salesforce.com",
+				clientId: "cid",
+				clientSecret: "csec",
+				username: "user",
+				password: "pass",
+			},
+		};
 		const result = createDatabaseAdapter(config);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error.message).toContain("mysql");
-		}
-	});
-
-	it("returns Err when bigquery config is missing bigquery field", () => {
-		const config = {
-			name: "bq",
-			type: "bigquery",
-		} as ConnectorConfig;
-		const result = createDatabaseAdapter(config);
-		expect(result.ok).toBe(false);
-		if (!result.ok) {
-			expect(result.error.message).toContain("bigquery");
-		}
-	});
-
-	it("returns Err for unsupported connector type", () => {
-		const config = {
-			name: "redis",
-			type: "redis" as ConnectorConfig["type"],
-		} as ConnectorConfig;
-		const result = createDatabaseAdapter(config);
-		expect(result.ok).toBe(false);
-		if (!result.ok) {
-			expect(result.error.message).toContain("Unsupported");
+			expect(result.error.message).toContain("salesforce");
 		}
 	});
 });

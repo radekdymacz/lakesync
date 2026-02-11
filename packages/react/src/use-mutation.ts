@@ -1,6 +1,6 @@
 import type { LakeSyncError, Result } from "@lakesync/core";
 import { useCallback } from "react";
-import { useLakeSync } from "./context";
+import { useLakeSyncData, useLakeSyncStable } from "./context";
 
 /** Return type of `useMutation`. */
 export interface UseMutationResult {
@@ -24,7 +24,8 @@ export interface UseMutationResult {
  * active `useQuery` hooks re-run.
  */
 export function useMutation(): UseMutationResult {
-	const { tracker, invalidate } = useLakeSync();
+	const { tracker } = useLakeSyncStable();
+	const { invalidate } = useLakeSyncData();
 
 	const insert = useCallback(
 		async (

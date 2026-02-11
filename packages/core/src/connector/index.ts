@@ -1,8 +1,9 @@
 export type { ActionDescriptor, ActionHandler, AuthContext } from "./action-handler";
 export { isActionHandler } from "./action-handler";
 export { ConnectorValidationError } from "./errors";
-export type { ConnectorCategory, ConnectorDescriptor } from "./registry";
+export type { ConnectorCategory, ConnectorDescriptor, ConnectorRegistry } from "./registry";
 export {
+	createConnectorRegistry,
 	getConnectorDescriptor,
 	listConnectorDescriptors,
 	registerConnectorDescriptor,

@@ -1,4 +1,4 @@
-import { type DatabaseAdapter, isDatabaseAdapter, type LakeAdapter } from "@lakesync/adapter";
+import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
 import {
 	type ActionDiscovery,
 	type ActionHandler,
@@ -11,7 +11,7 @@ import {
 	BackpressureError,
 	type ClockDriftError,
 	Err,
-	FlushError,
+	type FlushError,
 	filterDeltas,
 	HLC,
 	type IngestTarget,
@@ -28,7 +28,8 @@ import {
 } from "@lakesync/core";
 import { ActionDispatcher } from "./action-dispatcher";
 import { DeltaBuffer } from "./buffer";
-import { flushEntries } from "./flush";
+import { FlushCoordinator } from "./flush-coordinator";
+import { SourceRegistry } from "./source-registry";
 import type { GatewayConfig, HandlePushResult } from "./types";
 
 export type { SyncPush, SyncPull, SyncResponse };
@@ -36,7 +37,8 @@ export type { SyncPush, SyncPull, SyncResponse };
 /**
  * Sync gateway -- coordinates delta ingestion, conflict resolution, and flush.
  *
- * Thin facade composing ActionDispatcher, DeltaBuffer, and flushEntries.
+ * Thin facade composing DeltaBuffer, ActionDispatcher, SourceRegistry,
+ * and FlushCoordinator. Public methods delegate to composed modules.
  */
 export class SyncGateway implements IngestTarget {
 	private hlc: HLC;
@@ -44,7 +46,8 @@ export class SyncGateway implements IngestTarget {
 	readonly actions: ActionDispatcher;
 	private config: GatewayConfig;
 	private adapter: LakeAdapter | DatabaseAdapter | null;
-	private flushing = false;
+	private readonly sources: SourceRegistry;
+	private readonly flushCoordinator: FlushCoordinator;
 
 	constructor(config: GatewayConfig, adapter?: LakeAdapter | DatabaseAdapter) {
 		this.config = { sourceAdapters: {}, ...config };
@@ -52,14 +55,13 @@ export class SyncGateway implements IngestTarget {
 		this.buffer = new DeltaBuffer();
 		this.adapter = this.config.adapter ?? adapter ?? null;
 		this.actions = new ActionDispatcher(config.actionHandlers);
+		this.sources = new SourceRegistry(this.config.sourceAdapters);
+		this.flushCoordinator = new FlushCoordinator();
 	}
 
-	/** Restore drained entries back to the buffer for retry. */
-	private restoreEntries(entries: RowDelta[]): void {
-		for (const entry of entries) {
-			this.buffer.append(entry);
-		}
-	}
+	// -----------------------------------------------------------------------
+	// Push — pipeline of validation steps then buffer append
+	// -----------------------------------------------------------------------
 
 	/**
 	 * Handle an incoming push from a client.
@@ -73,27 +75,21 @@ export class SyncGateway implements IngestTarget {
 	handlePush(
 		msg: SyncPush,
 	): Result<HandlePushResult, ClockDriftError | SchemaError | BackpressureError> {
-		// Backpressure — reject when buffer exceeds threshold to prevent OOM
-		const backpressureLimit = this.config.maxBackpressureBytes ?? this.config.maxBufferBytes * 2;
-		if (this.buffer.byteSize >= backpressureLimit) {
-			return Err(
-				new BackpressureError(
-					`Buffer backpressure exceeded (${this.buffer.byteSize} >= ${backpressureLimit} bytes)`,
-				),
-			);
-		}
+		// Step 1: Check backpressure
+		const bpResult = this.checkBackpressure();
+		if (!bpResult.ok) return bpResult;
 
 		let accepted = 0;
 		const ingested: RowDelta[] = [];
 
 		for (const delta of msg.deltas) {
-			// Check for idempotent re-push
+			// Step 2: Filter duplicates
 			if (this.buffer.hasDelta(delta.deltaId)) {
 				accepted++;
 				continue;
 			}
 
-			// Validate delta against the schema if a schema manager is configured
+			// Step 3: Validate schema
 			if (this.config.schemaManager) {
 				const schemaResult = this.config.schemaManager.validateDelta(delta);
 				if (!schemaResult.ok) {
@@ -101,13 +97,13 @@ export class SyncGateway implements IngestTarget {
 				}
 			}
 
-			// Validate HLC drift against server's physical clock
+			// Step 4: Validate HLC
 			const recvResult = this.hlc.recv(delta.hlc);
 			if (!recvResult.ok) {
 				return Err(recvResult.error);
 			}
 
-			// Check for conflict with existing state
+			// Step 5: Resolve conflicts + append
 			const key = rowKey(delta.table, delta.rowId);
 			const existing = this.buffer.getRow(key);
 
@@ -117,7 +113,6 @@ export class SyncGateway implements IngestTarget {
 					this.buffer.append(resolved.value);
 					ingested.push(resolved.value);
 				}
-				// If resolution fails (should not happen with LWW on same row), skip
 			} else {
 				this.buffer.append(delta);
 				ingested.push(delta);
@@ -129,6 +124,23 @@ export class SyncGateway implements IngestTarget {
 		const serverHlc = this.hlc.now();
 		return Ok({ serverHlc, accepted, deltas: ingested });
 	}
+
+	/** Check buffer backpressure. */
+	private checkBackpressure(): Result<void, BackpressureError> {
+		const backpressureLimit = this.config.maxBackpressureBytes ?? this.config.maxBufferBytes * 2;
+		if (this.buffer.byteSize >= backpressureLimit) {
+			return Err(
+				new BackpressureError(
+					`Buffer backpressure exceeded (${this.buffer.byteSize} >= ${backpressureLimit} bytes)`,
+				),
+			);
+		}
+		return Ok(undefined);
+	}
+
+	// -----------------------------------------------------------------------
+	// Pull — delegates to buffer or source registry
+	// -----------------------------------------------------------------------
 
 	/**
 	 * Handle a pull request from a client.
@@ -181,7 +193,6 @@ export class SyncGateway implements IngestTarget {
 			const { deltas: raw, hasMore: rawHasMore } = this.buffer.getEventsSince(cursor, fetchLimit);
 
 			if (raw.length === 0) {
-				// No more data in buffer
 				const serverHlc = this.hlc.now();
 				return Ok({ deltas: collected, serverHlc, hasMore: false });
 			}
@@ -190,19 +201,16 @@ export class SyncGateway implements IngestTarget {
 			collected.push(...filtered);
 
 			if (collected.length >= msg.maxDeltas) {
-				// Trim to exactly maxDeltas
 				const trimmed = collected.slice(0, msg.maxDeltas);
 				const serverHlc = this.hlc.now();
 				return Ok({ deltas: trimmed, serverHlc, hasMore: true });
 			}
 
 			if (!rawHasMore) {
-				// Exhausted the buffer
 				const serverHlc = this.hlc.now();
 				return Ok({ deltas: collected, serverHlc, hasMore: false });
 			}
 
-			// Advance cursor past the last examined delta
 			cursor = raw[raw.length - 1]!.hlc;
 		}
 
@@ -218,7 +226,7 @@ export class SyncGateway implements IngestTarget {
 		msg: SyncPull,
 		context?: SyncRulesContext,
 	): Promise<Result<SyncResponse, AdapterNotFoundError | AdapterError>> {
-		const adapter = this.config.sourceAdapters?.[msg.source!];
+		const adapter = this.sources.get(msg.source!);
 		if (!adapter) {
 			return Err(new AdapterNotFoundError(`Source adapter "${msg.source}" not found`));
 		}
@@ -230,12 +238,10 @@ export class SyncGateway implements IngestTarget {
 
 		let deltas = queryResult.value;
 
-		// Apply sync rules filtering if context is provided
 		if (context) {
 			deltas = filterDeltas(deltas, context);
 		}
 
-		// Paginate
 		const hasMore = deltas.length > msg.maxDeltas;
 		const sliced = deltas.slice(0, msg.maxDeltas);
 
@@ -244,7 +250,7 @@ export class SyncGateway implements IngestTarget {
 	}
 
 	// -----------------------------------------------------------------------
-	// Flush — delegates to flush module
+	// Flush — delegates to FlushCoordinator
 	// -----------------------------------------------------------------------
 
 	/**
@@ -258,62 +264,15 @@ export class SyncGateway implements IngestTarget {
 	 * @returns A `Result` indicating success or a `FlushError`.
 	 */
 	async flush(): Promise<Result<void, FlushError>> {
-		if (this.flushing) {
-			return Err(new FlushError("Flush already in progress"));
-		}
-		if (this.buffer.logSize === 0) {
-			return Ok(undefined);
-		}
-		if (!this.adapter) {
-			return Err(new FlushError("No adapter configured"));
-		}
-
-		this.flushing = true;
-
-		// Database adapter path — drain after flushing flag is set
-		if (isDatabaseAdapter(this.adapter)) {
-			const entries = this.buffer.drain();
-			if (entries.length === 0) {
-				this.flushing = false;
-				return Ok(undefined);
-			}
-
-			try {
-				return await flushEntries(entries, 0, {
-					adapter: this.adapter,
-					config: {
-						gatewayId: this.config.gatewayId,
-						flushFormat: this.config.flushFormat,
-						tableSchema: this.config.tableSchema,
-						catalogue: this.config.catalogue,
-					},
-					restoreEntries: (e) => this.restoreEntries(e),
-					schemas: this.config.schemas,
-				});
-			} finally {
-				this.flushing = false;
-			}
-		}
-
-		// Lake adapter path
-		const byteSize = this.buffer.byteSize;
-		const entries = this.buffer.drain();
-
-		try {
-			return await flushEntries(entries, byteSize, {
-				adapter: this.adapter,
-				config: {
-					gatewayId: this.config.gatewayId,
-					flushFormat: this.config.flushFormat,
-					tableSchema: this.config.tableSchema,
-					catalogue: this.config.catalogue,
-				},
-				restoreEntries: (e) => this.restoreEntries(e),
-				schemas: this.config.schemas,
-			});
-		} finally {
-			this.flushing = false;
-		}
+		return this.flushCoordinator.flush(this.buffer, this.adapter, {
+			config: {
+				gatewayId: this.config.gatewayId,
+				flushFormat: this.config.flushFormat,
+				tableSchema: this.config.tableSchema,
+				catalogue: this.config.catalogue,
+			},
+			schemas: this.config.schemas,
+		});
 	}
 
 	/**
@@ -323,40 +282,15 @@ export class SyncGateway implements IngestTarget {
 	 * leaving other tables in the buffer.
 	 */
 	async flushTable(table: string): Promise<Result<void, FlushError>> {
-		if (this.flushing) {
-			return Err(new FlushError("Flush already in progress"));
-		}
-		if (!this.adapter) {
-			return Err(new FlushError("No adapter configured"));
-		}
-
-		const entries = this.buffer.drainTable(table);
-		if (entries.length === 0) {
-			return Ok(undefined);
-		}
-
-		this.flushing = true;
-
-		try {
-			return await flushEntries(
-				entries,
-				0,
-				{
-					adapter: this.adapter,
-					config: {
-						gatewayId: this.config.gatewayId,
-						flushFormat: this.config.flushFormat,
-						tableSchema: this.config.tableSchema,
-						catalogue: this.config.catalogue,
-					},
-					restoreEntries: (e) => this.restoreEntries(e),
-					schemas: this.config.schemas,
-				},
-				table,
-			);
-		} finally {
-			this.flushing = false;
-		}
+		return this.flushCoordinator.flushTable(table, this.buffer, this.adapter, {
+			config: {
+				gatewayId: this.config.gatewayId,
+				flushFormat: this.config.flushFormat,
+				tableSchema: this.config.tableSchema,
+				catalogue: this.config.catalogue,
+			},
+			schemas: this.config.schemas,
+		});
 	}
 
 	// -----------------------------------------------------------------------
@@ -392,7 +326,7 @@ export class SyncGateway implements IngestTarget {
 	}
 
 	// -----------------------------------------------------------------------
-	// Source adapters
+	// Source adapters — delegates to SourceRegistry
 	// -----------------------------------------------------------------------
 
 	/**
@@ -402,7 +336,7 @@ export class SyncGateway implements IngestTarget {
 	 * @param adapter - The database adapter to register.
 	 */
 	registerSource(name: string, adapter: DatabaseAdapter): void {
-		this.config.sourceAdapters![name] = adapter;
+		this.sources.register(name, adapter);
 	}
 
 	/**
@@ -411,7 +345,7 @@ export class SyncGateway implements IngestTarget {
 	 * @param name - The source name to remove.
 	 */
 	unregisterSource(name: string): void {
-		delete this.config.sourceAdapters![name];
+		this.sources.unregister(name);
 	}
 
 	/**
@@ -420,7 +354,7 @@ export class SyncGateway implements IngestTarget {
 	 * @returns Array of registered source adapter names.
 	 */
 	listSources(): string[] {
-		return Object.keys(this.config.sourceAdapters!);
+		return this.sources.list();
 	}
 
 	// -----------------------------------------------------------------------

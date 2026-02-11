@@ -9,7 +9,7 @@ import { PostgresAdapter } from "./postgres";
  *
  * Switches on `config.type` and creates the matching adapter using
  * the type-specific connection configuration. Returns an {@link AdapterError}
- * if the type-specific config is missing or the adapter constructor throws.
+ * if the type is unsupported or the adapter constructor throws.
  *
  * @param config - Validated connector configuration.
  * @returns The instantiated adapter or an error.
@@ -19,30 +19,19 @@ export function createDatabaseAdapter(
 ): Result<DatabaseAdapter, AdapterError> {
 	try {
 		switch (config.type) {
-			case "postgres": {
-				if (!config.postgres) {
-					return Err(new AdapterError("Postgres connector config missing postgres field"));
-				}
+			case "postgres":
 				return Ok(
 					new PostgresAdapter({
 						connectionString: config.postgres.connectionString,
 					}),
 				);
-			}
-			case "mysql": {
-				if (!config.mysql) {
-					return Err(new AdapterError("MySQL connector config missing mysql field"));
-				}
+			case "mysql":
 				return Ok(
 					new MySQLAdapter({
 						connectionString: config.mysql.connectionString,
 					}),
 				);
-			}
-			case "bigquery": {
-				if (!config.bigquery) {
-					return Err(new AdapterError("BigQuery connector config missing bigquery field"));
-				}
+			case "bigquery":
 				return Ok(
 					new BigQueryAdapter({
 						projectId: config.bigquery.projectId,
@@ -51,9 +40,11 @@ export function createDatabaseAdapter(
 						location: config.bigquery.location,
 					}),
 				);
-			}
-			default:
-				return Err(new AdapterError(`Unsupported connector type: ${config.type}`));
+			case "jira":
+			case "salesforce":
+				return Err(
+					new AdapterError(`Connector type "${config.type}" does not use a DatabaseAdapter`),
+				);
 		}
 	} catch (err: unknown) {
 		return Err(new AdapterError(`Failed to create adapter: ${toError(err).message}`));

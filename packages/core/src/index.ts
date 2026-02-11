@@ -10,10 +10,17 @@ export {
 export { CallbackPushTarget } from "./callback-push-target";
 export * from "./conflict";
 export * from "./connector";
-export { createPoller, type PollerFactory, registerPollerFactory } from "./create-poller";
+export {
+	createPoller,
+	createPollerRegistry,
+	type PollerFactory,
+	type PollerRegistry,
+	registerPollerFactory,
+} from "./create-poller";
 export * from "./delta";
 export * from "./hlc";
 export * from "./json";
+export { ChunkedPusher, type FlushableTarget, PollingScheduler, PressureManager } from "./polling";
 export * from "./result";
 export * from "./sync-rules";
 export * from "./validation";

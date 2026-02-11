@@ -1,6 +1,6 @@
 import type { ConnectorDescriptor, LakeSyncError } from "@lakesync/core";
 import { useCallback, useEffect, useState } from "react";
-import { useLakeSync } from "./context";
+import { useLakeSyncStable } from "./context";
 
 /** Return type of `useConnectorTypes`. */
 export interface UseConnectorTypesResult {
@@ -29,7 +29,7 @@ export interface UseConnectorTypesResult {
  * ```
  */
 export function useConnectorTypes(): UseConnectorTypesResult {
-	const { coordinator } = useLakeSync();
+	const { coordinator } = useLakeSyncStable();
 	const [types, setTypes] = useState<ConnectorDescriptor[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState<LakeSyncError | null>(null);

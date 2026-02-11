@@ -4,8 +4,8 @@ import type {
 	ActionResult,
 	LakeSyncError,
 } from "@lakesync/core";
-import { useCallback, useEffect, useState } from "react";
-import { useLakeSync } from "./context";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useLakeSyncStable } from "./context";
 
 /** Parameters for a single action execution. */
 export interface ActionParams {
@@ -31,6 +31,12 @@ export interface UseActionResult {
  * Wraps `SyncCoordinator.executeAction()` and subscribes to
  * `onActionComplete` events to track the latest result.
  *
+ * Uses a `pendingRef` to track whether we are waiting for a completion.
+ * When `execute()` is called, we set the ref to `true` so the next
+ * `onActionComplete` event is captured. This avoids the identity bug
+ * where a stale action completion from a different hook instance would
+ * overwrite state.
+ *
  * ```ts
  * const { execute, lastResult, isPending } = useAction();
  *
@@ -42,14 +48,18 @@ export interface UseActionResult {
  * ```
  */
 export function useAction(): UseActionResult {
-	const { coordinator } = useLakeSync();
+	const { coordinator } = useLakeSyncStable();
 	const [lastResult, setLastResult] = useState<ActionResult | ActionErrorResult | null>(null);
 	const [isPending, setIsPending] = useState(false);
+	const waitingForCompletion = useRef(false);
 
 	useEffect(() => {
 		const handleComplete = (_actionId: string, result: ActionResult | ActionErrorResult) => {
-			setLastResult(result);
-			setIsPending(false);
+			if (waitingForCompletion.current) {
+				waitingForCompletion.current = false;
+				setLastResult(result);
+				setIsPending(false);
+			}
 		};
 
 		coordinator.on("onActionComplete", handleComplete);
@@ -61,6 +71,8 @@ export function useAction(): UseActionResult {
 	const execute = useCallback(
 		async (params: ActionParams): Promise<void> => {
 			setIsPending(true);
+			setLastResult(null);
+			waitingForCompletion.current = true;
 			await coordinator.executeAction(params);
 		},
 		[coordinator],
@@ -96,7 +108,7 @@ export interface UseActionDiscoveryResult {
  * ```
  */
 export function useActionDiscovery(): UseActionDiscoveryResult {
-	const { coordinator } = useLakeSync();
+	const { coordinator } = useLakeSyncStable();
 	const [connectors, setConnectors] = useState<Record<string, ActionDescriptor[]>>({});
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState<LakeSyncError | null>(null);

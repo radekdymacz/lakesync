@@ -1,80 +1,72 @@
 import type { LakeSyncError, Result, RowDelta } from "@lakesync/core";
-import { Ok } from "@lakesync/core";
+import { MemoryOutbox } from "./memory-outbox";
 import type { QueueEntry, SyncQueue } from "./types";
 
 /**
  * In-memory sync queue implementation.
  * Suitable for testing and server-side use.
+ *
+ * Delegates to {@link MemoryOutbox} for the generic outbox logic and
+ * adapts the entry shape to the {@link SyncQueue} interface.
  */
 export class MemoryQueue implements SyncQueue {
-	private entries: Map<string, QueueEntry> = new Map();
-	private counter = 0;
+	private readonly outbox = new MemoryOutbox<RowDelta>("mem");
 
 	/** Add a delta to the queue */
 	async push(delta: RowDelta): Promise<Result<QueueEntry, LakeSyncError>> {
-		const entry: QueueEntry = {
-			id: `mem-${++this.counter}`,
-			delta,
-			status: "pending",
-			createdAt: Date.now(),
-			retryCount: 0,
-		};
-		this.entries.set(entry.id, entry);
-		return Ok(entry);
+		const result = await this.outbox.push(delta);
+		if (!result.ok) return result;
+		return { ok: true, value: this.toQueueEntry(result.value) };
 	}
 
 	/** Peek at pending entries (ordered by createdAt), skipping entries with future retryAfter */
 	async peek(limit: number): Promise<Result<QueueEntry[], LakeSyncError>> {
-		const now = Date.now();
-		const pending = [...this.entries.values()]
-			.filter((e) => e.status === "pending" && (e.retryAfter === undefined || e.retryAfter <= now))
-			.sort((a, b) => a.createdAt - b.createdAt)
-			.slice(0, limit);
-		return Ok(pending);
+		const result = await this.outbox.peek(limit);
+		if (!result.ok) return result;
+		return { ok: true, value: result.value.map((e) => this.toQueueEntry(e)) };
 	}
 
 	/** Mark entries as currently being sent */
 	async markSending(ids: string[]): Promise<Result<void, LakeSyncError>> {
-		for (const id of ids) {
-			const entry = this.entries.get(id);
-			if (entry?.status === "pending") {
-				entry.status = "sending";
-			}
-		}
-		return Ok(undefined);
+		return this.outbox.markSending(ids);
 	}
 
 	/** Acknowledge successful delivery (removes entries) */
 	async ack(ids: string[]): Promise<Result<void, LakeSyncError>> {
-		for (const id of ids) {
-			this.entries.delete(id);
-		}
-		return Ok(undefined);
+		return this.outbox.ack(ids);
 	}
 
 	/** Negative acknowledge — reset to pending with incremented retryCount and exponential backoff */
 	async nack(ids: string[]): Promise<Result<void, LakeSyncError>> {
-		for (const id of ids) {
-			const entry = this.entries.get(id);
-			if (entry) {
-				entry.status = "pending";
-				entry.retryCount++;
-				const backoffMs = Math.min(1000 * 2 ** entry.retryCount, 30_000);
-				entry.retryAfter = Date.now() + backoffMs;
-			}
-		}
-		return Ok(undefined);
+		return this.outbox.nack(ids);
 	}
 
 	/** Get the number of pending + sending entries */
 	async depth(): Promise<Result<number, LakeSyncError>> {
-		const count = [...this.entries.values()].filter((e) => e.status !== "acked").length;
-		return Ok(count);
+		return this.outbox.depth();
 	}
 
 	/** Remove all entries */
 	async clear(): Promise<Result<void, LakeSyncError>> {
-		this.entries.clear();
-		return Ok(undefined);
+		return this.outbox.clear();
+	}
+
+	/** Convert a generic OutboxEntry to the SyncQueue-specific QueueEntry shape. */
+	private toQueueEntry(entry: {
+		id: string;
+		item: RowDelta;
+		status: string;
+		createdAt: number;
+		retryCount: number;
+		retryAfter?: number;
+	}): QueueEntry {
+		return {
+			id: entry.id,
+			delta: entry.item,
+			status: entry.status as QueueEntry["status"],
+			createdAt: entry.createdAt,
+			retryCount: entry.retryCount,
+			retryAfter: entry.retryAfter,
+		};
 	}
 }

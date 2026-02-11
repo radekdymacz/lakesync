@@ -8,7 +8,6 @@ import {
 } from "@lakesync/core";
 
 import type { DatabaseAdapter } from "./db-types";
-import type { Materialisable } from "./materialise";
 import { isMaterialisable } from "./materialise";
 
 /** Configuration for the FanOutAdapter. */
@@ -25,8 +24,14 @@ export interface FanOutAdapterConfig {
  *
  * Secondary failures are silently caught and never affect the return value.
  * Use case: write to Postgres (fast, operational), replicate to BigQuery (analytics).
+ *
+ * **Materialisation:** This adapter exposes a `materialise()` method for
+ * duck-type compatibility with `isMaterialisable()`. When the primary adapter
+ * is itself materialisable, materialisation is delegated to it; otherwise
+ * the method is a graceful no-op returning `Ok`. Materialisable secondaries
+ * receive fire-and-forget replication.
  */
-export class FanOutAdapter implements DatabaseAdapter, Materialisable {
+export class FanOutAdapter implements DatabaseAdapter {
 	private readonly primary: DatabaseAdapter;
 	private readonly secondaries: ReadonlyArray<DatabaseAdapter>;
 

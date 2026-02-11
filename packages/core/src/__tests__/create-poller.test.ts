@@ -74,23 +74,22 @@ describe("createPoller", () => {
 	});
 
 	it("throws a descriptive error for an unregistered connector type", () => {
-		const config = {
+		const config: ConnectorConfig = {
 			name: "unknown-src",
-			type: "postgres" as const,
+			type: "postgres",
 			postgres: { connectionString: "postgres://localhost/db" },
 		};
 		// Postgres has no registered poller factory in this test
 		// (it uses the database adapter path, not a source poller)
-		// Clear the factory for postgres to ensure it's not registered
 		expect(() => createPoller(config, noopGateway)).toThrow(
 			/No poller factory registered for connector type "postgres"/,
 		);
 	});
 
 	it("error message suggests importing the connector package", () => {
-		const config = {
+		const config: ConnectorConfig = {
 			name: "missing",
-			type: "bigquery" as const,
+			type: "bigquery",
 			bigquery: { projectId: "p", dataset: "d" },
 		};
 		expect(() => createPoller(config, noopGateway)).toThrow(/Did you import the connector package/);

@@ -1,9 +1,12 @@
+export { type ActionCompleteCallback, ActionProcessor } from "./action-processor";
 export { applyRemoteDeltas } from "./applier";
+export { AutoSyncScheduler } from "./auto-sync";
 export {
 	SyncCoordinator,
 	type SyncCoordinatorConfig,
 	type SyncEvents,
 	type SyncMode,
+	type SyncState,
 } from "./coordinator";
 export { SchemaSynchroniser } from "./schema-sync";
 export { SyncTracker } from "./tracker";

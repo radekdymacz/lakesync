@@ -6,7 +6,7 @@ export type {
 	AuthContext,
 } from "@lakesync/core";
 export { type IngestTarget, isIngestTarget } from "@lakesync/core";
-export { ActionDispatcher } from "./action-dispatcher";
+export { type ActionCacheConfig, ActionDispatcher } from "./action-dispatcher";
 export { DeltaBuffer } from "./buffer";
 export { type ConfigStore, MemoryConfigStore } from "./config-store";
 export {
@@ -25,6 +25,7 @@ export {
 	flushEntries,
 	hlcRange,
 } from "./flush";
+export { FlushCoordinator, type FlushCoordinatorDeps } from "./flush-coordinator";
 export { SyncGateway, type SyncPull, type SyncPush, type SyncResponse } from "./gateway";
 export { bigintReplacer, bigintReviver } from "./json";
 export {
@@ -42,6 +43,7 @@ export {
 	handleUnregisterConnector,
 } from "./request-handler";
 export { SchemaManager } from "./schema-manager";
+export { SourceRegistry } from "./source-registry";
 export type {
 	BufferConfig,
 	FlushEnvelope,

@@ -8,7 +8,7 @@ export type QueryFn = (sql: string, params?: unknown[]) => Promise<Record<string
  *
  * Uses dynamic imports so the database drivers (pg, mysql2) are only
  * loaded when actually needed. Returns `null` for connector types that
- * do not support the standard SQL polling model (e.g. BigQuery).
+ * do not support the standard SQL polling model (e.g. BigQuery, Jira, Salesforce).
  *
  * @param config - Validated connector configuration.
  * @returns A query function or `null` if the connector type is unsupported.
@@ -16,7 +16,6 @@ export type QueryFn = (sql: string, params?: unknown[]) => Promise<Record<string
 export async function createQueryFn(config: ConnectorConfig): Promise<QueryFn | null> {
 	switch (config.type) {
 		case "postgres": {
-			if (!config.postgres) return null;
 			const { Pool } = await import("pg");
 			const pool = new Pool({ connectionString: config.postgres.connectionString });
 			return async (sql: string, params?: unknown[]) => {
@@ -25,7 +24,6 @@ export async function createQueryFn(config: ConnectorConfig): Promise<QueryFn | 
 			};
 		}
 		case "mysql": {
-			if (!config.mysql) return null;
 			const mysql = await import("mysql2/promise");
 			const pool = mysql.createPool(config.mysql.connectionString);
 			return async (sql: string, params?: unknown[]) => {

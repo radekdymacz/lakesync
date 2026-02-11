@@ -144,9 +144,19 @@ export class DeltaBuffer {
 		return tableDeltas;
 	}
 
-	/** Drain the log for flush. Returns log entries and clears both structures. */
-	drain(): RowDelta[] {
-		const entries = [...this.log];
+	/**
+	 * Snapshot the current buffer state without clearing it.
+	 *
+	 * Useful for inspecting the buffer contents without draining.
+	 * Use {@link clear} separately after a successful flush for
+	 * transactional semantics.
+	 */
+	snapshot(): { entries: RowDelta[]; byteSize: number } {
+		return { entries: [...this.log], byteSize: this.estimatedBytes };
+	}
+
+	/** Clear all buffer state. */
+	clear(): void {
 		this.log = [];
 		this.index.clear();
 		this.deltaIds.clear();
@@ -154,6 +164,12 @@ export class DeltaBuffer {
 		this.createdAt = Date.now();
 		this.tableBytes.clear();
 		this.tableLog.clear();
+	}
+
+	/** Drain the log for flush. Returns log entries and clears both structures. */
+	drain(): RowDelta[] {
+		const { entries } = this.snapshot();
+		this.clear();
 		return entries;
 	}
 

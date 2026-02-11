@@ -25,6 +25,9 @@ registerOutputSchemas("salesforce", SALESFORCE_TABLE_SCHEMAS);
 
 // Auto-register poller factory so createPoller("salesforce", ...) works.
 registerPollerFactory("salesforce", (config, gateway) => {
+	if (config.type !== "salesforce") {
+		throw new Error(`Expected connector type "salesforce", got "${config.type}"`);
+	}
 	const ingest: SalesforceIngestConfig | undefined = config.ingest
 		? {
 				intervalMs: config.ingest.intervalMs,
@@ -32,5 +35,5 @@ registerPollerFactory("salesforce", (config, gateway) => {
 				memoryBudgetBytes: config.ingest.memoryBudgetBytes,
 			}
 		: undefined;
-	return new SalesforceSourcePoller(config.salesforce!, ingest, config.name, gateway);
+	return new SalesforceSourcePoller(config.salesforce, ingest, config.name, gateway);
 });

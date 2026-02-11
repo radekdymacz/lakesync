@@ -1,5 +1,10 @@
-export type { LakeSyncContextValue, LakeSyncProviderProps } from "./context";
-export { LakeSyncProvider, useLakeSync } from "./context";
+export type {
+	LakeSyncContextValue,
+	LakeSyncDataContextValue,
+	LakeSyncProviderProps,
+	LakeSyncStableContextValue,
+} from "./context";
+export { LakeSyncProvider, useLakeSync, useLakeSyncData, useLakeSyncStable } from "./context";
 export type { ActionParams, UseActionDiscoveryResult, UseActionResult } from "./use-action";
 export { useAction, useActionDiscovery } from "./use-action";
 export type { UseConnectorTypesResult } from "./use-connector-types";

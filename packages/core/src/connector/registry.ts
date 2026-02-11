@@ -32,13 +32,63 @@ export interface ConnectorDescriptor {
 }
 
 // ---------------------------------------------------------------------------
-// Module-level registry
+// ConnectorRegistry — immutable value created from a list of descriptors
+// ---------------------------------------------------------------------------
+
+/** Immutable registry of connector descriptors. */
+export interface ConnectorRegistry {
+	/** Look up a single descriptor by type. */
+	get(type: string): ConnectorDescriptor | undefined;
+	/** List all descriptors, sorted alphabetically by type. */
+	list(): ConnectorDescriptor[];
+	/** Create a new registry with an additional or replaced descriptor. */
+	with(descriptor: ConnectorDescriptor): ConnectorRegistry;
+	/** Create a new registry with output schemas attached to a type. */
+	withOutputSchemas(type: string, schemas: ReadonlyArray<TableSchema>): ConnectorRegistry;
+}
+
+/**
+ * Create an immutable {@link ConnectorRegistry} from a list of descriptors.
+ */
+export function createConnectorRegistry(descriptors: ConnectorDescriptor[]): ConnectorRegistry {
+	const map = new Map<string, ConnectorDescriptor>();
+	for (const d of descriptors) {
+		map.set(d.type, d);
+	}
+	return buildRegistry(map);
+}
+
+function buildRegistry(map: Map<string, ConnectorDescriptor>): ConnectorRegistry {
+	return {
+		get(type: string): ConnectorDescriptor | undefined {
+			return map.get(type);
+		},
+		list(): ConnectorDescriptor[] {
+			return [...map.values()].sort((a, b) => a.type.localeCompare(b.type));
+		},
+		with(descriptor: ConnectorDescriptor): ConnectorRegistry {
+			const next = new Map(map);
+			next.set(descriptor.type, descriptor);
+			return buildRegistry(next);
+		},
+		withOutputSchemas(type: string, schemas: ReadonlyArray<TableSchema>): ConnectorRegistry {
+			const existing = map.get(type);
+			if (!existing) return buildRegistry(map);
+			const next = new Map(map);
+			next.set(type, { ...existing, outputTables: schemas });
+			return buildRegistry(next);
+		},
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Module-level mutable registry (backwards compatibility)
 // ---------------------------------------------------------------------------
 
 const descriptors = new Map<string, ConnectorDescriptor>();
 
 /**
- * Register (or replace) a connector descriptor.
+ * Register (or replace) a connector descriptor in the global registry.
  *
  * Called at module load time by built-in registration and by connector
  * packages that need to attach output schemas.

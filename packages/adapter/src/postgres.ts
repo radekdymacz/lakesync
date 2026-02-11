@@ -10,14 +10,8 @@ import {
 import { Pool, type PoolConfig } from "pg";
 import type { DatabaseAdapter, DatabaseAdapterConfig } from "./db-types";
 import type { Materialisable } from "./materialise";
-import {
-	buildSchemaIndex,
-	groupDeltasByTable,
-	isSoftDelete,
-	resolveConflictColumns,
-	resolvePrimaryKey,
-} from "./materialise";
-import { groupAndMerge, mergeLatestState, wrapAsync } from "./shared";
+import { executeMaterialise, type QueryExecutor, type SqlDialect } from "./materialise";
+import { mergeLatestState, wrapAsync } from "./shared";
 
 const POSTGRES_TYPE_MAP: Record<TableSchema["columns"][number]["type"], string> = {
 	string: "TEXT",
@@ -28,6 +22,110 @@ const POSTGRES_TYPE_MAP: Record<TableSchema["columns"][number]["type"], string> 
 };
 
 /**
+ * Postgres SQL dialect for the shared materialise algorithm.
+ *
+ * Uses `$N` positional parameters, `ON CONFLICT DO UPDATE`, `JSONB`,
+ * and `TIMESTAMPTZ` types.
+ */
+export class PostgresSqlDialect implements SqlDialect {
+	createDestinationTable(
+		dest: string,
+		schema: TableSchema,
+		pk: string[],
+		softDelete: boolean,
+	): { sql: string; params: unknown[] } {
+		const columnDefs = schema.columns
+			.map((c) => `"${c.name}" ${POSTGRES_TYPE_MAP[c.type]}`)
+			.join(", ");
+
+		const pkConstraint = `PRIMARY KEY (${pk.map((c) => `"${c}"`).join(", ")})`;
+		const deletedAtCol = softDelete ? `,\n\tdeleted_at TIMESTAMPTZ` : "";
+		const uniqueConstraint = schema.externalIdColumn
+			? `,\n\tUNIQUE ("${schema.externalIdColumn}")`
+			: "";
+
+		return {
+			sql: `CREATE TABLE IF NOT EXISTS "${dest}" (
+	row_id TEXT NOT NULL,
+	${columnDefs},
+	props JSONB NOT NULL DEFAULT '{}'${deletedAtCol},
+	synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	${pkConstraint}${uniqueConstraint}
+)`,
+			params: [],
+		};
+	}
+
+	queryDeltaHistory(sourceTable: string, rowIds: string[]): { sql: string; params: unknown[] } {
+		return {
+			sql: `SELECT row_id, columns, op FROM lakesync_deltas WHERE "table" = $1 AND row_id = ANY($2) ORDER BY hlc ASC`,
+			params: [sourceTable, rowIds],
+		};
+	}
+
+	buildUpsert(
+		dest: string,
+		schema: TableSchema,
+		conflictCols: string[],
+		softDelete: boolean,
+		upserts: Array<{ rowId: string; state: Record<string, unknown> }>,
+	): { sql: string; params: unknown[] } {
+		const colNames = schema.columns.map((c) => c.name);
+		const baseCols = ["row_id", ...colNames];
+		const allCols = softDelete
+			? [...baseCols, "deleted_at", "synced_at"]
+			: [...baseCols, "synced_at"];
+		const colList = allCols.map((c) => `"${c}"`).join(", ");
+
+		const values: unknown[] = [];
+		const valueRows: string[] = [];
+		const paramsPerRow = allCols.length;
+
+		for (let i = 0; i < upserts.length; i++) {
+			const u = upserts[i]!;
+			const offset = i * paramsPerRow;
+			const placeholders = allCols.map((_, j) => `$${offset + j + 1}`);
+			valueRows.push(`(${placeholders.join(", ")})`);
+
+			values.push(u.rowId);
+			for (const col of colNames) {
+				values.push(u.state[col] ?? null);
+			}
+			if (softDelete) values.push(null); // deleted_at = NULL (un-delete)
+			values.push(new Date());
+		}
+
+		const conflictList = conflictCols.map((c) => `"${c}"`).join(", ");
+		const updateCols = softDelete
+			? [...colNames, "deleted_at", "synced_at"]
+			: [...colNames, "synced_at"];
+		const updateSet = updateCols.map((c) => `"${c}" = EXCLUDED."${c}"`).join(", ");
+
+		return {
+			sql: `INSERT INTO "${dest}" (${colList}) VALUES ${valueRows.join(", ")} ON CONFLICT (${conflictList}) DO UPDATE SET ${updateSet}`,
+			params: values,
+		};
+	}
+
+	buildDelete(
+		dest: string,
+		deleteIds: string[],
+		softDelete: boolean,
+	): { sql: string; params: unknown[] } {
+		if (softDelete) {
+			return {
+				sql: `UPDATE "${dest}" SET deleted_at = now(), synced_at = now() WHERE row_id = ANY($1)`,
+				params: [deleteIds],
+			};
+		}
+		return {
+			sql: `DELETE FROM "${dest}" WHERE row_id = ANY($1)`,
+			params: [deleteIds],
+		};
+	}
+}
+
+/**
  * PostgreSQL database adapter for LakeSync.
  *
  * Stores deltas in a `lakesync_deltas` table using pg Pool.
@@ -36,12 +134,30 @@ const POSTGRES_TYPE_MAP: Record<TableSchema["columns"][number]["type"], string> 
 export class PostgresAdapter implements DatabaseAdapter, Materialisable {
 	/** @internal */
 	readonly pool: Pool;
+	private readonly dialect = new PostgresSqlDialect();
 
 	constructor(config: DatabaseAdapterConfig) {
 		const poolConfig: PoolConfig = {
 			connectionString: config.connectionString,
 		};
 		this.pool = new Pool(poolConfig);
+	}
+
+	private get executor(): QueryExecutor {
+		const pool = this.pool;
+		return {
+			async query(sql: string, params: unknown[]): Promise<void> {
+				await pool.query(sql, params);
+			},
+			async queryRows(sql: string, params: unknown[]) {
+				const result = await pool.query(sql, params);
+				return result.rows as Array<{
+					row_id: string;
+					columns: string | ColumnDelta[];
+					op: string;
+				}>;
+			},
+		};
 	}
 
 	/**
@@ -158,117 +274,14 @@ CREATE INDEX IF NOT EXISTS idx_lakesync_deltas_table_row ON lakesync_deltas ("ta
 	/**
 	 * Materialise deltas into destination tables.
 	 *
-	 * For each table with a matching schema, merges delta history into the
-	 * latest row state and upserts into the destination table. Tombstoned
-	 * rows are deleted. The `props` column is never touched.
+	 * Delegates to the shared `executeMaterialise` algorithm with the
+	 * Postgres SQL dialect.
 	 */
 	async materialise(
 		deltas: RowDelta[],
 		schemas: ReadonlyArray<TableSchema>,
 	): Promise<Result<void, AdapterError>> {
-		if (deltas.length === 0) {
-			return Ok(undefined);
-		}
-
-		return wrapAsync(async () => {
-			const grouped = groupDeltasByTable(deltas);
-			const schemaIndex = buildSchemaIndex(schemas);
-
-			for (const [tableName, rowIds] of grouped) {
-				const schema = schemaIndex.get(tableName);
-				if (!schema) continue;
-
-				const dest = schema.table;
-				const pk = resolvePrimaryKey(schema);
-				const conflictCols = resolveConflictColumns(schema);
-				const soft = isSoftDelete(schema);
-
-				const columnDefs = schema.columns
-					.map((c) => `"${c.name}" ${POSTGRES_TYPE_MAP[c.type]}`)
-					.join(", ");
-
-				const pkConstraint = `PRIMARY KEY (${pk.map((c) => `"${c}"`).join(", ")})`;
-				const deletedAtCol = soft ? `,\n\tdeleted_at TIMESTAMPTZ` : "";
-				const uniqueConstraint = schema.externalIdColumn
-					? `,\n\tUNIQUE ("${schema.externalIdColumn}")`
-					: "";
-
-				await this.pool.query(
-					`CREATE TABLE IF NOT EXISTS "${dest}" (
-	row_id TEXT NOT NULL,
-	${columnDefs},
-	props JSONB NOT NULL DEFAULT '{}'${deletedAtCol},
-	synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-	${pkConstraint}${uniqueConstraint}
-)`,
-				);
-
-				const sourceTable = schema.sourceTable ?? schema.table;
-				const rowIdArray = [...rowIds];
-
-				const deltaResult = await this.pool.query(
-					`SELECT row_id, columns, op FROM lakesync_deltas WHERE "table" = $1 AND row_id = ANY($2) ORDER BY hlc ASC`,
-					[sourceTable, rowIdArray],
-				);
-
-				const { upserts, deleteIds } = groupAndMerge(
-					deltaResult.rows as Array<{
-						row_id: string;
-						columns: string | ColumnDelta[];
-						op: string;
-					}>,
-				);
-
-				if (upserts.length > 0) {
-					const colNames = schema.columns.map((c) => c.name);
-					const baseCols = ["row_id", ...colNames];
-					const allCols = soft
-						? [...baseCols, "deleted_at", "synced_at"]
-						: [...baseCols, "synced_at"];
-					const colList = allCols.map((c) => `"${c}"`).join(", ");
-
-					const values: unknown[] = [];
-					const valueRows: string[] = [];
-					const paramsPerRow = allCols.length;
-
-					for (let i = 0; i < upserts.length; i++) {
-						const u = upserts[i]!;
-						const offset = i * paramsPerRow;
-						const placeholders = allCols.map((_, j) => `$${offset + j + 1}`);
-						valueRows.push(`(${placeholders.join(", ")})`);
-
-						values.push(u.rowId);
-						for (const col of colNames) {
-							values.push(u.state[col] ?? null);
-						}
-						if (soft) values.push(null); // deleted_at = NULL (un-delete)
-						values.push(new Date());
-					}
-
-					const conflictList = conflictCols.map((c) => `"${c}"`).join(", ");
-					const updateCols = soft
-						? [...colNames, "deleted_at", "synced_at"]
-						: [...colNames, "synced_at"];
-					const updateSet = updateCols.map((c) => `"${c}" = EXCLUDED."${c}"`).join(", ");
-
-					await this.pool.query(
-						`INSERT INTO "${dest}" (${colList}) VALUES ${valueRows.join(", ")} ON CONFLICT (${conflictList}) DO UPDATE SET ${updateSet}`,
-						values,
-					);
-				}
-
-				if (deleteIds.length > 0) {
-					if (soft) {
-						await this.pool.query(
-							`UPDATE "${dest}" SET deleted_at = now(), synced_at = now() WHERE row_id = ANY($1)`,
-							[deleteIds],
-						);
-					} else {
-						await this.pool.query(`DELETE FROM "${dest}" WHERE row_id = ANY($1)`, [deleteIds]);
-					}
-				}
-			}
-		}, "Failed to materialise deltas");
+		return executeMaterialise(this.executor, this.dialect, deltas, schemas);
 	}
 
 	/** Close the database connection pool and release resources. */

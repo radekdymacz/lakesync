@@ -11,6 +11,7 @@ import { useQuery } from "../use-query";
 
 interface Listeners {
 	onChange: Array<(...args: unknown[]) => void>;
+	onSyncStart: Array<(...args: unknown[]) => void>;
 	onSyncComplete: Array<(...args: unknown[]) => void>;
 	onError: Array<(...args: unknown[]) => void>;
 }
@@ -20,6 +21,7 @@ function mockCoordinator(
 ) {
 	const listeners: Listeners = {
 		onChange: [],
+		onSyncStart: [],
 		onSyncComplete: [],
 		onError: [],
 	};
@@ -39,6 +41,7 @@ function mockCoordinator(
 		off: vi.fn(),
 		queueDepth: vi.fn().mockResolvedValue(0),
 		lastSyncTime: null,
+		state: { syncing: false, lastSyncTime: null, lastSyncedHlc: 0n },
 		_listeners: listeners,
 	};
 }

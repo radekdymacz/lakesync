@@ -1,12 +1,10 @@
 import {
-	type Action,
 	type ActionDiscovery,
 	type ActionErrorResult,
 	type ActionResult,
 	type ConnectorDescriptor,
 	HLC,
 	type HLCTimestamp,
-	isActionError,
 	type LakeSyncError,
 	LWWResolver,
 	type Result,
@@ -16,17 +14,31 @@ import type { LocalDB } from "../db/local-db";
 import type { ActionQueue } from "../queue/action-types";
 import { IDBQueue } from "../queue/idb-queue";
 import type { SyncQueue } from "../queue/types";
+import { ActionProcessor } from "./action-processor";
 import { applyRemoteDeltas } from "./applier";
+import { AutoSyncScheduler } from "./auto-sync";
 import { SyncTracker } from "./tracker";
 import type { SyncTransport } from "./transport";
 
 /** Controls which operations syncOnce() / startAutoSync() performs */
 export type SyncMode = "full" | "pushOnly" | "pullOnly";
 
+/** Readable snapshot of the coordinator's current sync state. */
+export interface SyncState {
+	/** Whether a sync cycle is currently in progress. */
+	syncing: boolean;
+	/** Last successful sync time, or null if never synced. */
+	lastSyncTime: Date | null;
+	/** HLC timestamp of the last successfully synced delta. */
+	lastSyncedHlc: HLCTimestamp;
+}
+
 /** Events emitted by SyncCoordinator */
 export interface SyncEvents {
 	/** Fired after remote deltas are applied locally. Count is the number of deltas applied. */
 	onChange: (count: number) => void;
+	/** Fired when a sync cycle (push + pull) begins. */
+	onSyncStart: () => void;
 	/** Fired after a successful sync cycle (push + pull) completes. */
 	onSyncComplete: () => void;
 	/** Fired when a sync error occurs. */
@@ -68,6 +80,9 @@ const REALTIME_HEARTBEAT_MS = 60_000;
  *
  * Uses a {@link SyncTransport} abstraction to communicate with the gateway,
  * allowing both in-process (LocalTransport) and remote (HttpTransport) usage.
+ *
+ * Delegates auto-sync scheduling to {@link AutoSyncScheduler} and action
+ * processing to {@link ActionProcessor}.
  */
 export class SyncCoordinator {
 	readonly tracker: SyncTracker;
@@ -79,17 +94,14 @@ export class SyncCoordinator {
 	private readonly _clientId: string;
 	private readonly maxRetries: number;
 	private readonly syncMode: SyncMode;
-	private readonly autoSyncIntervalMs: number;
-	private readonly realtimeHeartbeatMs: number;
 	private lastSyncedHlc = HLC.encode(0, 0);
 	private _lastSyncTime: Date | null = null;
-	private syncIntervalId: ReturnType<typeof setInterval> | null = null;
-	private visibilityHandler: (() => void) | null = null;
 	private syncing = false;
-	private readonly actionQueue: ActionQueue | null;
-	private readonly maxActionRetries: number;
+	private readonly autoSyncScheduler: AutoSyncScheduler;
+	private readonly actionProcessor: ActionProcessor | null;
 	private listeners: { [K in keyof SyncEvents]: Array<SyncEvents[K]> } = {
 		onChange: [],
+		onSyncStart: [],
 		onSyncComplete: [],
 		onError: [],
 		onActionComplete: [],
@@ -103,11 +115,30 @@ export class SyncCoordinator {
 		this._clientId = config?.clientId ?? `client-${crypto.randomUUID()}`;
 		this.maxRetries = config?.maxRetries ?? 10;
 		this.syncMode = config?.syncMode ?? "full";
-		this.autoSyncIntervalMs = config?.autoSyncIntervalMs ?? AUTO_SYNC_INTERVAL_MS;
-		this.realtimeHeartbeatMs = config?.realtimeHeartbeatMs ?? REALTIME_HEARTBEAT_MS;
-		this.actionQueue = config?.actionQueue ?? null;
-		this.maxActionRetries = config?.maxActionRetries ?? 5;
 		this.tracker = new SyncTracker(db, this.queue, this.hlc, this._clientId);
+
+		// Compute auto-sync interval
+		const autoSyncIntervalMs = config?.autoSyncIntervalMs ?? AUTO_SYNC_INTERVAL_MS;
+		const realtimeHeartbeatMs = config?.realtimeHeartbeatMs ?? REALTIME_HEARTBEAT_MS;
+		const intervalMs = transport.supportsRealtime ? realtimeHeartbeatMs : autoSyncIntervalMs;
+
+		// Initialise composed modules
+		this.autoSyncScheduler = new AutoSyncScheduler(() => this.syncOnce(), intervalMs);
+
+		if (config?.actionQueue) {
+			this.actionProcessor = new ActionProcessor({
+				actionQueue: config.actionQueue,
+				transport,
+				clientId: this._clientId,
+				hlc: this.hlc,
+				maxRetries: config?.maxActionRetries ?? 5,
+			});
+			this.actionProcessor.setOnComplete((actionId, result) => {
+				this.emit("onActionComplete", actionId, result);
+			});
+		} else {
+			this.actionProcessor = null;
+		}
 
 		// Register broadcast handler for realtime transports
 		if (this.transport.onBroadcast) {
@@ -137,6 +168,15 @@ export class SyncCoordinator {
 				// Swallow listener errors to avoid breaking sync
 			}
 		}
+	}
+
+	/** Readable snapshot of the current sync state. */
+	get state(): SyncState {
+		return {
+			syncing: this.syncing,
+			lastSyncTime: this._lastSyncTime,
+			lastSyncedHlc: this.lastSyncedHlc,
+		};
 	}
 
 	/** Push pending deltas to the gateway via the transport */
@@ -259,32 +299,11 @@ export class SyncCoordinator {
 
 	/**
 	 * Start auto-sync: periodic interval + visibility change handler.
-	 * Synchronises (push + pull) on tab focus and every 10 seconds.
+	 * Synchronises (push + pull) on tab focus and every N seconds.
 	 */
 	startAutoSync(): void {
 		this.transport.connect?.();
-
-		const intervalMs = this.transport.supportsRealtime
-			? this.realtimeHeartbeatMs
-			: this.autoSyncIntervalMs;
-
-		this.syncIntervalId = setInterval(() => {
-			void this.syncOnce();
-		}, intervalMs);
-
-		this.setupVisibilitySync();
-	}
-
-	/** Register a visibility change listener to sync on tab focus. */
-	private setupVisibilitySync(): void {
-		this.visibilityHandler = () => {
-			if (typeof document !== "undefined" && document.visibilityState === "visible") {
-				void this.syncOnce();
-			}
-		};
-		if (typeof document !== "undefined") {
-			document.addEventListener("visibilitychange", this.visibilityHandler);
-		}
+		this.autoSyncScheduler.start();
 	}
 
 	/**
@@ -312,6 +331,7 @@ export class SyncCoordinator {
 	async syncOnce(): Promise<void> {
 		if (this.syncing) return;
 		this.syncing = true;
+		this.emit("onSyncStart");
 		try {
 			if (this.syncMode !== "pushOnly") {
 				if (this.lastSyncedHlc === HLC.encode(0, 0)) {
@@ -347,106 +367,21 @@ export class SyncCoordinator {
 		params: Record<string, unknown>;
 		idempotencyKey?: string;
 	}): Promise<void> {
-		if (!this.actionQueue) {
+		if (!this.actionProcessor) {
 			this.emit("onError", new Error("No action queue configured"));
 			return;
 		}
-
-		const hlc = this.hlc.now();
-		const { generateActionId } = await import("@lakesync/core");
-		const actionId = await generateActionId({
-			clientId: this._clientId,
-			hlc,
-			connector: params.connector,
-			actionType: params.actionType,
-			params: params.params,
-		});
-
-		const action: Action = {
-			actionId,
-			clientId: this._clientId,
-			hlc,
-			connector: params.connector,
-			actionType: params.actionType,
-			params: params.params,
-			idempotencyKey: params.idempotencyKey,
-		};
-
-		await this.actionQueue.push(action);
-		// Trigger immediate processing
-		void this.processActionQueue();
+		await this.actionProcessor.enqueue(params);
 	}
 
 	/**
 	 * Process pending actions from the action queue.
 	 *
-	 * Peeks at pending entries, sends them to the gateway via
-	 * `transport.executeAction()`, and acks/nacks based on the result.
-	 * Dead-letters entries after `maxActionRetries` failures.
-	 * Triggers an immediate `syncOnce()` on success to pull fresh state.
+	 * Delegates to the ActionProcessor if one is configured.
 	 */
 	async processActionQueue(): Promise<void> {
-		if (!this.actionQueue || !this.transport.executeAction) return;
-
-		const peekResult = await this.actionQueue.peek(100);
-		if (!peekResult.ok || peekResult.value.length === 0) return;
-
-		// Dead-letter entries that exceeded max retries
-		const deadLettered = peekResult.value.filter((e) => e.retryCount >= this.maxActionRetries);
-		const entries = peekResult.value.filter((e) => e.retryCount < this.maxActionRetries);
-
-		if (deadLettered.length > 0) {
-			console.warn(
-				`[SyncCoordinator] Dead-lettering ${deadLettered.length} actions after ${this.maxActionRetries} retries`,
-			);
-			await this.actionQueue.ack(deadLettered.map((e) => e.id));
-			for (const entry of deadLettered) {
-				this.emit("onActionComplete", entry.action.actionId, {
-					actionId: entry.action.actionId,
-					code: "DEAD_LETTERED",
-					message: `Action dead-lettered after ${this.maxActionRetries} retries`,
-					retryable: false,
-				});
-			}
-		}
-
-		if (entries.length === 0) return;
-
-		const ids = entries.map((e) => e.id);
-		await this.actionQueue.markSending(ids);
-
-		const transportResult = await this.transport.executeAction({
-			clientId: this._clientId,
-			actions: entries.map((e) => e.action),
-		});
-
-		if (transportResult.ok) {
-			await this.actionQueue.ack(ids);
-
-			// Emit events for each result
-			for (const result of transportResult.value.results) {
-				this.emit("onActionComplete", result.actionId, result);
-			}
-
-			// Check if any results were retryable errors — nack those
-			const retryableIds: string[] = [];
-			const ackableIds: string[] = [];
-			for (let i = 0; i < transportResult.value.results.length; i++) {
-				const result = transportResult.value.results[i]!;
-				if (isActionError(result) && result.retryable) {
-					retryableIds.push(ids[i]!);
-				} else {
-					ackableIds.push(ids[i]!);
-				}
-			}
-
-			// Note: we already acked all above. For retryable errors in a batch,
-			// the client should re-submit. This is handled by the action queue entry
-			// being consumed and the event listener deciding to retry.
-		} else {
-			// Transport-level failure — nack all for retry
-			await this.actionQueue.nack(ids);
-		}
+		if (!this.actionProcessor) return;
+		await this.actionProcessor.processQueue();
 	}
 
 	/**
@@ -456,6 +391,9 @@ export class SyncCoordinator {
 	 * empty connectors when the transport does not support discovery.
 	 */
 	async describeActions(): Promise<Result<ActionDiscovery, LakeSyncError>> {
+		if (this.actionProcessor) {
+			return this.actionProcessor.describeActions();
+		}
 		if (!this.transport.describeActions) {
 			return { ok: true, value: { connectors: {} } };
 		}
@@ -469,6 +407,9 @@ export class SyncCoordinator {
 	 * an empty array when the transport does not support it.
 	 */
 	async listConnectorTypes(): Promise<Result<ConnectorDescriptor[], LakeSyncError>> {
+		if (this.actionProcessor) {
+			return this.actionProcessor.listConnectorTypes();
+		}
 		if (!this.transport.listConnectorTypes) {
 			return { ok: true, value: [] };
 		}
@@ -477,16 +418,7 @@ export class SyncCoordinator {
 
 	/** Stop auto-sync and clean up listeners */
 	stopAutoSync(): void {
-		if (this.syncIntervalId !== null) {
-			clearInterval(this.syncIntervalId);
-			this.syncIntervalId = null;
-		}
-		if (this.visibilityHandler) {
-			if (typeof document !== "undefined") {
-				document.removeEventListener("visibilitychange", this.visibilityHandler);
-			}
-			this.visibilityHandler = null;
-		}
+		this.autoSyncScheduler.stop();
 		// Disconnect persistent transport (e.g. WebSocket)
 		this.transport.disconnect?.();
 	}

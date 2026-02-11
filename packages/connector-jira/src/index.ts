@@ -25,6 +25,9 @@ registerOutputSchemas("jira", JIRA_TABLE_SCHEMAS);
 
 // Auto-register poller factory so createPoller("jira", ...) works.
 registerPollerFactory("jira", (config, gateway) => {
+	if (config.type !== "jira") {
+		throw new Error(`Expected connector type "jira", got "${config.type}"`);
+	}
 	const ingest: JiraIngestConfig | undefined = config.ingest
 		? {
 				intervalMs: config.ingest.intervalMs,
@@ -32,5 +35,5 @@ registerPollerFactory("jira", (config, gateway) => {
 				memoryBudgetBytes: config.ingest.memoryBudgetBytes,
 			}
 		: undefined;
-	return new JiraSourcePoller(config.jira!, ingest, config.name, gateway);
+	return new JiraSourcePoller(config.jira, ingest, config.name, gateway);
 });

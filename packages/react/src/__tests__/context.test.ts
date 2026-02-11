@@ -10,6 +10,7 @@ import { LakeSyncProvider, useLakeSync } from "../context";
 
 interface Listeners {
 	onChange: Array<(...args: unknown[]) => void>;
+	onSyncStart: Array<(...args: unknown[]) => void>;
 	onSyncComplete: Array<(...args: unknown[]) => void>;
 	onError: Array<(...args: unknown[]) => void>;
 }
@@ -17,6 +18,7 @@ interface Listeners {
 function mockCoordinator() {
 	const listeners: Listeners = {
 		onChange: [],
+		onSyncStart: [],
 		onSyncComplete: [],
 		onError: [],
 	};
@@ -42,6 +44,7 @@ function mockCoordinator() {
 		}),
 		queueDepth: vi.fn().mockResolvedValue(0),
 		lastSyncTime: null,
+		state: { syncing: false, lastSyncTime: null, lastSyncedHlc: 0n },
 		_listeners: listeners,
 	};
 }
@@ -76,7 +79,7 @@ describe("LakeSyncProvider + useLakeSync", () => {
 	it("throws when used outside provider", () => {
 		expect(() => {
 			renderHook(() => useLakeSync());
-		}).toThrow("useLakeSync must be used within a <LakeSyncProvider>");
+		}).toThrow(/must be used within a <LakeSyncProvider>/);
 	});
 
 	it("subscribes to onChange on mount and unsubscribes on unmount", () => {

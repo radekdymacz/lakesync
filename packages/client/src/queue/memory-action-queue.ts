@@ -1,82 +1,72 @@
 import type { Action, LakeSyncError, Result } from "@lakesync/core";
-import { Ok } from "@lakesync/core";
 import type { ActionQueue, ActionQueueEntry } from "./action-types";
+import { MemoryOutbox } from "./memory-outbox";
 
 /**
  * In-memory action queue implementation.
  * Suitable for testing and server-side use.
+ *
+ * Delegates to {@link MemoryOutbox} for the generic outbox logic and
+ * adapts the entry shape to the {@link ActionQueue} interface.
  */
 export class MemoryActionQueue implements ActionQueue {
-	private entries: Map<string, ActionQueueEntry> = new Map();
-	private counter = 0;
+	private readonly outbox = new MemoryOutbox<Action>("mem-action");
 
 	/** Add an action to the queue. */
 	async push(action: Action): Promise<Result<ActionQueueEntry, LakeSyncError>> {
-		const entry: ActionQueueEntry = {
-			id: `mem-action-${++this.counter}`,
-			action,
-			status: "pending",
-			createdAt: Date.now(),
-			retryCount: 0,
-		};
-		this.entries.set(entry.id, entry);
-		return Ok(entry);
+		const result = await this.outbox.push(action);
+		if (!result.ok) return result;
+		return { ok: true, value: this.toActionEntry(result.value) };
 	}
 
 	/** Peek at pending entries (ordered by createdAt), skipping entries with future retryAfter. */
 	async peek(limit: number): Promise<Result<ActionQueueEntry[], LakeSyncError>> {
-		const now = Date.now();
-		const pending = [...this.entries.values()]
-			.filter((e) => e.status === "pending" && (e.retryAfter === undefined || e.retryAfter <= now))
-			.sort((a, b) => a.createdAt - b.createdAt)
-			.slice(0, limit);
-		return Ok(pending);
+		const result = await this.outbox.peek(limit);
+		if (!result.ok) return result;
+		return { ok: true, value: result.value.map((e) => this.toActionEntry(e)) };
 	}
 
 	/** Mark entries as currently being sent. */
 	async markSending(ids: string[]): Promise<Result<void, LakeSyncError>> {
-		for (const id of ids) {
-			const entry = this.entries.get(id);
-			if (entry?.status === "pending") {
-				entry.status = "sending";
-			}
-		}
-		return Ok(undefined);
+		return this.outbox.markSending(ids);
 	}
 
 	/** Acknowledge successful delivery (removes entries). */
 	async ack(ids: string[]): Promise<Result<void, LakeSyncError>> {
-		for (const id of ids) {
-			this.entries.delete(id);
-		}
-		return Ok(undefined);
+		return this.outbox.ack(ids);
 	}
 
 	/** Negative acknowledge — reset to pending with incremented retryCount and exponential backoff. */
 	async nack(ids: string[]): Promise<Result<void, LakeSyncError>> {
-		for (const id of ids) {
-			const entry = this.entries.get(id);
-			if (entry) {
-				entry.status = "pending";
-				entry.retryCount++;
-				const backoffMs = Math.min(1000 * 2 ** entry.retryCount, 30_000);
-				entry.retryAfter = Date.now() + backoffMs;
-			}
-		}
-		return Ok(undefined);
+		return this.outbox.nack(ids);
 	}
 
 	/** Get the number of pending + sending entries. */
 	async depth(): Promise<Result<number, LakeSyncError>> {
-		const count = [...this.entries.values()].filter(
-			(e) => e.status === "pending" || e.status === "sending",
-		).length;
-		return Ok(count);
+		return this.outbox.depth();
 	}
 
 	/** Remove all entries. */
 	async clear(): Promise<Result<void, LakeSyncError>> {
-		this.entries.clear();
-		return Ok(undefined);
+		return this.outbox.clear();
+	}
+
+	/** Convert a generic OutboxEntry to the ActionQueue-specific ActionQueueEntry shape. */
+	private toActionEntry(entry: {
+		id: string;
+		item: Action;
+		status: string;
+		createdAt: number;
+		retryCount: number;
+		retryAfter?: number;
+	}): ActionQueueEntry {
+		return {
+			id: entry.id,
+			action: entry.item,
+			status: entry.status as ActionQueueEntry["status"],
+			createdAt: entry.createdAt,
+			retryCount: entry.retryCount,
+			retryAfter: entry.retryAfter,
+		};
 	}
 }

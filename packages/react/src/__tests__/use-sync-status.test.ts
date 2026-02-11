@@ -11,6 +11,7 @@ import { useSyncStatus } from "../use-sync-status";
 
 interface Listeners {
 	onChange: Array<(...args: unknown[]) => void>;
+	onSyncStart: Array<(...args: unknown[]) => void>;
 	onSyncComplete: Array<(...args: unknown[]) => void>;
 	onError: Array<(...args: unknown[]) => void>;
 }
@@ -18,11 +19,12 @@ interface Listeners {
 function mockCoordinator() {
 	const listeners: Listeners = {
 		onChange: [],
+		onSyncStart: [],
 		onSyncComplete: [],
 		onError: [],
 	};
 
-	return {
+	const coord = {
 		tracker: {
 			insert: vi.fn(),
 			update: vi.fn(),
@@ -37,8 +39,11 @@ function mockCoordinator() {
 		off: vi.fn(),
 		queueDepth: vi.fn().mockResolvedValue(0),
 		lastSyncTime: null as Date | null,
+		state: { syncing: false, lastSyncTime: null as Date | null, lastSyncedHlc: 0n },
 		_listeners: listeners,
 	};
+
+	return coord;
 }
 
 type MockCoordinator = ReturnType<typeof mockCoordinator>;
@@ -77,6 +82,7 @@ describe("useSyncStatus", () => {
 		const coord = mockCoordinator();
 		const syncTime = new Date();
 		coord.lastSyncTime = syncTime;
+		coord.state.lastSyncTime = syncTime;
 
 		const { result } = renderHook(() => useSyncStatus(), {
 			wrapper: wrapper(coord),
@@ -168,6 +174,7 @@ describe("useSyncStatus", () => {
 
 		// Then: success clears error
 		coord.lastSyncTime = new Date();
+		coord.state.lastSyncTime = coord.lastSyncTime;
 		act(() => {
 			for (const cb of coord._listeners.onSyncComplete) {
 				cb();
@@ -177,5 +184,25 @@ describe("useSyncStatus", () => {
 		await waitFor(() => {
 			expect(result.current.error).toBeNull();
 		});
+	});
+
+	it("sets isSyncing on onSyncStart", async () => {
+		const coord = mockCoordinator();
+
+		const { result } = renderHook(() => useSyncStatus(), {
+			wrapper: wrapper(coord),
+		});
+
+		await waitFor(() => {
+			expect(result.current.isSyncing).toBe(false);
+		});
+
+		act(() => {
+			for (const cb of coord._listeners.onSyncStart) {
+				cb();
+			}
+		});
+
+		expect(result.current.isSyncing).toBe(true);
 	});
 });

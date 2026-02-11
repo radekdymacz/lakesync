@@ -315,7 +315,9 @@ describe("validateConnectorConfig", () => {
 		if (result.ok) {
 			expect(result.value.name).toBe("my-jira");
 			expect(result.value.type).toBe("jira");
-			expect(result.value.jira).toBeDefined();
+			if (result.value.type === "jira") {
+				expect(result.value.jira).toBeDefined();
+			}
 		}
 	});
 

@@ -1,6 +1,6 @@
 import type { DbError } from "@lakesync/client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLakeSync } from "./context";
+import { useLakeSyncData, useLakeSyncStable } from "./context";
 
 /** Return type of `useQuery`. */
 export interface UseQueryResult<T> {
@@ -22,7 +22,8 @@ export interface UseQueryResult<T> {
  * @param params - Optional bind parameters
  */
 export function useQuery<T>(sql: string, params?: unknown[]): UseQueryResult<T> {
-	const { tracker, dataVersion } = useLakeSync();
+	const { tracker } = useLakeSyncStable();
+	const { dataVersion } = useLakeSyncData();
 	const [data, setData] = useState<T[]>([]);
 	const [error, setError] = useState<DbError | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
