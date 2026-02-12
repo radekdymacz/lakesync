@@ -7,12 +7,6 @@ export type {
 } from "@lakesync/core";
 export { type IngestTarget, isIngestTarget } from "@lakesync/core";
 export { type ActionCacheConfig, ActionDispatcher } from "./action-dispatcher";
-export {
-	type CachedActionResult,
-	type IdempotencyCache,
-	type IdempotencyCacheConfig,
-	MemoryIdempotencyCache,
-} from "./idempotency-cache";
 export { DeltaBuffer } from "./buffer";
 export { type ConfigStore, MemoryConfigStore } from "./config-store";
 export {
@@ -34,6 +28,12 @@ export {
 } from "./flush";
 export { FlushCoordinator, type FlushCoordinatorDeps } from "./flush-coordinator";
 export { SyncGateway, type SyncPull, type SyncPush, type SyncResponse } from "./gateway";
+export {
+	type CachedActionResult,
+	type IdempotencyCache,
+	type IdempotencyCacheConfig,
+	MemoryIdempotencyCache,
+} from "./idempotency-cache";
 export { bigintReplacer, bigintReviver } from "./json";
 export {
 	type HandlerResult,

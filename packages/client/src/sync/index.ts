@@ -9,7 +9,12 @@ export {
 	type SyncState,
 } from "./coordinator";
 export { SchemaSynchroniser } from "./schema-sync";
-export { type SyncContext, type SyncStrategy, PullFirstStrategy, PushFirstStrategy } from "./strategy";
+export {
+	PullFirstStrategy,
+	PushFirstStrategy,
+	type SyncContext,
+	type SyncStrategy,
+} from "./strategy";
 export { SyncTracker } from "./tracker";
 export type { CheckpointResponse, SyncTransport } from "./transport";
 export { HttpTransport, type HttpTransportConfig } from "./transport-http";

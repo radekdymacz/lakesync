@@ -1,6 +1,6 @@
 import type { DatabaseAdapter } from "@lakesync/adapter";
 import type { HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
-import { type Result, Ok, Err } from "@lakesync/core";
+import { Err, Ok, type Result } from "@lakesync/core";
 
 /** Consistency mode for shared buffer writes. */
 export type ConsistencyMode = "eventual" | "strong";

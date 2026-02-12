@@ -1,12 +1,10 @@
 import type {
-	Action,
 	ActionDescriptor,
 	ActionDiscovery,
 	ActionExecutionError,
 	ActionHandler,
 	ActionPush,
 	ActionResponse,
-	ActionResult,
 	ActionValidationError,
 	AuthContext,
 	HLCTimestamp,

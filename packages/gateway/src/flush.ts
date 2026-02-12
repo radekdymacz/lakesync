@@ -235,7 +235,10 @@ const lakeJsonStrategy: FlushStrategy = new LakeJsonFlushStrategy();
 const lakeParquetStrategy: FlushStrategy = new LakeParquetFlushStrategy();
 
 /** Select the appropriate flush strategy based on adapter type and format. */
-function selectFlushStrategy(adapter: LakeAdapter | DatabaseAdapter, format?: string): FlushStrategy {
+function selectFlushStrategy(
+	adapter: LakeAdapter | DatabaseAdapter,
+	format?: string,
+): FlushStrategy {
 	if (isDatabaseAdapter(adapter)) return databaseStrategy;
 	if (format === "json") return lakeJsonStrategy;
 	return lakeParquetStrategy;
