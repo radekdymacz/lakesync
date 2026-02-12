@@ -42,37 +42,20 @@ function buildPollerRegistry(map: Map<string, PollerFactory>): PollerRegistry {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Global mutable registry (backwards compatibility)
-// ---------------------------------------------------------------------------
-
-/** @deprecated Global mutable registry — prefer explicit {@link PollerRegistry}. */
-const pollerFactories = new Map<string, PollerFactory>();
-
-/**
- * Register a poller factory for a connector type.
- *
- * @deprecated Use {@link createPollerRegistry} and pass the registry explicitly
- * to {@link createPoller} instead. Global registration couples via side effects.
- */
-export function registerPollerFactory(type: string, factory: PollerFactory): void {
-	pollerFactories.set(type, factory);
-}
-
 /**
  * Create a poller from a {@link ConnectorConfig}.
  *
  * @param config - Connector configuration.
  * @param gateway - Push target for the poller.
- * @param registry - Optional explicit registry. Defaults to the global registry.
+ * @param registry - Registry of poller factories to look up the config's type.
  * @throws If no factory has been registered for the config's `type`.
  */
 export function createPoller(
 	config: ConnectorConfig,
 	gateway: PushTarget,
-	registry?: PollerRegistry,
+	registry: PollerRegistry,
 ): BaseSourcePoller {
-	const factory = registry ? registry.get(config.type) : pollerFactories.get(config.type);
+	const factory = registry.get(config.type);
 	if (!factory) {
 		throw new Error(
 			`No poller factory registered for connector type "${config.type}". ` +

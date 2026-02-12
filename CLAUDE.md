@@ -29,9 +29,11 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - All phases complete (1 through 8): HLC, Delta, Result, Conflict, Queue, Gateway, Proto, Adapter, Parquet, Catalogue, SQLite client, CF Workers, Compaction, Schema Evolution, Analyst, Sync Rules, Initial Sync, Database Adapters, Table Sharding, Self-Hosted Gateway, Fan-Out, Lifecycle, Materialise, Actions, Connectors, React Hooks, WebSocket, Clustering
 
 ### Adapters — Any Data Source (packages/adapter)
+- Adapter interfaces (`LakeAdapter`, `DatabaseAdapter`, `isDatabaseAdapter`, `Materialisable`, `isMaterialisable`) are defined in `@lakesync/core` (`packages/core/src/adapter-types.ts`). `@lakesync/adapter` re-exports them for backward compatibility. Implementations remain in `@lakesync/adapter`.
 - `LakeAdapter` interface: `putObject`, `getObject`, `headObject`, `listObjects`, `deleteObject`, `deleteObjects`
 - `DatabaseAdapter` interface: `insertDeltas`, `queryDeltasSince`, `getLatestState`, `ensureSchema` — adapters are both sources AND destinations
 - Implementations: S3Adapter (S3/R2/MinIO), PostgresAdapter, MySQLAdapter, BigQueryAdapter, CompositeAdapter, FanOutAdapter, LifecycleAdapter
+- `AdapterFactoryRegistry` pattern: `createAdapterFactoryRegistry()` creates an immutable registry; `defaultAdapterFactoryRegistry()` includes postgres/mysql/bigquery; `createDatabaseAdapter(config, registry?)` uses the registry (defaults to built-in)
 - `FanOutAdapter`: writes to primary (sync), replicates to secondaries (async best-effort)
 - `LifecycleAdapter`: hot/cold tiers based on delta age; `migrateToTier()` moves aged-out deltas
 - `migrateAdapter()`: copies data between any two adapters
@@ -63,24 +65,23 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - Routes: `POST /sync/:id/action` (execute), `GET /sync/:id/actions` (discover)
 
 ### Connectors (packages/core/src/connector/ + packages/connector-*)
-- `ConnectorConfig`: declarative configuration for a data source — name, type, connection config, optional ingest polling
+- `ConnectorConfig`: open discriminated union — `ConnectorConfigBase` (open `type: string`) plus typed variants for known types, plus a catch-all `(ConnectorConfigBase & Record<string, unknown>)` for extensibility. Custom connector types work without modifying core.
 - Supported types: `"postgres"`, `"mysql"`, `"bigquery"`, `"jira"`, `"salesforce"` (`CONNECTOR_TYPES` const)
 - `ConnectorIngestConfig`: tables to poll, interval, chunk size, memory budget
 - `ConnectorIngestTable`: target table + SQL query + row ID column + strategy (`cursor` or `diff`)
 - Dynamic registration: `POST /admin/connectors/:gatewayId` registers connector, creates adapter, starts poller
-- `createPoller()` factory: registry-based — connector packages call `registerPollerFactory()` at import time
+- `createPoller(config, gateway, registry)` factory: requires an explicit `PollerRegistry` parameter. No global mutable registry.
 - `BaseSourcePoller` (packages/core): abstract class with start/stop lifecycle, chunked push, memory-aware flush
 - `PushTarget` / `IngestTarget` interfaces: pollers push to gateway without direct dependency
 - `CallbackPushTarget`: lightweight PushTarget for testing or simple integrations
 - **connector-jira**: `JiraSourcePoller` extends `BaseSourcePoller`, polls Jira Cloud REST API (issues, projects, comments)
 - **connector-salesforce**: `SalesforceSourcePoller` extends `BaseSourcePoller`, polls Salesforce SOQL (accounts, contacts, opportunities, leads)
-- Both connectors auto-register their poller factory on import
+- Both connectors export poller factories as named exports (`jiraPollerFactory`, `salesforcePollerFactory`) — build a `PollerRegistry` via `createPollerRegistry()` and pass it to `createPoller()`
 
-### Materialise Protocol (packages/adapter/src/materialise.ts)
-- `Materialisable` interface: `materialise(deltas, schemas)` — opt-in for adapters
-- `isMaterialisable()` type guard: duck-typed check
+### Materialise Protocol
+- `Materialisable` interface and `isMaterialisable()` type guard are defined in `@lakesync/core` (`packages/core/src/adapter-types.ts`)
+- Implementation helpers (`groupDeltasByTable`, `buildSchemaIndex`, `executeMaterialise`) remain in `@lakesync/adapter`
 - Destination tables follow the hybrid column model: synced columns + `props JSONB DEFAULT '{}'` + `synced_at`
-- `groupDeltasByTable()` / `buildSchemaIndex()`: helpers for materialisation logic
 - PostgresAdapter implements `Materialisable` — upserts latest row state, deletes tombstoned rows
 - Auto-called after successful delta flush (non-fatal — failures are warned, never fail the flush)
 
@@ -88,8 +89,11 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - LocalDB: sql.js WASM + IndexedDB snapshot persistence
 - SyncCoordinator: push/pull orchestration, auto-sync (10s interval + visibility)
 - SyncTracker: wraps LocalDB + queue + HLC; insert/update/delete with auto delta extraction
-- Transports: HttpTransport (remote gateway), LocalTransport (in-process), WebSocketTransport (real-time)
-- WebSocketTransport: binary protobuf with tag-based framing (0x01=push, 0x02=pull, 0x03=broadcast), exponential backoff reconnect, checkpoint fallback to HTTP
+- Transport interfaces are split by capability: `SyncTransport` (core push/pull, required), `CheckpointTransport` (checkpoint downloads for initial sync), `RealtimeTransport` (WebSocket real-time broadcast), `ActionTransport` (imperative action execution)
+- `TransportWithCapabilities = SyncTransport & Partial<CheckpointTransport> & Partial<RealtimeTransport> & Partial<ActionTransport>`
+- HttpTransport implements SyncTransport + CheckpointTransport + ActionTransport
+- LocalTransport implements SyncTransport + CheckpointTransport + ActionTransport
+- WebSocketTransport implements SyncTransport + RealtimeTransport + CheckpointTransport; binary protobuf with tag-based framing (0x01=push, 0x02=pull, 0x03=broadcast), exponential backoff reconnect
 - Queues: MemoryQueue, IDBQueue (outbox pattern)
 - SchemaSynchroniser: client-side schema migration
 - applyRemoteDeltas: conflict-aware remote delta application
@@ -104,9 +108,10 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 
 ### Gateway (packages/gateway)
 - `SyncGateway`: thin facade composing `DeltaBuffer`, `ActionDispatcher`, `SchemaManager`, and `flushEntries`
+- `SyncGateway.rehydrate(deltas)`: restores persisted deltas without push validation
 - `DeltaBuffer`: dual structure (log + index) with byte-size tracking, per-table stats, and age-based flush
 - `ActionDispatcher`: dispatches imperative actions to registered `ActionHandler`s with idempotency
-- `SchemaManager`: schema versioning, delta validation, safe evolution (add nullable columns only)
+- `SchemaManager`: schema versioning, delta validation, safe evolution (add nullable columns only). Uses atomic `SchemaSnapshot` pattern (single state object swapped atomically).
 - `ConfigStore` / `MemoryConfigStore`: stores sync rules, schemas, and connector configs
 - `flushEntries`: unified flush module — handles both Lake (Parquet/JSON) and Database adapter paths, auto-materialise
 - Shared request handlers (`handlePushRequest`, `handlePullRequest`, etc.) used by both gateway-worker and gateway-server
@@ -122,6 +127,7 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - Source polling ingest: `SourcePoller` with cursor and diff strategies for polling external databases
 - Dynamic connector registration: `POST /admin/connectors/:id` creates adapter + starts poller at runtime
 - Clustering: `DistributedLock` interface + `AdapterBasedLock` for coordinated flush across instances; `SharedBuffer` for cross-instance pull visibility
+- `GatewayServerConfig` accepts optional `pollerRegistry` and `adapterRegistry` for extensibility. `ConnectorManager` uses registry-based dispatch.
 - Docker image + compose example in package directory
 
 ### Table Sharding (apps/gateway-worker)
@@ -195,7 +201,7 @@ For SEQUENTIAL tasks: execute one at a time.
 - FanOutAdapter secondary failures are silently caught — never affect the return value
 - LifecycleAdapter determines age from HLC upper 48 bits: `wallMs = Number(hlc >> 16n)`
 - Materialise failures are non-fatal — always warned, never fail the flush
-- Connector packages auto-register poller factories on import via `registerPollerFactory()` — import the package before calling `createPoller()`
+- Connector packages export poller factories as named exports (`jiraPollerFactory`, `salesforcePollerFactory`) — build a `PollerRegistry` via `createPollerRegistry()` and pass it to `createPoller()`
 - WebSocketTransport delegates checkpoint downloads to an internal HttpTransport (large binary payloads)
 - gateway-server WebSocket auth: token via Authorization header or `?token=` query param
 - gateway-server clustering: `SharedBuffer` writes through to shared adapter on push, merges on pull

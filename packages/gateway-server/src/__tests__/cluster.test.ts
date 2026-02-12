@@ -1,5 +1,4 @@
-import type { DatabaseAdapter } from "@lakesync/adapter";
-import type { HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
+import type { DatabaseAdapter, HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
 import { Err, Ok } from "@lakesync/core";
 import { describe, expect, it, vi } from "vitest";
 import { AdapterBasedLock } from "../cluster";

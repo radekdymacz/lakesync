@@ -19,7 +19,7 @@ import { applyRemoteDeltas } from "./applier";
 import { AutoSyncScheduler } from "./auto-sync";
 import { PullFirstStrategy, type SyncContext, type SyncStrategy } from "./strategy";
 import { SyncTracker } from "./tracker";
-import type { SyncTransport } from "./transport";
+import type { TransportWithCapabilities } from "./transport";
 
 /** Controls which operations syncOnce() / startAutoSync() performs */
 export type SyncMode = "full" | "pushOnly" | "pullOnly";
@@ -81,7 +81,7 @@ const REALTIME_HEARTBEAT_MS = 60_000;
 /**
  * Coordinates local mutations (via SyncTracker) with gateway push/pull.
  *
- * Uses a {@link SyncTransport} abstraction to communicate with the gateway,
+ * Uses a {@link TransportWithCapabilities} abstraction to communicate with the gateway,
  * allowing both in-process (LocalTransport) and remote (HttpTransport) usage.
  *
  * Delegates auto-sync scheduling to {@link AutoSyncScheduler} and action
@@ -91,7 +91,7 @@ export class SyncCoordinator {
 	readonly tracker: SyncTracker;
 	private readonly queue: SyncQueue;
 	private readonly hlc: HLC;
-	private readonly transport: SyncTransport;
+	private readonly transport: TransportWithCapabilities;
 	private readonly db: LocalDB;
 	private readonly resolver = new LWWResolver();
 	private readonly _clientId: string;
@@ -111,7 +111,7 @@ export class SyncCoordinator {
 		onActionComplete: [],
 	};
 
-	constructor(db: LocalDB, transport: SyncTransport, config?: SyncCoordinatorConfig) {
+	constructor(db: LocalDB, transport: TransportWithCapabilities, config?: SyncCoordinatorConfig) {
 		this.db = db;
 		this.transport = transport;
 		this.hlc = config?.hlc ?? new HLC();
@@ -160,9 +160,11 @@ export class SyncCoordinator {
 
 	/** Remove an event listener */
 	off<K extends keyof SyncEvents>(event: K, listener: SyncEvents[K]): void {
-		const arr = this.listeners[event];
-		const idx = arr.indexOf(listener);
-		if (idx !== -1) arr.splice(idx, 1);
+		const listeners = this.listeners as Record<
+			keyof SyncEvents,
+			Array<SyncEvents[keyof SyncEvents]>
+		>;
+		listeners[event] = this.listeners[event].filter((fn) => fn !== listener);
 	}
 
 	private emit<K extends keyof SyncEvents>(event: K, ...args: Parameters<SyncEvents[K]>): void {

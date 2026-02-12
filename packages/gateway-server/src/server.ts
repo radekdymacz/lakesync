@@ -1,7 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
-import type { HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
-import { bigintReplacer } from "@lakesync/core";
+import type { AdapterFactoryRegistry } from "@lakesync/adapter";
+import { jiraPollerFactory } from "@lakesync/connector-jira";
+import { salesforcePollerFactory } from "@lakesync/connector-salesforce";
+import type {
+	DatabaseAdapter,
+	HLCTimestamp,
+	LakeAdapter,
+	PollerRegistry,
+	RowDelta,
+	SyncResponse,
+} from "@lakesync/core";
+import { bigintReplacer, createPollerRegistry } from "@lakesync/core";
 import type { ConfigStore, HandlerResult } from "@lakesync/gateway";
 import {
 	DEFAULT_MAX_BUFFER_AGE_MS,
@@ -67,6 +76,10 @@ export interface GatewayServerConfig {
 		/** Shared buffer configuration (consistency mode, etc.). */
 		sharedBufferConfig?: SharedBufferConfig;
 	};
+	/** Custom poller registry for connector pollers. Defaults to Jira + Salesforce. */
+	pollerRegistry?: PollerRegistry;
+	/** Custom adapter factory registry. Defaults to Postgres, MySQL, BigQuery. */
+	adapterRegistry?: AdapterFactoryRegistry;
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +203,17 @@ export class GatewayServer {
 			? new SharedBuffer(config.cluster.sharedAdapter, config.cluster.sharedBufferConfig)
 			: null;
 
-		this.connectors = new ConnectorManager(this.configStore, this.gateway);
+		// Build poller registry — default includes Jira + Salesforce
+		const pollerRegistry =
+			config.pollerRegistry ??
+			createPollerRegistry()
+				.with("jira", jiraPollerFactory)
+				.with("salesforce", salesforcePollerFactory);
+
+		this.connectors = new ConnectorManager(this.configStore, this.gateway, {
+			pollerRegistry,
+			adapterRegistry: config.adapterRegistry,
+		});
 	}
 
 	/**
@@ -204,9 +227,7 @@ export class GatewayServer {
 		// Rehydrate unflushed deltas directly into the buffer
 		const persisted = this.persistence.loadAll();
 		if (persisted.length > 0) {
-			for (const delta of persisted) {
-				this.gateway.buffer.append(delta);
-			}
+			this.gateway.rehydrate(persisted);
 			this.persistence.clear();
 		}
 

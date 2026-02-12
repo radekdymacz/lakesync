@@ -10,7 +10,7 @@ import type {
 } from "@lakesync/core";
 import { isActionError } from "@lakesync/core";
 import type { ActionQueue } from "../queue/action-types";
-import type { SyncTransport } from "./transport";
+import type { TransportWithCapabilities } from "./transport";
 
 /** Callback for action completion events. */
 export type ActionCompleteCallback = (
@@ -26,7 +26,7 @@ export type ActionCompleteCallback = (
  */
 export class ActionProcessor {
 	private readonly actionQueue: ActionQueue;
-	private readonly transport: SyncTransport;
+	private readonly transport: TransportWithCapabilities;
 	private readonly clientId: string;
 	private readonly hlc: HLC;
 	private readonly maxRetries: number;
@@ -34,7 +34,7 @@ export class ActionProcessor {
 
 	constructor(config: {
 		actionQueue: ActionQueue;
-		transport: SyncTransport;
+		transport: TransportWithCapabilities;
 		clientId: string;
 		hlc: HLC;
 		maxRetries: number;

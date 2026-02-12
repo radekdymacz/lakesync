@@ -1,10 +1,4 @@
 import {
-	type DatabaseAdapter,
-	isDatabaseAdapter,
-	isMaterialisable,
-	type LakeAdapter,
-} from "@lakesync/adapter";
-import {
 	buildPartitionSpec,
 	type DataFile,
 	lakeSyncTableName,
@@ -12,10 +6,14 @@ import {
 	tableSchemaToIceberg,
 } from "@lakesync/catalogue";
 import {
+	type DatabaseAdapter,
 	Err,
 	FlushError,
 	HLC,
 	type HLCTimestamp,
+	isDatabaseAdapter,
+	isMaterialisable,
+	type LakeAdapter,
 	Ok,
 	type Result,
 	type RowDelta,

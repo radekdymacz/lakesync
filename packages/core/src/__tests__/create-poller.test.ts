@@ -1,11 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	BaseSourcePoller,
 	type ConnectorConfig,
 	createPoller,
 	createPollerRegistry,
 	type PushTarget,
-	registerPollerFactory,
 } from "../index";
 
 // ---------------------------------------------------------------------------
@@ -31,28 +30,23 @@ class StubPoller extends BaseSourcePoller {
 	setCursorState(_state: Record<string, unknown>): void {}
 }
 
+/** Shared registry with jira + salesforce factories. */
+const testRegistry = createPollerRegistry()
+	.with("jira", (config, gateway) => new StubPoller(config.name, gateway))
+	.with("salesforce", (config, gateway) => new StubPoller(config.name, gateway));
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe("createPoller", () => {
-	beforeEach(() => {
-		// Register stub factories that mirror the connector pattern.
-		registerPollerFactory("jira", (config, gateway) => {
-			return new StubPoller(config.name, gateway);
-		});
-		registerPollerFactory("salesforce", (config, gateway) => {
-			return new StubPoller(config.name, gateway);
-		});
-	});
-
 	it("creates a poller for a registered jira connector", () => {
 		const config: ConnectorConfig = {
 			name: "my-jira",
 			type: "jira",
 			jira: { domain: "test", email: "a@b.com", apiToken: "tok" },
 		};
-		const poller = createPoller(config, noopGateway);
+		const poller = createPoller(config, noopGateway, testRegistry);
 		expect(poller).toBeInstanceOf(BaseSourcePoller);
 		expect((poller as StubPoller).connectorName).toBe("my-jira");
 	});
@@ -69,7 +63,7 @@ describe("createPoller", () => {
 				password: "pass",
 			},
 		};
-		const poller = createPoller(config, noopGateway);
+		const poller = createPoller(config, noopGateway, testRegistry);
 		expect(poller).toBeInstanceOf(BaseSourcePoller);
 		expect((poller as StubPoller).connectorName).toBe("my-sf");
 	});
@@ -80,9 +74,8 @@ describe("createPoller", () => {
 			type: "postgres",
 			postgres: { connectionString: "postgres://localhost/db" },
 		};
-		// Postgres has no registered poller factory in this test
-		// (it uses the database adapter path, not a source poller)
-		expect(() => createPoller(config, noopGateway)).toThrow(
+		const emptyRegistry = createPollerRegistry();
+		expect(() => createPoller(config, noopGateway, emptyRegistry)).toThrow(
 			/No poller factory registered for connector type "postgres"/,
 		);
 	});
@@ -93,22 +86,10 @@ describe("createPoller", () => {
 			type: "bigquery",
 			bigquery: { projectId: "p", dataset: "d" },
 		};
-		expect(() => createPoller(config, noopGateway)).toThrow(/Did you import the connector package/);
-	});
-
-	it("later registrations overwrite earlier ones", () => {
-		let called = "";
-		registerPollerFactory("jira", (config, gateway) => {
-			called = "v2";
-			return new StubPoller(config.name, gateway);
-		});
-		const config: ConnectorConfig = {
-			name: "jira-v2",
-			type: "jira",
-			jira: { domain: "test", email: "a@b.com", apiToken: "tok" },
-		};
-		createPoller(config, noopGateway);
-		expect(called).toBe("v2");
+		const emptyRegistry = createPollerRegistry();
+		expect(() => createPoller(config, noopGateway, emptyRegistry)).toThrow(
+			/Did you import the connector package/,
+		);
 	});
 });
 
@@ -141,29 +122,7 @@ describe("PollerRegistry", () => {
 		expect(withJira.get("jira")).toBeDefined();
 	});
 
-	it("createPoller prefers explicit registry over global", () => {
-		// Global registry has jira registered from beforeEach in the outer describe,
-		// but we register our own in an explicit registry with different behaviour.
-		let source = "";
-		registerPollerFactory("jira", (config, gateway) => {
-			source = "global";
-			return new StubPoller(config.name, gateway);
-		});
-		const registry = createPollerRegistry().with("jira", (config, gateway) => {
-			source = "explicit";
-			return new StubPoller(config.name, gateway);
-		});
-		const config: ConnectorConfig = {
-			name: "pref-test",
-			type: "jira",
-			jira: { domain: "test", email: "a@b.com", apiToken: "tok" },
-		};
-		createPoller(config, noopGateway, registry);
-		expect(source).toBe("explicit");
-	});
-
-	it("throws when type not in explicit registry even if global has it", () => {
-		registerPollerFactory("salesforce", (config, gateway) => new StubPoller(config.name, gateway));
+	it("throws when type not in registry", () => {
 		const emptyRegistry = createPollerRegistry();
 		const config: ConnectorConfig = {
 			name: "sf-miss",

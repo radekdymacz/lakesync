@@ -16,7 +16,14 @@ export {
 	type SyncStrategy,
 } from "./strategy";
 export { SyncTracker } from "./tracker";
-export type { CheckpointResponse, SyncTransport } from "./transport";
+export type {
+	ActionTransport,
+	CheckpointResponse,
+	CheckpointTransport,
+	RealtimeTransport,
+	SyncTransport,
+	TransportWithCapabilities,
+} from "./transport";
 export { HttpTransport, type HttpTransportConfig } from "./transport-http";
 export { type LocalGateway, LocalTransport } from "./transport-local";
 export { WebSocketTransport, type WebSocketTransportConfig } from "./transport-ws";

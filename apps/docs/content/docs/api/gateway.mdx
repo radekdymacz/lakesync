@@ -17,6 +17,8 @@ class SyncGateway {
 
 The `adapter` parameter is a convenience shorthand for `config.adapter`.
 
+> **Note:** `LakeAdapter` and `DatabaseAdapter` are imported from `@lakesync/core` (not `@lakesync/adapter`). The adapter package provides concrete implementations (S3Adapter, PostgresAdapter, etc.), while the interfaces live in core.
+
 ### `GatewayConfig`
 
 ```ts
@@ -144,6 +146,14 @@ getTablesExceedingBudget(): string[];
 ```
 
 Returns table names whose buffer size exceeds `perTableBudgetBytes`. Returns empty array when no budget is configured.
+
+### `rehydrate(deltas)`
+
+```ts
+rehydrate(deltas: ReadonlyArray<RowDelta>): void;
+```
+
+Restore persisted deltas into the buffer without push validation (no HLC drift check, no conflict resolution, no schema validation). Used by `GatewayServer` to rehydrate from SQLite persistence on startup.
 
 ## Source Adapters
 

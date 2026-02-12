@@ -147,8 +147,17 @@ describe("validateConnectorConfig", () => {
 		}
 	});
 
-	it("rejects invalid type", () => {
+	it("accepts unknown type (open extension)", () => {
 		const result = validateConnectorConfig({ name: "x", type: "redis" });
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.type).toBe("redis");
+			expect(result.value.name).toBe("x");
+		}
+	});
+
+	it("rejects empty type", () => {
+		const result = validateConnectorConfig({ name: "x", type: "" });
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.error.message).toContain("type");

@@ -20,7 +20,12 @@ import {
 	toError,
 } from "@lakesync/core";
 import { decodeSyncResponse } from "@lakesync/proto";
-import type { CheckpointResponse, SyncTransport } from "./transport";
+import type {
+	ActionTransport,
+	CheckpointResponse,
+	CheckpointTransport,
+	SyncTransport,
+} from "./transport";
 
 /** Configuration for the HTTP sync transport */
 export interface HttpTransportConfig {
@@ -40,7 +45,7 @@ export interface HttpTransportConfig {
  * Sends push requests via POST and pull requests via GET, using
  * BigInt-safe JSON serialisation for HLC timestamps.
  */
-export class HttpTransport implements SyncTransport {
+export class HttpTransport implements SyncTransport, CheckpointTransport, ActionTransport {
 	private readonly baseUrl: string;
 	private readonly gatewayId: string;
 	private readonly token: string;

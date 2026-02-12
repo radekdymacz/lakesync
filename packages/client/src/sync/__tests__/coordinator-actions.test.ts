@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryActionQueue } from "../../queue/memory-action-queue";
 import { MemoryQueue } from "../../queue/memory-queue";
 import { SyncCoordinator } from "../coordinator";
-import type { SyncTransport } from "../transport";
+import type { ActionTransport, TransportWithCapabilities } from "../transport";
 
 /** Minimal LocalDB stub for testing. */
 function createMockDb() {
@@ -27,7 +27,9 @@ function createMockDb() {
 }
 
 /** Minimal transport that supports executeAction. */
-function createMockTransport(executeActionFn?: SyncTransport["executeAction"]): SyncTransport {
+function createMockTransport(
+	executeActionFn?: ActionTransport["executeAction"],
+): TransportWithCapabilities {
 	return {
 		async push(): Promise<Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>> {
 			return Ok({ serverHlc: 100n as HLCTimestamp, accepted: 0 });

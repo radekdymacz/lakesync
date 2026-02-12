@@ -1,9 +1,21 @@
 // ---------------------------------------------------------------------------
-// Connector Manager — registration, poller lifecycle, adapter creation
+// Connector Manager — registry-based connector registration and lifecycle
 // ---------------------------------------------------------------------------
 
-import { createDatabaseAdapter, createQueryFn, type DatabaseAdapter } from "@lakesync/adapter";
-import { isActionHandler } from "@lakesync/core";
+import {
+	type AdapterFactoryRegistry,
+	createDatabaseAdapter,
+	createQueryFn,
+	defaultAdapterFactoryRegistry,
+} from "@lakesync/adapter";
+import {
+	type ConnectorConfig,
+	createPoller,
+	createPollerRegistry,
+	type DatabaseAdapter,
+	isActionHandler,
+	type PollerRegistry,
+} from "@lakesync/core";
 import type { ConfigStore, SyncGateway } from "@lakesync/gateway";
 import {
 	type HandlerResult,
@@ -24,23 +36,33 @@ interface Poller {
 /**
  * Manages connector registration, adapter creation, and poller lifecycle.
  *
- * Encapsulates the if/else chains for different connector types and
- * handles clean-up on unregistration.
+ * Uses {@link PollerRegistry} and {@link AdapterFactoryRegistry} for
+ * dispatch — no if/else chains for specific connector types.
  */
 export class ConnectorManager {
 	private readonly adapters = new Map<string, DatabaseAdapter>();
 	private readonly pollers = new Map<string, Poller>();
+	private readonly pollerRegistry: PollerRegistry;
+	private readonly adapterRegistry: AdapterFactoryRegistry;
 
 	constructor(
 		private readonly configStore: ConfigStore,
 		private readonly gateway: SyncGateway,
-	) {}
+		options?: {
+			pollerRegistry?: PollerRegistry;
+			adapterRegistry?: AdapterFactoryRegistry;
+		},
+	) {
+		this.pollerRegistry = options?.pollerRegistry ?? createPollerRegistry();
+		this.adapterRegistry = options?.adapterRegistry ?? defaultAdapterFactoryRegistry();
+	}
 
 	/**
 	 * Register a connector from raw JSON body.
 	 *
-	 * Validates via shared handler, creates adapter/poller as appropriate,
-	 * registers with the gateway.
+	 * Validates via shared handler, then dispatches to the appropriate
+	 * registry: poller registry for API-based connectors, adapter registry
+	 * for database-based connectors.
 	 */
 	async register(raw: string): Promise<HandlerResult> {
 		// Use shared handler for validation and ConfigStore registration
@@ -57,33 +79,11 @@ export class ConnectorManager {
 			return result;
 		}
 
-		// Jira connectors use their own API-based poller
-		if (config.type === "jira") {
+		// Path 1: PollerRegistry has a factory — create an API-based poller
+		const pollerFactory = this.pollerRegistry.get(config.type);
+		if (pollerFactory) {
 			try {
-				const { JiraSourcePoller } = await import("@lakesync/connector-jira");
-				const ingestConfig = config.ingest ? { intervalMs: config.ingest.intervalMs } : undefined;
-				const poller = new JiraSourcePoller(config.jira, ingestConfig, config.name, this.gateway);
-				poller.start();
-				this.pollers.set(config.name, poller);
-				return result;
-			} catch (err) {
-				await this.rollbackRegistration(connectors, registeredName);
-				const message = err instanceof Error ? err.message : String(err);
-				return { status: 500, body: { error: `Failed to load Jira connector: ${message}` } };
-			}
-		}
-
-		// Salesforce connectors use their own API-based poller
-		if (config.type === "salesforce") {
-			try {
-				const { SalesforceSourcePoller } = await import("@lakesync/connector-salesforce");
-				const ingestConfig = config.ingest ? { intervalMs: config.ingest.intervalMs } : undefined;
-				const poller = new SalesforceSourcePoller(
-					config.salesforce,
-					ingestConfig,
-					config.name,
-					this.gateway,
-				);
+				const poller = createPoller(config, this.gateway, this.pollerRegistry);
 				poller.start();
 				this.pollers.set(config.name, poller);
 				return result;
@@ -92,13 +92,13 @@ export class ConnectorManager {
 				const message = err instanceof Error ? err.message : String(err);
 				return {
 					status: 500,
-					body: { error: `Failed to load Salesforce connector: ${message}` },
+					body: { error: `Failed to create poller for "${config.type}": ${message}` },
 				};
 			}
 		}
 
-		// Database-based connectors (postgres, mysql, bigquery)
-		const adapterResult = createDatabaseAdapter(config);
+		// Path 2: AdapterFactoryRegistry has a factory — database-based connector
+		const adapterResult = createDatabaseAdapter(config, this.adapterRegistry);
 		if (!adapterResult.ok) {
 			await this.rollbackRegistration(connectors, registeredName);
 			return { status: 500, body: { error: adapterResult.error.message } };
@@ -205,7 +205,7 @@ export class ConnectorManager {
 	// -----------------------------------------------------------------------
 
 	private async rollbackRegistration(
-		connectors: Record<string, import("@lakesync/core").ConnectorConfig>,
+		connectors: Record<string, ConnectorConfig>,
 		name: string,
 	): Promise<void> {
 		delete connectors[name];

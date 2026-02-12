@@ -28,62 +28,34 @@ All connector routes require a JWT with `role: "admin"`.
 ## ConnectorConfig
 
 ```ts
-interface ConnectorConfig {
+interface ConnectorConfigBase {
+  /** Connector type — determines which adapter to create. */
+  type: string;
   /** Unique connector name (used as the source adapter key). */
   name: string;
-  /** Connector type — determines which adapter to create. */
-  type: "postgres" | "mysql" | "bigquery" | "jira" | "salesforce";
-  /** PostgreSQL config (required when type is "postgres"). */
-  postgres?: { connectionString: string };
-  /** MySQL config (required when type is "mysql"). */
-  mysql?: { connectionString: string };
-  /** BigQuery config (required when type is "bigquery"). */
-  bigquery?: {
-    projectId: string;
-    dataset: string;
-    keyFilename?: string;
-    location?: string;
-  };
-  /** Jira Cloud config (required when type is "jira"). */
-  jira?: {
-    domain: string;        // e.g. "mycompany" for mycompany.atlassian.net
-    email: string;         // for Basic auth
-    apiToken: string;      // paired with email
-    jql?: string;          // JQL filter to scope issue polling
-    includeComments?: boolean; // default true
-    includeProjects?: boolean; // default true
-  };
-  /** Salesforce CRM config (required when type is "salesforce"). */
-  salesforce?: {
-    instanceUrl: string;        // e.g. "https://mycompany.salesforce.com"
-    clientId: string;           // Connected App consumer key
-    clientSecret: string;       // Connected App consumer secret
-    username: string;           // SF username
-    password: string;           // password + security token concatenated
-    apiVersion?: string;        // default "v62.0"
-    isSandbox?: boolean;        // use test.salesforce.com for auth
-    soqlFilter?: string;        // optional WHERE clause fragment
-    includeAccounts?: boolean;      // default true
-    includeContacts?: boolean;      // default true
-    includeOpportunities?: boolean; // default true
-    includeLeads?: boolean;         // default true
-  };
   /** Optional ingest polling configuration. */
-  ingest?: {
-    /** Tables to poll (required for database connectors, ignored for Jira). */
-    tables?: Array<{
-      table: string;
-      query: string;
-      rowIdColumn?: string;
-      strategy:
-        | { type: "cursor"; cursorColumn: string; lookbackMs?: number }
-        | { type: "diff" };
-    }>;
-    /** Poll interval in milliseconds. */
-    intervalMs?: number;
-  };
+  ingest?: ConnectorIngestConfig;
 }
+
+type ConnectorConfig =
+  | PostgresConnectorConfigFull   // type: "postgres", postgres: { connectionString }
+  | MySQLConnectorConfigFull      // type: "mysql", mysql: { connectionString }
+  | BigQueryConnectorConfigFull   // type: "bigquery", bigquery: { projectId, dataset, ... }
+  | JiraConnectorConfigFull       // type: "jira", jira: { domain, email, apiToken, ... }
+  | SalesforceConnectorConfigFull // type: "salesforce", salesforce: { instanceUrl, ... }
+  | (ConnectorConfigBase & Record<string, unknown>);  // extensible catch-all
 ```
+
+The open base type allows custom connector types (e.g. `cloudwatch`, `stripe`) without modifying `@lakesync/core`. Typed variants provide full type safety for built-in connector types.
+
+**Built-in connector config fields:**
+
+- **`postgres`** `{ connectionString: string }` — required when type is `"postgres"`
+- **`mysql`** `{ connectionString: string }` — required when type is `"mysql"`
+- **`bigquery`** `{ projectId: string; dataset: string; keyFilename?: string; location?: string }` — required when type is `"bigquery"`
+- **`jira`** `{ domain: string; email: string; apiToken: string; jql?: string; includeComments?: boolean; includeProjects?: boolean }` — required when type is `"jira"`
+- **`salesforce`** `{ instanceUrl: string; clientId: string; clientSecret: string; username: string; password: string; apiVersion?: string; isSandbox?: boolean; soqlFilter?: string; includeAccounts?: boolean; includeContacts?: boolean; includeOpportunities?: boolean; includeLeads?: boolean }` — required when type is `"salesforce"`
+- **`ingest`** `{ tables?: Array<{ table, query, rowIdColumn?, strategy }>; intervalMs?: number }` — optional ingest polling configuration
 
 Validation is performed server-side via `validateConnectorConfig()`. Missing or invalid fields return a `400` response with a descriptive error message.
 

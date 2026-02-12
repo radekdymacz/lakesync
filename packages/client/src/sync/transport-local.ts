@@ -4,6 +4,7 @@ import type {
 	ActionResponse,
 	ActionValidationError,
 	AuthContext,
+	ConnectorDescriptor,
 	HLCTimestamp,
 	LakeSyncError,
 	Result,
@@ -12,7 +13,12 @@ import type {
 	SyncResponse,
 } from "@lakesync/core";
 import { Err, LakeSyncError as LSError, Ok } from "@lakesync/core";
-import type { CheckpointResponse, SyncTransport } from "./transport";
+import type {
+	ActionTransport,
+	CheckpointResponse,
+	CheckpointTransport,
+	SyncTransport,
+} from "./transport";
 
 /**
  * Gateway-like interface used by LocalTransport.
@@ -40,7 +46,7 @@ export interface LocalGateway {
  * Useful for testing and single-tab offline demos where the client
  * and gateway run in the same process.
  */
-export class LocalTransport implements SyncTransport {
+export class LocalTransport implements SyncTransport, CheckpointTransport, ActionTransport {
 	constructor(private readonly gateway: LocalGateway) {}
 
 	/** Push local deltas to the in-process gateway */
@@ -79,5 +85,10 @@ export class LocalTransport implements SyncTransport {
 			return Ok({ connectors: {} });
 		}
 		return Ok(this.gateway.describeActions());
+	}
+
+	/** List available connector types — not supported by local transport. */
+	async listConnectorTypes(): Promise<Result<ConnectorDescriptor[], LakeSyncError>> {
+		return Ok([]);
 	}
 }

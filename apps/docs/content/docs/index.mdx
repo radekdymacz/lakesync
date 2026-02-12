@@ -50,7 +50,7 @@ Source connectors poll external APIs on an interval and push changes into the sy
 
 | Package | Description |
 |---------|-------------|
-| `@lakesync/core` | HLC, Delta, Result, conflict resolution, sync rules, validation, base source poller, connector types |
+| `@lakesync/core` | HLC, Delta, Result, conflict resolution, sync rules, adapter interfaces (LakeAdapter, DatabaseAdapter, Materialisable), base source poller, connector types |
 | `@lakesync/client` | LocalDB (sql.js), SyncCoordinator, transports, queues |
 | `@lakesync/gateway` | In-memory sync gateway with push/pull protocol |
 | `@lakesync/gateway-server` | Self-hosted HTTP + WebSocket gateway server for Node.js and Bun |

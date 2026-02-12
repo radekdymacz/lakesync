@@ -5,7 +5,7 @@ import { registerSchema } from "./db/schema-registry";
 import { MemoryQueue } from "./queue/memory-queue";
 import type { SyncQueue } from "./queue/types";
 import { SyncCoordinator, type SyncCoordinatorConfig } from "./sync/coordinator";
-import type { SyncTransport } from "./sync/transport";
+import type { TransportWithCapabilities } from "./sync/transport";
 import { HttpTransport } from "./sync/transport-http";
 
 /** Configuration for creating a LakeSync client via {@link createClient}. */
@@ -47,7 +47,7 @@ export interface LakeSyncClient {
 	/** The local SQLite database. */
 	db: LocalDB;
 	/** The transport used for gateway communication. */
-	transport: SyncTransport;
+	transport: TransportWithCapabilities;
 	/** Stop auto-sync, close the database, and release resources. */
 	destroy(): Promise<void>;
 }

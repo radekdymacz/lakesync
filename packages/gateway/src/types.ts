@@ -1,6 +1,12 @@
-import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
 import type { NessieCatalogueClient } from "@lakesync/catalogue";
-import type { ActionHandler, HLCTimestamp, RowDelta, TableSchema } from "@lakesync/core";
+import type {
+	ActionHandler,
+	DatabaseAdapter,
+	HLCTimestamp,
+	LakeAdapter,
+	RowDelta,
+	TableSchema,
+} from "@lakesync/core";
 import type { SchemaManager } from "./schema-manager";
 
 /** Result returned by {@link SyncGateway.handlePush}. */

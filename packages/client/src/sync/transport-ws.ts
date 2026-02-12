@@ -17,7 +17,12 @@ import {
 	TAG_SYNC_PULL,
 	TAG_SYNC_PUSH,
 } from "@lakesync/proto";
-import type { CheckpointResponse, SyncTransport } from "./transport";
+import type {
+	CheckpointResponse,
+	CheckpointTransport,
+	RealtimeTransport,
+	SyncTransport,
+} from "./transport";
 import { HttpTransport, type HttpTransportConfig } from "./transport-http";
 
 /** Configuration for the WebSocket sync transport. */
@@ -54,7 +59,7 @@ const DEFAULT_RECONNECT_MAX_MS = 30_000;
  * Checkpoints are delegated to an internal {@link HttpTransport} (large
  * binary payloads are better suited to HTTP).
  */
-export class WebSocketTransport implements SyncTransport {
+export class WebSocketTransport implements SyncTransport, RealtimeTransport, CheckpointTransport {
 	private readonly config: WebSocketTransportConfig;
 	private readonly reconnectBaseMs: number;
 	private readonly reconnectMaxMs: number;

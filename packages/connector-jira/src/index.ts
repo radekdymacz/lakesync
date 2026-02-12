@@ -1,9 +1,9 @@
 import {
 	type BaseSourcePoller,
 	type ConnectorConfig,
+	type JiraConnectorConfigFull,
 	type PushTarget,
 	registerOutputSchemas,
-	registerPollerFactory,
 } from "@lakesync/core";
 import { JiraSourcePoller } from "./poller";
 import { JIRA_TABLE_SCHEMAS } from "./schemas";
@@ -29,25 +29,25 @@ export type {
 /**
  * Poller factory for Jira connectors.
  *
- * Use with an explicit {@link import("@lakesync/core").PollerRegistry} instead
- * of the deprecated global {@link registerPollerFactory}.
+ * Register with a {@link import("@lakesync/core").PollerRegistry} via `.with("jira", jiraPollerFactory)`.
  */
-export function createJiraPoller(config: ConnectorConfig, gateway: PushTarget): BaseSourcePoller {
+export function jiraPollerFactory(config: ConnectorConfig, gateway: PushTarget): BaseSourcePoller {
 	if (config.type !== "jira") {
 		throw new Error(`Expected connector type "jira", got "${config.type}"`);
 	}
-	const ingest: JiraIngestConfig | undefined = config.ingest
+	const typed = config as JiraConnectorConfigFull;
+	const ingest: JiraIngestConfig | undefined = typed.ingest
 		? {
-				intervalMs: config.ingest.intervalMs,
-				chunkSize: config.ingest.chunkSize,
-				memoryBudgetBytes: config.ingest.memoryBudgetBytes,
+				intervalMs: typed.ingest.intervalMs,
+				chunkSize: typed.ingest.chunkSize,
+				memoryBudgetBytes: typed.ingest.memoryBudgetBytes,
 			}
 		: undefined;
-	return new JiraSourcePoller(config.jira, ingest, config.name, gateway);
+	return new JiraSourcePoller(typed.jira, ingest, typed.name, gateway);
 }
+
+/** @deprecated Use {@link jiraPollerFactory} instead. */
+export const createJiraPoller = jiraPollerFactory;
 
 // Auto-register output schemas so listConnectorDescriptors() includes table info.
 registerOutputSchemas("jira", JIRA_TABLE_SCHEMAS);
-
-/** @deprecated Global auto-registration — prefer explicit {@link createJiraPoller} with a PollerRegistry. */
-registerPollerFactory("jira", createJiraPoller);

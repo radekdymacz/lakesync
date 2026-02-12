@@ -1,6 +1,14 @@
-import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
-import { isDatabaseAdapter } from "@lakesync/adapter";
-import { Err, FlushError, Ok, type Result, type RowDelta, type TableSchema } from "@lakesync/core";
+import {
+	type DatabaseAdapter,
+	Err,
+	FlushError,
+	isDatabaseAdapter,
+	type LakeAdapter,
+	Ok,
+	type Result,
+	type RowDelta,
+	type TableSchema,
+} from "@lakesync/core";
 import type { DeltaBuffer } from "./buffer";
 import type { FlushConfig } from "./flush";
 import { flushEntries } from "./flush";

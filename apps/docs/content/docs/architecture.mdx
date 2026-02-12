@@ -289,7 +289,7 @@ flowchart LR
 The `isMaterialisable(adapter)` type guard checks at runtime whether an adapter supports materialisation. The gateway triggers materialisation automatically after a successful flush when `schemas` are configured in `GatewayConfig`.
 
 ```ts
-import { isMaterialisable } from "@lakesync/adapter";
+import { isMaterialisable } from "@lakesync/core";
 
 if (isMaterialisable(adapter)) {
   await adapter.materialise(deltas, schemas);

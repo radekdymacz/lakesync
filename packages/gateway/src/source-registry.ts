@@ -1,4 +1,4 @@
-import type { DatabaseAdapter } from "@lakesync/adapter";
+import type { DatabaseAdapter } from "@lakesync/core";
 
 /**
  * Registry for named source adapters used in adapter-sourced pulls.

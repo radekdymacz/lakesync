@@ -1,4 +1,3 @@
-import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
 import {
 	type ActionDiscovery,
 	type ActionHandler,
@@ -10,11 +9,13 @@ import {
 	type AuthContext,
 	BackpressureError,
 	type ClockDriftError,
+	type DatabaseAdapter,
 	Err,
 	type FlushError,
 	filterDeltas,
 	HLC,
 	type IngestTarget,
+	type LakeAdapter,
 	Ok,
 	type Result,
 	type RowDelta,
@@ -355,6 +356,17 @@ export class SyncGateway implements IngestTarget {
 	 */
 	listSources(): string[] {
 		return this.sources.list();
+	}
+
+	// -----------------------------------------------------------------------
+	// Rehydration — restore persisted deltas without push validation
+	// -----------------------------------------------------------------------
+
+	/** Rehydrate the buffer with persisted deltas (bypasses push validation). */
+	rehydrate(deltas: ReadonlyArray<RowDelta>): void {
+		for (const delta of deltas) {
+			this.buffer.append(delta);
+		}
 	}
 
 	// -----------------------------------------------------------------------

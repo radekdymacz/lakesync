@@ -3,7 +3,7 @@ import {
 	type ConnectorConfig,
 	type PushTarget,
 	registerOutputSchemas,
-	registerPollerFactory,
+	type SalesforceConnectorConfigFull,
 } from "@lakesync/core";
 import { SalesforceSourcePoller } from "./poller";
 import { SALESFORCE_TABLE_SCHEMAS } from "./schemas";
@@ -29,28 +29,28 @@ export type {
 /**
  * Poller factory for Salesforce connectors.
  *
- * Use with an explicit {@link import("@lakesync/core").PollerRegistry} instead
- * of the deprecated global {@link registerPollerFactory}.
+ * Register with a {@link import("@lakesync/core").PollerRegistry} via `.with("salesforce", salesforcePollerFactory)`.
  */
-export function createSalesforcePoller(
+export function salesforcePollerFactory(
 	config: ConnectorConfig,
 	gateway: PushTarget,
 ): BaseSourcePoller {
 	if (config.type !== "salesforce") {
 		throw new Error(`Expected connector type "salesforce", got "${config.type}"`);
 	}
-	const ingest: SalesforceIngestConfig | undefined = config.ingest
+	const sfConfig = config as SalesforceConnectorConfigFull;
+	const ingest: SalesforceIngestConfig | undefined = sfConfig.ingest
 		? {
-				intervalMs: config.ingest.intervalMs,
-				chunkSize: config.ingest.chunkSize,
-				memoryBudgetBytes: config.ingest.memoryBudgetBytes,
+				intervalMs: sfConfig.ingest.intervalMs,
+				chunkSize: sfConfig.ingest.chunkSize,
+				memoryBudgetBytes: sfConfig.ingest.memoryBudgetBytes,
 			}
 		: undefined;
-	return new SalesforceSourcePoller(config.salesforce, ingest, config.name, gateway);
+	return new SalesforceSourcePoller(sfConfig.salesforce, ingest, sfConfig.name, gateway);
 }
+
+/** @deprecated Use {@link salesforcePollerFactory} instead. */
+export const createSalesforcePoller = salesforcePollerFactory;
 
 // Auto-register output schemas so listConnectorDescriptors() includes table info.
 registerOutputSchemas("salesforce", SALESFORCE_TABLE_SCHEMAS);
-
-/** @deprecated Global auto-registration — prefer explicit {@link createSalesforcePoller} with a PollerRegistry. */
-registerPollerFactory("salesforce", createSalesforcePoller);

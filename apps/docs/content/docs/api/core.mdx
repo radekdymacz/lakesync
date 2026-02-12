@@ -394,21 +394,75 @@ Types for dynamic connector registration. See [Dynamic Connectors](/docs/connect
 ```ts
 type ConnectorType = "postgres" | "mysql" | "bigquery" | "jira" | "salesforce";
 
-interface ConnectorConfig {
+interface ConnectorConfigBase {
+  type: string;
   name: string;
-  type: ConnectorType;
-  postgres?: PostgresConnectorConfig;
-  mysql?: MySQLConnectorConfig;
-  bigquery?: BigQueryConnectorConfig;
-  jira?: JiraConnectorConfig;
-  salesforce?: SalesforceConnectorConfig;
   ingest?: ConnectorIngestConfig;
 }
+
+type ConnectorConfig =
+  | PostgresConnectorConfigFull
+  | MySQLConnectorConfigFull
+  | BigQueryConnectorConfigFull
+  | JiraConnectorConfigFull
+  | SalesforceConnectorConfigFull
+  | (ConnectorConfigBase & Record<string, unknown>);
 
 function validateConnectorConfig(
   input: unknown,
 ): Result<ConnectorConfig, ConnectorValidationError>;
 ```
+
+The open catch-all variant allows custom connector types to pass through without modifying core. Existing switch statements still work for known types.
+
+## Adapter Interfaces
+
+Core adapter types and type guards. These interfaces are defined in `@lakesync/core` and re-exported by `@lakesync/adapter` for backward compatibility.
+
+### `LakeAdapter`
+
+```ts
+interface LakeAdapter {
+  putObject(path: string, data: Uint8Array, contentType?: string): Promise<Result<void, AdapterError>>;
+  getObject(path: string): Promise<Result<Uint8Array, AdapterError>>;
+  headObject(path: string): Promise<Result<{ size: number; lastModified: Date }, AdapterError>>;
+  listObjects(prefix: string): Promise<Result<ObjectInfo[], AdapterError>>;
+  deleteObject(path: string): Promise<Result<void, AdapterError>>;
+  deleteObjects(paths: string[]): Promise<Result<void, AdapterError>>;
+}
+
+interface ObjectInfo {
+  key: string;
+  size: number;
+  lastModified: Date;
+}
+```
+
+### `DatabaseAdapter`
+
+```ts
+interface DatabaseAdapter {
+  insertDeltas(deltas: RowDelta[]): Promise<Result<void, AdapterError>>;
+  queryDeltasSince(hlc: HLCTimestamp, tables?: string[]): Promise<Result<RowDelta[], AdapterError>>;
+  getLatestState(table: string, rowId: string): Promise<Result<Record<string, unknown> | null, AdapterError>>;
+  ensureSchema(schema: TableSchema): Promise<Result<void, AdapterError>>;
+  close(): Promise<void>;
+}
+
+function isDatabaseAdapter(adapter: unknown): adapter is DatabaseAdapter;
+```
+
+### `Materialisable`
+
+```ts
+interface Materialisable {
+  materialise(deltas: RowDelta[], schemas: ReadonlyArray<TableSchema>): Promise<Result<void, AdapterError>>;
+}
+
+function isMaterialisable(adapter: unknown): adapter is Materialisable;
+```
+
+Opt-in capability for adapters that can materialise deltas into queryable destination tables. See [Materialise Protocol](/docs/architecture#materialise-protocol) for details.
 
 ## Source Polling
 
@@ -455,24 +509,22 @@ interface PollerMemoryConfig {
 
 ## Poller Factories
 
-Register and create source pollers by connector type.
+Registry-based creation of source pollers by connector type.
 
 ```ts
-function registerPollerFactory(
-  type: string,
-  factory: PollerFactory,
-): void;
+interface PollerRegistry {
+  get(type: string): PollerFactory | undefined;
+  with(type: string, factory: PollerFactory): PollerRegistry;
+}
 
-function createPoller(
-  type: string,
-  config: ConnectorConfig,
-  gateway: PushTarget,
-): BaseSourcePoller;
+function createPollerRegistry(factories?: Map<string, PollerFactory>): PollerRegistry;
+
+function createPoller(config: ConnectorConfig, gateway: PushTarget, registry: PollerRegistry): BaseSourcePoller;
 
 type PollerFactory = (config: ConnectorConfig, gateway: PushTarget) => BaseSourcePoller;
 ```
 
-Connector packages (`@lakesync/connector-jira`, `@lakesync/connector-salesforce`) auto-register their factories on import, so `createPoller("jira", config, gateway)` works without manual registration.
+Build a `PollerRegistry` with the factories you need. Connector packages export their factories as named exports (e.g. `jiraPollerFactory` from `@lakesync/connector-jira`).
 
 ### `CallbackPushTarget`
 

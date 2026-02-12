@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LocalDB } from "../../db/local-db";
 import type { SyncQueue } from "../../queue/types";
 import { SyncCoordinator } from "../coordinator";
-import type { SyncTransport } from "../transport";
+import type { CheckpointTransport, TransportWithCapabilities } from "../transport";
 
 function makeDelta(overrides?: Partial<RowDelta>): RowDelta {
 	return {
@@ -40,8 +40,8 @@ function mockQueue(): SyncQueue {
 }
 
 function mockTransportWithCheckpoint(
-	checkpointResult: Awaited<ReturnType<NonNullable<SyncTransport["checkpoint"]>>>,
-): SyncTransport {
+	checkpointResult: Awaited<ReturnType<CheckpointTransport["checkpoint"]>>,
+): TransportWithCapabilities {
 	return {
 		push: vi.fn().mockResolvedValue(Ok({ serverHlc: HLC.encode(2_000_000, 0), accepted: 1 })),
 		pull: vi
@@ -51,7 +51,7 @@ function mockTransportWithCheckpoint(
 	};
 }
 
-function mockTransportWithoutCheckpoint(): SyncTransport {
+function mockTransportWithoutCheckpoint(): TransportWithCapabilities {
 	return {
 		push: vi.fn().mockResolvedValue(Ok({ serverHlc: HLC.encode(2_000_000, 0), accepted: 1 })),
 		pull: vi

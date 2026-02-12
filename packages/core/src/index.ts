@@ -1,4 +1,12 @@
 export * from "./action";
+export type {
+	DatabaseAdapter,
+	DatabaseAdapterConfig,
+	LakeAdapter,
+	Materialisable,
+	ObjectInfo,
+} from "./adapter-types";
+export { isDatabaseAdapter, isMaterialisable } from "./adapter-types";
 export { type AuthClaims, AuthError, verifyToken } from "./auth";
 export {
 	BaseSourcePoller,
@@ -15,7 +23,6 @@ export {
 	createPollerRegistry,
 	type PollerFactory,
 	type PollerRegistry,
-	registerPollerFactory,
 } from "./create-poller";
 export * from "./delta";
 export * from "./hlc";

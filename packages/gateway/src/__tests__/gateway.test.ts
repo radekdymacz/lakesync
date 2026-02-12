@@ -1,5 +1,11 @@
-import type { LakeAdapter } from "@lakesync/adapter";
-import type { AdapterError, HLCTimestamp, Result, RowDelta, TableSchema } from "@lakesync/core";
+import type {
+	AdapterError,
+	HLCTimestamp,
+	LakeAdapter,
+	Result,
+	RowDelta,
+	TableSchema,
+} from "@lakesync/core";
 import { HLC, Ok } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
 import { SyncGateway } from "../gateway";

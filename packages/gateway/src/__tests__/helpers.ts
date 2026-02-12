@@ -1,6 +1,13 @@
-import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
 import type { NessieCatalogueClient } from "@lakesync/catalogue";
-import type { AdapterError, DeltaOp, HLCTimestamp, Result, RowDelta } from "@lakesync/core";
+import type {
+	AdapterError,
+	DatabaseAdapter,
+	DeltaOp,
+	HLCTimestamp,
+	LakeAdapter,
+	Result,
+	RowDelta,
+} from "@lakesync/core";
 import { Err, Ok } from "@lakesync/core";
 import { vi } from "vitest";
 

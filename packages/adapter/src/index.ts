@@ -4,7 +4,12 @@ export type { CompositeAdapterConfig, CompositeRoute } from "./composite";
 export { CompositeAdapter } from "./composite";
 export type { DatabaseAdapter, DatabaseAdapterConfig } from "./db-types";
 export { isDatabaseAdapter, lakeSyncTypeToBigQuery } from "./db-types";
-export { createDatabaseAdapter } from "./factory";
+export type { AdapterFactory, AdapterFactoryRegistry } from "./factory";
+export {
+	createAdapterFactoryRegistry,
+	createDatabaseAdapter,
+	defaultAdapterFactoryRegistry,
+} from "./factory";
 export type { FanOutAdapterConfig } from "./fan-out";
 export { FanOutAdapter } from "./fan-out";
 export type { LifecycleAdapterConfig } from "./lifecycle";

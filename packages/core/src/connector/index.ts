@@ -11,14 +11,20 @@ export {
 } from "./registry";
 export type {
 	BigQueryConnectorConfig,
+	BigQueryConnectorConfigFull,
 	ConnectorConfig,
+	ConnectorConfigBase,
 	ConnectorIngestConfig,
 	ConnectorIngestTable,
 	ConnectorType,
 	JiraConnectorConfig,
+	JiraConnectorConfigFull,
 	MySQLConnectorConfig,
+	MySQLConnectorConfigFull,
 	PostgresConnectorConfig,
+	PostgresConnectorConfigFull,
 	SalesforceConnectorConfig,
+	SalesforceConnectorConfigFull,
 } from "./types";
 export { CONNECTOR_TYPES } from "./types";
 export { validateConnectorConfig } from "./validate";

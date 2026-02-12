@@ -43,13 +43,11 @@ interface CachedEntry {
 /**
  * In-memory idempotency cache with TTL expiration and bounded size.
  *
- * Stores executed action IDs in a Set for fast `has()` lookups, and
- * detailed results in a Map keyed by actionId or `idem:{idempotencyKey}`.
- * Stale entries are evicted on every `get()` call and periodically
- * trimmed to the configured max size on `set()`.
+ * All state lives in a single Map keyed by actionId or `idem:{idempotencyKey}`.
+ * Stale entries are evicted on every `set()` call and the cache is
+ * trimmed to the configured max size (counting only non-idem entries).
  */
 export class MemoryIdempotencyCache implements IdempotencyCache {
-	private readonly executedActions: Set<string> = new Set();
 	private readonly entries: Map<string, CachedEntry> = new Map();
 	private readonly maxSize: number;
 	private readonly ttlMs: number;
@@ -61,7 +59,13 @@ export class MemoryIdempotencyCache implements IdempotencyCache {
 
 	/** {@inheritDoc IdempotencyCache.has} */
 	has(actionId: string): boolean {
-		return this.executedActions.has(actionId);
+		const entry = this.entries.get(actionId);
+		if (!entry) return false;
+		if (Date.now() - entry.cachedAt > this.ttlMs) {
+			this.entries.delete(actionId);
+			return false;
+		}
+		return true;
 	}
 
 	/** {@inheritDoc IdempotencyCache.get} */
@@ -80,14 +84,13 @@ export class MemoryIdempotencyCache implements IdempotencyCache {
 		this.evictStaleEntries();
 
 		const entry: CachedEntry = { value: result, cachedAt: Date.now() };
-		this.executedActions.add(actionId);
 		this.entries.set(actionId, entry);
 		if (idempotencyKey) {
 			this.entries.set(`idem:${idempotencyKey}`, entry);
 		}
 	}
 
-	/** Evict expired entries and trim to max size. */
+	/** Evict expired entries and trim to max size (counting only non-idem entries). */
 	private evictStaleEntries(): void {
 		const now = Date.now();
 
@@ -95,22 +98,15 @@ export class MemoryIdempotencyCache implements IdempotencyCache {
 		for (const [key, entry] of this.entries) {
 			if (now - entry.cachedAt > this.ttlMs) {
 				this.entries.delete(key);
-				// Also remove from executedActions if it's an actionId (not idem: prefixed)
-				if (!key.startsWith("idem:")) {
-					this.executedActions.delete(key);
-				}
 			}
 		}
 
-		// Trim to max size — remove oldest entries first
-		if (this.executedActions.size > this.maxSize) {
-			const excess = this.executedActions.size - this.maxSize;
-			let removed = 0;
-			for (const actionId of this.executedActions) {
-				if (removed >= excess) break;
-				this.executedActions.delete(actionId);
-				this.entries.delete(actionId);
-				removed++;
+		// Trim to max size — count only non-idem entries
+		const actionKeys = [...this.entries.keys()].filter((k) => !k.startsWith("idem:"));
+		if (actionKeys.length > this.maxSize) {
+			const excess = actionKeys.length - this.maxSize;
+			for (let i = 0; i < excess; i++) {
+				this.entries.delete(actionKeys[i]!);
 			}
 		}
 	}

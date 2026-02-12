@@ -1,25 +1,34 @@
 import { Err, Ok, type Result, type RowDelta, SchemaError, type TableSchema } from "@lakesync/core";
 
+/** Immutable snapshot of schema state — swapped atomically on evolution. */
+interface SchemaSnapshot {
+	schema: TableSchema;
+	version: number;
+	allowedColumns: Set<string>;
+}
+
 /**
  * Manages schema versioning and validation for the gateway.
  *
  * Validates incoming deltas against the current schema and supports
- * safe schema evolution (adding nullable columns only).
+ * safe schema evolution (adding nullable columns only). Schema, version,
+ * and allowed columns are held in a single {@link SchemaSnapshot} that
+ * is swapped atomically — no intermediate inconsistent state is possible.
  */
 export class SchemaManager {
-	private currentSchema: TableSchema;
-	private version: number;
-	private allowedColumns: Set<string>;
+	private state: SchemaSnapshot;
 
 	constructor(schema: TableSchema, version?: number) {
-		this.currentSchema = schema;
-		this.version = version ?? 1;
-		this.allowedColumns = new Set(schema.columns.map((c) => c.name));
+		this.state = {
+			schema,
+			version: version ?? 1,
+			allowedColumns: new Set(schema.columns.map((c) => c.name)),
+		};
 	}
 
 	/** Get the current schema and version. */
 	getSchema(): { schema: TableSchema; version: number } {
-		return { schema: this.currentSchema, version: this.version };
+		return { schema: this.state.schema, version: this.state.version };
 	}
 
 	/**
@@ -34,10 +43,10 @@ export class SchemaManager {
 		}
 
 		for (const col of delta.columns) {
-			if (!this.allowedColumns.has(col.column)) {
+			if (!this.state.allowedColumns.has(col.column)) {
 				return Err(
 					new SchemaError(
-						`Unknown column "${col.column}" in delta for table "${delta.table}". Schema version ${this.version} does not include this column.`,
+						`Unknown column "${col.column}" in delta for table "${delta.table}". Schema version ${this.state.version} does not include this column.`,
 					),
 				);
 			}
@@ -52,11 +61,11 @@ export class SchemaManager {
 	 * returns a SchemaError.
 	 */
 	evolveSchema(newSchema: TableSchema): Result<{ version: number }, SchemaError> {
-		if (newSchema.table !== this.currentSchema.table) {
+		if (newSchema.table !== this.state.schema.table) {
 			return Err(new SchemaError("Cannot evolve schema: table name mismatch"));
 		}
 
-		const oldColumnMap = new Map(this.currentSchema.columns.map((c) => [c.name, c.type]));
+		const oldColumnMap = new Map(this.state.schema.columns.map((c) => [c.name, c.type]));
 		const newColumnMap = new Map(newSchema.columns.map((c) => [c.name, c.type]));
 
 		// Check for removed columns
@@ -82,11 +91,14 @@ export class SchemaManager {
 			}
 		}
 
-		// Apply evolution
-		this.currentSchema = newSchema;
-		this.version++;
-		this.allowedColumns = new Set(newSchema.columns.map((c) => c.name));
+		// Atomic swap — no intermediate inconsistent state
+		const newVersion = this.state.version + 1;
+		this.state = {
+			schema: newSchema,
+			version: newVersion,
+			allowedColumns: new Set(newSchema.columns.map((c) => c.name)),
+		};
 
-		return Ok({ version: this.version });
+		return Ok({ version: newVersion });
 	}
 }

@@ -1,6 +1,6 @@
 import { Err, Ok, type Result } from "../result/result";
 import { ConnectorValidationError } from "./errors";
-import { CONNECTOR_TYPES, type ConnectorConfig } from "./types";
+import { CONNECTOR_TYPES, type ConnectorConfig, type ConnectorType } from "./types";
 
 const VALID_STRATEGIES = new Set(["cursor", "diff"]);
 
@@ -231,35 +231,35 @@ export function validateConnectorConfig(
 	}
 
 	// --- type ---
-	if (typeof obj.type !== "string" || !(CONNECTOR_TYPES as readonly string[]).includes(obj.type)) {
-		return Err(
-			new ConnectorValidationError(`Connector type must be one of: ${CONNECTOR_TYPES.join(", ")}`),
-		);
+	if (typeof obj.type !== "string" || obj.type.length === 0) {
+		return Err(new ConnectorValidationError("Connector type must be a non-empty string"));
 	}
 
-	const connectorType = obj.type as ConnectorConfig["type"];
+	const connectorType = obj.type;
 
-	// --- type-specific config (exhaustive switch) ---
-	let typeResult: Result<void, ConnectorValidationError>;
-	switch (connectorType) {
-		case "postgres":
-			typeResult = validatePostgresConfig(obj);
-			break;
-		case "mysql":
-			typeResult = validateMySQLConfig(obj);
-			break;
-		case "bigquery":
-			typeResult = validateBigQueryConfig(obj);
-			break;
-		case "jira":
-			typeResult = validateJiraConfig(obj);
-			break;
-		case "salesforce":
-			typeResult = validateSalesforceConfig(obj);
-			break;
+	// --- type-specific config for known types ---
+	if ((CONNECTOR_TYPES as readonly string[]).includes(connectorType)) {
+		const knownType = connectorType as ConnectorType;
+		let typeResult: Result<void, ConnectorValidationError>;
+		switch (knownType) {
+			case "postgres":
+				typeResult = validatePostgresConfig(obj);
+				break;
+			case "mysql":
+				typeResult = validateMySQLConfig(obj);
+				break;
+			case "bigquery":
+				typeResult = validateBigQueryConfig(obj);
+				break;
+			case "jira":
+				typeResult = validateJiraConfig(obj);
+				break;
+			case "salesforce":
+				typeResult = validateSalesforceConfig(obj);
+				break;
+		}
+		if (!typeResult.ok) return typeResult;
 	}
-
-	if (!typeResult.ok) return typeResult;
 
 	// --- optional ingest config ---
 	const ingestResult = validateIngestConfig(obj, connectorType);

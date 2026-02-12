@@ -38,7 +38,7 @@ interface CreateClientConfig {
 interface LakeSyncClient {
   coordinator: SyncCoordinator;
   db: LocalDB;
-  transport: SyncTransport;
+  transport: TransportWithCapabilities;
   destroy(): Promise<void>;
 }
 ```
@@ -153,7 +153,7 @@ Orchestrates push/pull sync between the local database and a remote gateway.
 
 ```ts
 class SyncCoordinator {
-  constructor(db: LocalDB, transport: SyncTransport, config?: SyncCoordinatorConfig);
+  constructor(db: LocalDB, transport: TransportWithCapabilities, config?: SyncCoordinatorConfig);
 
   readonly tracker: SyncTracker;
   readonly clientId: string;
@@ -229,39 +229,73 @@ interface SyncEvents {
 
 ## Transports
 
-### `SyncTransport` (interface)
+### Transport Interfaces
+
+The transport layer is split into focused capability interfaces. Only `SyncTransport` (push/pull) is required — checkpoint, real-time, and action capabilities are opt-in.
+
+#### `SyncTransport`
 
 ```ts
 interface SyncTransport {
   push(msg: SyncPush): Promise<Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>>;
   pull(msg: SyncPull): Promise<Result<SyncResponse, LakeSyncError>>;
-  checkpoint?(): Promise<Result<CheckpointResponse | null, LakeSyncError>>;
-  /** Execute imperative actions against external systems via the gateway. */
-  executeAction?(msg: ActionPush): Promise<Result<ActionResponse, LakeSyncError>>;
-  /** Discover available connectors and their supported action types. */
-  describeActions?(): Promise<Result<ActionDiscovery, LakeSyncError>>;
-
-  /** Whether this transport supports real-time server push. */
-  readonly supportsRealtime?: boolean;
-  /** Register callback for server-initiated broadcasts. */
-  onBroadcast?(callback: (deltas: RowDelta[], serverHlc: HLCTimestamp) => void): void;
-  /** Connect persistent transport (e.g. open WebSocket). */
-  connect?(): void;
-  /** Disconnect persistent transport (e.g. close WebSocket). */
-  disconnect?(): void;
 }
 ```
 
-The optional realtime members (`supportsRealtime`, `onBroadcast`, `connect`, `disconnect`) are implemented by `WebSocketTransport`. Polling transports (`HttpTransport`, `LocalTransport`) ignore them.
+Core sync transport — push and pull deltas. Every transport must implement this.
 
-The action methods (`executeAction`, `describeActions`) are optional and implemented by `HttpTransport` and `LocalTransport`. See [Actions](/docs/actions) for usage.
+#### `CheckpointTransport`
+
+```ts
+interface CheckpointTransport {
+  checkpoint(): Promise<Result<CheckpointResponse | null, LakeSyncError>>;
+}
+```
+
+Checkpoint downloads for initial sync. Returns `null` if no checkpoint is available.
+
+#### `RealtimeTransport`
+
+```ts
+interface RealtimeTransport {
+  readonly supportsRealtime: boolean;
+  onBroadcast(callback: (deltas: RowDelta[], serverHlc: HLCTimestamp) => void): void;
+  connect(): void;
+  disconnect(): void;
+}
+```
+
+Real-time server-initiated broadcast support. Implemented by `WebSocketTransport`.
+
+#### `ActionTransport`
+
+```ts
+interface ActionTransport {
+  executeAction(msg: ActionPush): Promise<Result<ActionResponse, LakeSyncError>>;
+  describeActions(): Promise<Result<ActionDiscovery, LakeSyncError>>;
+  listConnectorTypes(): Promise<Result<ConnectorDescriptor[], LakeSyncError>>;
+}
+```
+
+Imperative action execution and connector discovery. See [Actions](/docs/actions) for usage.
+
+#### `TransportWithCapabilities`
+
+```ts
+type TransportWithCapabilities = SyncTransport &
+  Partial<CheckpointTransport> &
+  Partial<RealtimeTransport> &
+  Partial<ActionTransport>;
+```
+
+Union type used by `SyncCoordinator`. Transports must implement push/pull; other capabilities are detected at runtime.
 
 ### `LocalTransport`
 
 In-process transport for development and testing. Connects directly to a gateway instance.
 
 ```ts
-class LocalTransport implements SyncTransport {
+class LocalTransport implements SyncTransport, CheckpointTransport, ActionTransport {
   constructor(gateway: LocalGateway);
 }
 
@@ -278,7 +312,7 @@ interface LocalGateway {
 Remote transport that communicates with a gateway over HTTP.
 
 ```ts
-class HttpTransport implements SyncTransport {
+class HttpTransport implements SyncTransport, CheckpointTransport, ActionTransport {
   constructor(config: HttpTransportConfig);
 }
 
@@ -295,7 +329,7 @@ interface HttpTransportConfig {
 Real-time transport using a persistent WebSocket connection. Supports server-initiated broadcast for sub-second sync latency.
 
 ```ts
-class WebSocketTransport implements SyncTransport {
+class WebSocketTransport implements SyncTransport, RealtimeTransport, CheckpointTransport {
   constructor(config: WebSocketTransportConfig);
 
   /** Whether the WebSocket is currently connected. */

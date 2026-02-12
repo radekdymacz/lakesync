@@ -1,3 +1,6 @@
+export type { Materialisable } from "@lakesync/core";
+export { isMaterialisable } from "@lakesync/core";
+
 import type { ColumnDelta } from "@lakesync/core";
 import {
 	type AdapterError,
@@ -7,49 +10,6 @@ import {
 	type TableSchema,
 } from "@lakesync/core";
 import { groupAndMerge, wrapAsync } from "./shared";
-
-/**
- * Opt-in capability for adapters that can materialise deltas into destination tables.
- *
- * Materialisation is a separate concern from delta storage — adapters that store
- * deltas (via `DatabaseAdapter.insertDeltas`) may also materialise them into
- * queryable destination tables by implementing this interface.
- *
- * Destination tables follow the hybrid column model:
- * - Synced columns (written by materialiser, derived from `TableSchema.columns`)
- * - `props JSONB DEFAULT '{}'` — consumer-extensible, never touched by materialiser
- * - `synced_at` — updated on every materialise cycle
- */
-export interface Materialisable {
-	/**
-	 * Materialise deltas into destination tables.
-	 *
-	 * For each table with a matching schema, merges delta history into the
-	 * latest row state and upserts into the destination table. Tombstoned
-	 * rows are deleted. The `props` column is never touched.
-	 *
-	 * @param deltas - The deltas that were just flushed.
-	 * @param schemas - Table schemas defining destination tables and column mappings.
-	 */
-	materialise(
-		deltas: RowDelta[],
-		schemas: ReadonlyArray<TableSchema>,
-	): Promise<Result<void, AdapterError>>;
-}
-
-/**
- * Type guard to check if an adapter supports materialisation.
- *
- * Uses duck-typing (same pattern as `isDatabaseAdapter`).
- */
-export function isMaterialisable(adapter: unknown): adapter is Materialisable {
-	return (
-		adapter !== null &&
-		typeof adapter === "object" &&
-		"materialise" in adapter &&
-		typeof (adapter as Materialisable).materialise === "function"
-	);
-}
 
 /**
  * Resolve the primary key columns for a table schema.

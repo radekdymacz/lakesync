@@ -1,4 +1,4 @@
-import type { DatabaseAdapter } from "@lakesync/adapter";
+import type { DatabaseAdapter } from "@lakesync/core";
 
 /**
  * Interface for distributed locking across gateway-server instances.

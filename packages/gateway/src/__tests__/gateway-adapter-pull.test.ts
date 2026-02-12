@@ -1,7 +1,7 @@
-import type { DatabaseAdapter } from "@lakesync/adapter";
 import {
 	AdapterError,
 	AdapterNotFoundError,
+	type DatabaseAdapter,
 	Err,
 	HLC,
 	Ok,

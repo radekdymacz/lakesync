@@ -1,10 +1,11 @@
-import type { DatabaseAdapter, LakeAdapter } from "@lakesync/adapter";
 import type { NessieCatalogueClient } from "@lakesync/catalogue";
 import { CatalogueError } from "@lakesync/catalogue";
 import type {
 	AdapterError,
+	DatabaseAdapter,
 	DeltaOp,
 	HLCTimestamp,
+	LakeAdapter,
 	Result,
 	RowDelta,
 	TableSchema,

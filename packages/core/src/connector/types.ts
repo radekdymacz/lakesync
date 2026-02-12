@@ -96,30 +96,57 @@ export interface ConnectorIngestConfig {
 	memoryBudgetBytes?: number;
 }
 
+/** Base configuration shared by all connectors. */
+export interface ConnectorConfigBase {
+	/** Connector type identifier. */
+	type: string;
+	/** Unique connector name. */
+	name: string;
+	/** Optional ingest polling configuration. */
+	ingest?: ConnectorIngestConfig;
+}
+
+/** Typed connector config for PostgreSQL. */
+export interface PostgresConnectorConfigFull extends ConnectorConfigBase {
+	type: "postgres";
+	postgres: PostgresConnectorConfig;
+}
+
+/** Typed connector config for MySQL. */
+export interface MySQLConnectorConfigFull extends ConnectorConfigBase {
+	type: "mysql";
+	mysql: MySQLConnectorConfig;
+}
+
+/** Typed connector config for BigQuery. */
+export interface BigQueryConnectorConfigFull extends ConnectorConfigBase {
+	type: "bigquery";
+	bigquery: BigQueryConnectorConfig;
+}
+
+/** Typed connector config for Jira Cloud. */
+export interface JiraConnectorConfigFull extends ConnectorConfigBase {
+	type: "jira";
+	jira: JiraConnectorConfig;
+}
+
+/** Typed connector config for Salesforce. */
+export interface SalesforceConnectorConfigFull extends ConnectorConfigBase {
+	type: "salesforce";
+	salesforce: SalesforceConnectorConfig;
+}
+
 /**
  * Configuration for a dynamically registered connector (data source).
  *
- * Discriminated union keyed on `type` — each variant carries exactly
- * its own connection config. No optional fields from other types.
+ * Union of known connector configs plus an open base for extensibility.
+ * Existing switch statements still work for known types; unknown types
+ * can pass through via the open base.
  */
 export type ConnectorConfig =
-	| {
-			type: "postgres";
-			name: string;
-			postgres: PostgresConnectorConfig;
-			ingest?: ConnectorIngestConfig;
-	  }
-	| { type: "mysql"; name: string; mysql: MySQLConnectorConfig; ingest?: ConnectorIngestConfig }
-	| {
-			type: "bigquery";
-			name: string;
-			bigquery: BigQueryConnectorConfig;
-			ingest?: ConnectorIngestConfig;
-	  }
-	| { type: "jira"; name: string; jira: JiraConnectorConfig; ingest?: ConnectorIngestConfig }
-	| {
-			type: "salesforce";
-			name: string;
-			salesforce: SalesforceConnectorConfig;
-			ingest?: ConnectorIngestConfig;
-	  };
+	| PostgresConnectorConfigFull
+	| MySQLConnectorConfigFull
+	| BigQueryConnectorConfigFull
+	| JiraConnectorConfigFull
+	| SalesforceConnectorConfigFull
+	| (ConnectorConfigBase & Record<string, unknown>);
