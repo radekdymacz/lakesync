@@ -46,13 +46,14 @@ function buildPollerRegistry(map: Map<string, PollerFactory>): PollerRegistry {
 // Global mutable registry (backwards compatibility)
 // ---------------------------------------------------------------------------
 
-/** Registry of poller factory functions keyed by connector type. */
+/** @deprecated Global mutable registry — prefer explicit {@link PollerRegistry}. */
 const pollerFactories = new Map<string, PollerFactory>();
 
 /**
  * Register a poller factory for a connector type.
- * Connector packages call this at module load time so that
- * `createPoller()` can instantiate the correct poller.
+ *
+ * @deprecated Use {@link createPollerRegistry} and pass the registry explicitly
+ * to {@link createPoller} instead. Global registration couples via side effects.
  */
 export function registerPollerFactory(type: string, factory: PollerFactory): void {
 	pollerFactories.set(type, factory);

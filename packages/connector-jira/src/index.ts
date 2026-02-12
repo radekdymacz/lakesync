@@ -1,4 +1,10 @@
-import { registerOutputSchemas, registerPollerFactory } from "@lakesync/core";
+import {
+	type BaseSourcePoller,
+	type ConnectorConfig,
+	type PushTarget,
+	registerOutputSchemas,
+	registerPollerFactory,
+} from "@lakesync/core";
 import { JiraSourcePoller } from "./poller";
 import { JIRA_TABLE_SCHEMAS } from "./schemas";
 import type { JiraIngestConfig } from "./types";
@@ -20,11 +26,13 @@ export type {
 	JiraSearchResponse,
 } from "./types";
 
-// Auto-register output schemas so listConnectorDescriptors() includes table info.
-registerOutputSchemas("jira", JIRA_TABLE_SCHEMAS);
-
-// Auto-register poller factory so createPoller("jira", ...) works.
-registerPollerFactory("jira", (config, gateway) => {
+/**
+ * Poller factory for Jira connectors.
+ *
+ * Use with an explicit {@link import("@lakesync/core").PollerRegistry} instead
+ * of the deprecated global {@link registerPollerFactory}.
+ */
+export function createJiraPoller(config: ConnectorConfig, gateway: PushTarget): BaseSourcePoller {
 	if (config.type !== "jira") {
 		throw new Error(`Expected connector type "jira", got "${config.type}"`);
 	}
@@ -36,4 +44,10 @@ registerPollerFactory("jira", (config, gateway) => {
 			}
 		: undefined;
 	return new JiraSourcePoller(config.jira, ingest, config.name, gateway);
-});
+}
+
+// Auto-register output schemas so listConnectorDescriptors() includes table info.
+registerOutputSchemas("jira", JIRA_TABLE_SCHEMAS);
+
+/** @deprecated Global auto-registration — prefer explicit {@link createJiraPoller} with a PollerRegistry. */
+registerPollerFactory("jira", createJiraPoller);

@@ -1,5 +1,28 @@
 import type { DatabaseAdapter } from "@lakesync/adapter";
 import type { HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
+import { type Result, Ok, Err } from "@lakesync/core";
+
+/** Consistency mode for shared buffer writes. */
+export type ConsistencyMode = "eventual" | "strong";
+
+/** Configuration for SharedBuffer. */
+export interface SharedBufferConfig {
+	/**
+	 * Controls how shared adapter write failures are handled.
+	 *
+	 * - `"eventual"` (default): Shared writes are best-effort. Failures are
+	 *   logged but do not fail the push. Local buffer remains authoritative.
+	 * - `"strong"`: Shared writes must succeed. Failures are returned as errors,
+	 *   allowing the caller to decide whether to fail the push.
+	 */
+	consistencyMode?: ConsistencyMode;
+}
+
+/** Error returned by SharedBuffer in strong consistency mode. */
+export interface SharedBufferError {
+	code: "SHARED_WRITE_FAILED";
+	message: string;
+}
 
 /**
  * Write-through buffer that pushes to both the in-memory gateway buffer
@@ -9,20 +32,44 @@ import type { HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
  * deduplicating by deltaId.
  */
 export class SharedBuffer {
-	constructor(private readonly sharedAdapter: DatabaseAdapter) {}
+	private readonly consistencyMode: ConsistencyMode;
+
+	constructor(
+		private readonly sharedAdapter: DatabaseAdapter,
+		config?: SharedBufferConfig,
+	) {
+		this.consistencyMode = config?.consistencyMode ?? "eventual";
+	}
 
 	/**
 	 * Write-through push: write to shared adapter for cross-instance visibility.
 	 *
-	 * Gateway buffer handles fast reads; shared adapter handles
-	 * cross-instance visibility and durability.
+	 * In "eventual" mode (default), failures are logged but do not fail the push.
+	 * In "strong" mode, failures are returned as errors.
 	 */
-	async writeThroughPush(deltas: RowDelta[]): Promise<void> {
-		// Best-effort write to shared adapter (don't fail the push if this fails)
+	async writeThroughPush(deltas: RowDelta[]): Promise<Result<void, SharedBufferError>> {
 		try {
-			await this.sharedAdapter.insertDeltas(deltas);
-		} catch {
-			// Shared adapter write failed — local buffer is still authoritative
+			const result = await this.sharedAdapter.insertDeltas(deltas);
+			if (!result.ok) {
+				if (this.consistencyMode === "strong") {
+					return Err({ code: "SHARED_WRITE_FAILED" as const, message: result.error.message });
+				}
+				console.warn(
+					`[lakesync] Shared buffer write failed (eventual mode): ${result.error.message}`,
+				);
+			}
+			return Ok(undefined);
+		} catch (error: unknown) {
+			if (this.consistencyMode === "strong") {
+				return Err({
+					code: "SHARED_WRITE_FAILED" as const,
+					message: error instanceof Error ? error.message : String(error),
+				});
+			}
+			console.warn(
+				`[lakesync] Shared buffer write error (eventual mode): ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return Ok(undefined);
 		}
 	}
 

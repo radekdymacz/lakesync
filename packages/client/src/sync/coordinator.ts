@@ -17,6 +17,7 @@ import type { SyncQueue } from "../queue/types";
 import { ActionProcessor } from "./action-processor";
 import { applyRemoteDeltas } from "./applier";
 import { AutoSyncScheduler } from "./auto-sync";
+import { PullFirstStrategy, type SyncContext, type SyncStrategy } from "./strategy";
 import { SyncTracker } from "./tracker";
 import type { SyncTransport } from "./transport";
 
@@ -67,6 +68,8 @@ export interface SyncCoordinatorConfig {
 	actionQueue?: ActionQueue;
 	/** Maximum retries for actions before dead-lettering. Defaults to 5. */
 	maxActionRetries?: number;
+	/** Sync strategy. Defaults to PullFirstStrategy. */
+	strategy?: SyncStrategy;
 }
 
 /** Auto-sync interval in milliseconds (every 10 seconds) */
@@ -97,6 +100,7 @@ export class SyncCoordinator {
 	private lastSyncedHlc = HLC.encode(0, 0);
 	private _lastSyncTime: Date | null = null;
 	private syncing = false;
+	private readonly strategy: SyncStrategy;
 	private readonly autoSyncScheduler: AutoSyncScheduler;
 	private readonly actionProcessor: ActionProcessor | null;
 	private listeners: { [K in keyof SyncEvents]: Array<SyncEvents[K]> } = {
@@ -115,6 +119,7 @@ export class SyncCoordinator {
 		this._clientId = config?.clientId ?? `client-${crypto.randomUUID()}`;
 		this.maxRetries = config?.maxRetries ?? 10;
 		this.syncMode = config?.syncMode ?? "full";
+		this.strategy = config?.strategy ?? new PullFirstStrategy();
 		this.tracker = new SyncTracker(db, this.queue, this.hlc, this._clientId);
 
 		// Compute auto-sync interval
@@ -327,23 +332,25 @@ export class SyncCoordinator {
 		this._lastSyncTime = new Date();
 	}
 
+	/** Build a {@link SyncContext} exposing sync operations for the current cycle. */
+	private createSyncContext(): SyncContext {
+		return {
+			isFirstSync: this.lastSyncedHlc === HLC.encode(0, 0),
+			syncMode: this.syncMode,
+			initialSync: () => this.initialSync(),
+			pull: () => this.pullFromGateway(),
+			push: () => this.pushToGateway(),
+			processActions: () => this.processActionQueue(),
+		};
+	}
+
 	/** Perform a single sync cycle (push + pull + actions, depending on syncMode). */
 	async syncOnce(): Promise<void> {
 		if (this.syncing) return;
 		this.syncing = true;
 		this.emit("onSyncStart");
 		try {
-			if (this.syncMode !== "pushOnly") {
-				if (this.lastSyncedHlc === HLC.encode(0, 0)) {
-					await this.initialSync();
-				}
-				await this.pullFromGateway();
-			}
-			if (this.syncMode !== "pullOnly") {
-				await this.pushToGateway();
-			}
-			// Process pending actions after push
-			await this.processActionQueue();
+			await this.strategy.execute(this.createSyncContext());
 			this.emit("onSyncComplete");
 		} catch (err) {
 			this.emit("onError", err instanceof Error ? err : new Error(String(err)));

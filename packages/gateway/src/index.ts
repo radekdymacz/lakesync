@@ -7,6 +7,12 @@ export type {
 } from "@lakesync/core";
 export { type IngestTarget, isIngestTarget } from "@lakesync/core";
 export { type ActionCacheConfig, ActionDispatcher } from "./action-dispatcher";
+export {
+	type CachedActionResult,
+	type IdempotencyCache,
+	type IdempotencyCacheConfig,
+	MemoryIdempotencyCache,
+} from "./idempotency-cache";
 export { DeltaBuffer } from "./buffer";
 export { type ConfigStore, MemoryConfigStore } from "./config-store";
 export {
@@ -22,6 +28,7 @@ export {
 	commitToCatalogue,
 	type FlushConfig,
 	type FlushDeps,
+	type FlushStrategy,
 	flushEntries,
 	hlcRange,
 } from "./flush";

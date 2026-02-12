@@ -27,7 +27,7 @@ import { SourcePoller } from "./ingest/poller";
 import type { IngestSourceConfig } from "./ingest/types";
 import { type DeltaPersistence, MemoryPersistence, SqlitePersistence } from "./persistence";
 import { matchRoute } from "./router";
-import { SharedBuffer } from "./shared-buffer";
+import { SharedBuffer, type SharedBufferConfig } from "./shared-buffer";
 import { WebSocketManager } from "./ws-manager";
 
 // ---------------------------------------------------------------------------
@@ -64,6 +64,8 @@ export interface GatewayServerConfig {
 		lock: DistributedLock;
 		/** Shared database adapter for cross-instance visibility. */
 		sharedAdapter: DatabaseAdapter;
+		/** Shared buffer configuration (consistency mode, etc.). */
+		sharedBufferConfig?: SharedBufferConfig;
 	};
 }
 
@@ -184,7 +186,9 @@ export class GatewayServer {
 				? new SqlitePersistence(config.sqlitePath ?? "./lakesync-buffer.sqlite")
 				: new MemoryPersistence();
 
-		this.sharedBuffer = config.cluster ? new SharedBuffer(config.cluster.sharedAdapter) : null;
+		this.sharedBuffer = config.cluster
+			? new SharedBuffer(config.cluster.sharedAdapter, config.cluster.sharedBufferConfig)
+			: null;
 
 		this.connectors = new ConnectorManager(this.configStore, this.gateway);
 	}
@@ -408,7 +412,11 @@ export class GatewayServer {
 		if (result.status === 200 && this.sharedBuffer) {
 			const pushResult = result.body as { deltas: RowDelta[]; serverHlc: HLCTimestamp };
 			if (pushResult.deltas.length > 0) {
-				await this.sharedBuffer.writeThroughPush(pushResult.deltas);
+				const writeResult = await this.sharedBuffer.writeThroughPush(pushResult.deltas);
+				if (!writeResult.ok) {
+					sendError(res, writeResult.error.message, 502, corsH);
+					return;
+				}
 			}
 		}
 

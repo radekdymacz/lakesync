@@ -18,5 +18,10 @@ export {
 } from "./persistence";
 export { matchRoute, type RouteMatch } from "./router";
 export { GatewayServer, type GatewayServerConfig } from "./server";
-export { SharedBuffer } from "./shared-buffer";
+export {
+	type ConsistencyMode,
+	SharedBuffer,
+	type SharedBufferConfig,
+	type SharedBufferError,
+} from "./shared-buffer";
 export { WebSocketManager } from "./ws-manager";

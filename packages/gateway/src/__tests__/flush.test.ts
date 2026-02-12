@@ -660,4 +660,90 @@ describe("flushEntries — materialisation", () => {
 		expect(warnSpy).toHaveBeenCalled();
 		warnSpy.mockRestore();
 	});
+
+	it("invokes onMaterialisationFailure callback when materialise fails", async () => {
+		const dbAdapter = {
+			...createMockDbAdapter(),
+			materialise: async () => {
+				return Err({ code: "ADAPTER_ERROR", message: "mat failed" } as AdapterError);
+			},
+		};
+
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const onFailure = vi.fn();
+		const schemas: TableSchema[] = [
+			{ table: "todos", columns: [{ name: "title", type: "string" }] },
+		];
+
+		const deps: FlushDeps = {
+			adapter: dbAdapter,
+			config: { gatewayId: "gw-mat-cb", onMaterialisationFailure: onFailure },
+			restoreEntries: vi.fn(),
+			schemas,
+		};
+		const entries = [makeDelta({ hlc: hlcLow, table: "todos" })];
+
+		const result = await flushEntries(entries, 0, deps);
+		expect(result.ok).toBe(true);
+		expect(onFailure).toHaveBeenCalledTimes(1);
+		expect(onFailure).toHaveBeenCalledWith("todos", 1, expect.any(Error));
+		expect(onFailure.mock.calls[0]![2].message).toBe("mat failed");
+		warnSpy.mockRestore();
+	});
+
+	it("does NOT invoke onMaterialisationFailure callback when materialise succeeds", async () => {
+		const dbAdapter = {
+			...createMockDbAdapter(),
+			materialise: async () => {
+				return Ok(undefined);
+			},
+		};
+
+		const onFailure = vi.fn();
+		const schemas: TableSchema[] = [
+			{ table: "todos", columns: [{ name: "title", type: "string" }] },
+		];
+
+		const deps: FlushDeps = {
+			adapter: dbAdapter,
+			config: { gatewayId: "gw-mat-ok", onMaterialisationFailure: onFailure },
+			restoreEntries: vi.fn(),
+			schemas,
+		};
+		const entries = [makeDelta({ hlc: hlcLow })];
+
+		const result = await flushEntries(entries, 0, deps);
+		expect(result.ok).toBe(true);
+		expect(onFailure).not.toHaveBeenCalled();
+	});
+
+	it("invokes onMaterialisationFailure callback when materialise throws", async () => {
+		const dbAdapter = {
+			...createMockDbAdapter(),
+			materialise: async () => {
+				throw new Error("explosion");
+			},
+		};
+
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const onFailure = vi.fn();
+		const schemas: TableSchema[] = [
+			{ table: "todos", columns: [{ name: "title", type: "string" }] },
+		];
+
+		const deps: FlushDeps = {
+			adapter: dbAdapter,
+			config: { gatewayId: "gw-mat-throw-cb", onMaterialisationFailure: onFailure },
+			restoreEntries: vi.fn(),
+			schemas,
+		};
+		const entries = [makeDelta({ hlc: hlcLow, table: "todos" })];
+
+		const result = await flushEntries(entries, 0, deps);
+		expect(result.ok).toBe(true);
+		expect(onFailure).toHaveBeenCalledTimes(1);
+		expect(onFailure).toHaveBeenCalledWith("todos", 1, expect.any(Error));
+		expect(onFailure.mock.calls[0]![2].message).toBe("explosion");
+		warnSpy.mockRestore();
+	});
 });

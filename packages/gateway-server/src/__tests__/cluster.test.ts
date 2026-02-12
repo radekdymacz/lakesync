@@ -104,20 +104,22 @@ describe("SharedBuffer", () => {
 			const buffer = new SharedBuffer(adapter);
 			const deltas = [makeDelta(), makeDelta()];
 
-			await buffer.writeThroughPush(deltas);
+			const result = await buffer.writeThroughPush(deltas);
 
+			expect(result.ok).toBe(true);
 			expect(adapter.insertDeltas).toHaveBeenCalledOnce();
 			expect(adapter.insertDeltas).toHaveBeenCalledWith(deltas);
 		});
 
-		it("does not throw when adapter fails", async () => {
+		it("does not throw when adapter fails (eventual mode)", async () => {
 			const adapter = createMockAdapter({
 				insertDeltas: vi.fn().mockRejectedValue(new Error("db down")),
 			});
 			const buffer = new SharedBuffer(adapter);
 
-			// Should not throw
-			await buffer.writeThroughPush([makeDelta()]);
+			const result = await buffer.writeThroughPush([makeDelta()]);
+
+			expect(result.ok).toBe(true);
 		});
 	});
 
