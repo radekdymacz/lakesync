@@ -22,6 +22,7 @@ export default defineConfig({
 	sourcemap: true,
 	clean: true,
 	external: [
+		/^node:/,
 		"sql.js",
 		"idb",
 		"@aws-sdk/client-s3",
@@ -34,5 +35,6 @@ export default defineConfig({
 		"@google-cloud/bigquery",
 		"better-sqlite3",
 		"react",
+		"ws",
 	],
 });
