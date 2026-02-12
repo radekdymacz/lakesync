@@ -1,16 +1,16 @@
 ---
 title: Introduction
-description: LakeSync — sync any data source to a local working set.
+description: LakeSync — declare what data goes where. The engine handles the rest.
 ---
 
-LakeSync is an open-source TypeScript sync engine. Pluggable adapters connect to any data source. Declarative sync rules define what data flows where. Consumers get a local SQLite working set with real-time updates, offline support, and column-level conflict resolution.
+LakeSync is an open-source TypeScript sync engine. Pluggable adapters connect any readable or writable system — Postgres, BigQuery, S3/Iceberg, Jira, Salesforce, or local SQLite. Declarative sync rules define what data flows between them. Every adapter is both a source and a destination. Local SQLite is one consumer among many — data can also materialise into Postgres, MySQL, or BigQuery destination tables.
 
 ## How It Works
 
 1. **Adapters** connect to data sources — Postgres, BigQuery, S3/R2, Jira, Salesforce, or anything you implement the interface for
 2. **Sync rules** define what data flows to each consumer — bucket-based filtering with `eq`/`in` operators and JWT claim references
 3. **The gateway** evaluates rules and routes data between adapters, with real-time WebSocket broadcast to connected clients
-4. **Local SQLite** gives each consumer a queryable working set with zero-latency reads and offline support
+4. **Destinations** receive data as queryable tables — local SQLite for offline-capable apps, or Postgres/MySQL/BigQuery via the materialise protocol
 
 ## Adapters
 
@@ -36,7 +36,7 @@ Source connectors poll external APIs on an interval and push changes into the sy
 ## Key Features
 
 - **Pluggable adapters** — `DatabaseAdapter` for SQL-like sources, `LakeAdapter` for object storage. Both are bidirectional. Cross-backend flows via sync rules.
-- **Materialise protocol** — Adapters that implement `Materialisable` can materialise flushed deltas into queryable destination tables with a hybrid column model (synced columns + extensible `props JSONB`). Supports composite primary keys, soft delete (default), and external ID deduplication.
+- **Materialise protocol** — All three database adapters (Postgres, MySQL, BigQuery) implement `Materialisable`, materialising flushed deltas into queryable destination tables via a generic `SqlDialect` pattern. Hybrid column model (synced columns + extensible `props JSONB`). Supports composite primary keys, soft delete (default), and external ID deduplication. Adding a new destination = 4 SQL dialect methods.
 - **Source polling** — `BaseSourcePoller` provides lifecycle management, chunked push, and memory-managed ingestion with automatic backpressure and flush. Connectors extend it to poll any external API.
 - **Adapter-sourced pull** — Pull data from named source adapters (BigQuery, Postgres, etc.) directly into local SQLite. The gateway queries the adapter and applies sync rules before returning filtered deltas.
 - **Sync rules DSL** — Declarative bucket-based filtering with `eq`/`in`/`neq`/`gt`/`lt`/`gte`/`lte` operators and `jwt:` claim references. Pure function evaluation via `filterDeltas()`.

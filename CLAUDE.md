@@ -1,11 +1,11 @@
 # LakeSync
 
 ## Vision
-**Sync any data source to a local working set.** Your app or agent declares what it needs. The engine handles the rest.
+**Declare what data goes where. The engine handles the rest.**
 
-Any data source can be an adapter — Postgres, BigQuery, Iceberg, CloudWatch, Stripe, anything you can read from. Consumers (web apps, AI agents, dashboards) get a local SQLite copy of exactly the slice they need via declarative sync rules. The sync rules DSL is the product — adapters are plumbing.
+LakeSync is a declarative data sync engine. Adapters connect any readable or writable system — Postgres, BigQuery, Iceberg, CloudWatch, Stripe, local SQLite. Sync rules control what data flows between them. Every adapter is both a source and a destination; local SQLite (via the client SDK) is one destination among many, not the whole product.
 
-Current adapters: S3/R2 (Iceberg), Postgres, MySQL, BigQuery. The adapter interface is the extension point for any data source.
+Current adapters: S3/R2 (Iceberg), Postgres, MySQL, BigQuery. The adapter interface is the extension point for any data source or destination.
 
 ## Internal Context (not public)
 LakeSync is the data backbone for:
@@ -14,7 +14,7 @@ LakeSync is the data backbone for:
 
 Real use cases driving development:
 - Agents analysing CloudWatch logs — sync a filtered subset locally, reason over it
-- Financial data in BigQuery — agent or dashboard gets exactly the slice it needs
+- Financial data in BigQuery — agent or dashboard gets exactly the slice it needs, or materialises results back into Postgres
 - Offline web app — CompanyOS works on a plane, catches up when back
 - Cross-backend flows — Iceberg → BigQuery, Postgres → Iceberg, any source → any destination
 
@@ -39,7 +39,7 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - `migrateAdapter()`: copies data between any two adapters
 - `Materialisable` interface: opt-in capability for adapters that can materialise deltas into queryable destination tables
 - `isMaterialisable()` type guard: duck-typed check for materialisation support
-- PostgresAdapter implements `Materialisable` — creates destination tables with synced columns + `props JSONB` + `synced_at`
+- All three database adapters (PostgresAdapter, MySQLAdapter, BigQueryAdapter) implement `Materialisable` — creates destination tables with synced columns + `props JSONB` + `synced_at` via the generic `SqlDialect` + `executeMaterialise()` pattern
 - Materialisation is auto-called after flush (non-fatal — failures are logged but never fail the flush)
 - Gateway takes an optional adapter — flush target is fully decoupled from sync logic
 - Gateway supports `sourceAdapters` — named DatabaseAdapters for adapter-sourced pull
@@ -80,9 +80,14 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 
 ### Materialise Protocol
 - `Materialisable` interface and `isMaterialisable()` type guard are defined in `@lakesync/core` (`packages/core/src/adapter-types.ts`)
-- Implementation helpers (`groupDeltasByTable`, `buildSchemaIndex`, `executeMaterialise`) remain in `@lakesync/adapter`
+- Generic algorithm: `executeMaterialise(executor, dialect, deltas, schemas)` in `@lakesync/adapter` — dialect-agnostic, works with any SQL destination
+- `SqlDialect` interface: `createDestinationTable`, `queryDeltaHistory`, `buildUpsert`, `buildDelete` — each database adapter provides its own dialect
+- `QueryExecutor` interface: minimal `query()` + `queryRows()` — abstracts any SQL connection
+- All three database adapters implement `Materialisable`: PostgresAdapter (`PostgresSqlDialect`), MySQLAdapter (`MySqlDialect`), BigQueryAdapter (`BigQuerySqlDialect`)
 - Destination tables follow the hybrid column model: synced columns + `props JSONB DEFAULT '{}'` + `synced_at`
-- PostgresAdapter implements `Materialisable` — upserts latest row state, deletes tombstoned rows
+- Adding materialisation to a new database = implement 4 `SqlDialect` methods + a `QueryExecutor`
+- FanOutAdapter delegates materialisation to primary (sync) + secondaries (async best-effort)
+- LifecycleAdapter delegates materialisation to the hot tier only
 - Auto-called after successful delta flush (non-fatal — failures are warned, never fail the flush)
 
 ### Client SDK (packages/client)

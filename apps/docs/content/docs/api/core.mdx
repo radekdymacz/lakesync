@@ -462,7 +462,7 @@ interface Materialisable {
 function isMaterialisable(adapter: unknown): adapter is Materialisable;
 ```
 
-Opt-in capability for adapters that can materialise deltas into queryable destination tables. See [Materialise Protocol](/docs/architecture#materialise-protocol) for details.
+Opt-in capability for adapters that can materialise deltas into queryable destination tables. All three database adapters (PostgresAdapter, MySQLAdapter, BigQueryAdapter) implement this interface via the generic `SqlDialect` + `executeMaterialise()` pattern. See [Materialise Protocol](/docs/architecture#materialise-protocol) for details.
 
 ## Source Polling
 

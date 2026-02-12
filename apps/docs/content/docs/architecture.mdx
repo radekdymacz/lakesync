@@ -5,7 +5,7 @@ description: System architecture, key patterns, and design decisions.
 
 ## Overview
 
-LakeSync syncs any data source to a local working set. The core loop follows a **push/pull** model where consumers (web apps, AI agents) push local changes and pull filtered subsets from remote sources via the gateway.
+LakeSync is a declarative data sync engine. Adapters connect any readable or writable system — the core loop follows a **push/pull** model where consumers push local changes and pull filtered subsets via the gateway. Data flows between any source and any destination: local SQLite, Postgres, MySQL, BigQuery, S3/Iceberg. Every adapter is both a source and a destination.
 
 ```mermaid
 sequenceDiagram
@@ -269,7 +269,7 @@ See [Source Polling Ingest](/docs/source-polling) for database polling setup and
 
 ## Materialise Protocol
 
-After flushing deltas to a storage adapter, the gateway can optionally **materialise** them into queryable destination tables. Adapters that implement the `Materialisable` interface produce a denormalised, up-to-date table from the delta log — making the data directly queryable via SQL without replaying deltas.
+After flushing deltas to a storage adapter, the gateway can optionally **materialise** them into queryable destination tables. All three database adapters (Postgres, MySQL, BigQuery) implement the `Materialisable` interface, producing denormalised, up-to-date tables from the delta log — making the data directly queryable via SQL without replaying deltas. The materialisation algorithm is generic: a shared `executeMaterialise()` function works with any SQL database via the pluggable `SqlDialect` interface.
 
 Destination tables follow a **hybrid column model**:
 
@@ -293,6 +293,39 @@ import { isMaterialisable } from "@lakesync/core";
 
 if (isMaterialisable(adapter)) {
   await adapter.materialise(deltas, schemas);
+}
+```
+
+### SqlDialect Pattern
+
+Materialisation is dialect-agnostic. The `SqlDialect` interface abstracts SQL differences (type mapping, parameter syntax, upsert syntax) so the core algorithm works identically across all databases:
+
+| Adapter | Dialect | Upsert Strategy | Parameter Style |
+|---------|---------|----------------|-----------------|
+| **Postgres** | `PostgresSqlDialect` | `ON CONFLICT DO UPDATE` | `$N` positional |
+| **MySQL** | `MySqlDialect` | `ON DUPLICATE KEY UPDATE` | `?` positional |
+| **BigQuery** | `BigQuerySqlDialect` | `MERGE` statement | `@name` named |
+
+Adding materialisation to a new database adapter requires implementing four methods on `SqlDialect`:
+
+```ts
+interface SqlDialect {
+  createDestinationTable(dest, schema, pk, softDelete): { sql; params };
+  queryDeltaHistory(sourceTable, rowIds): { sql; params };
+  buildUpsert(dest, schema, conflictCols, softDelete, upserts): { sql; params };
+  buildDelete(dest, deleteIds, softDelete): { sql; params };
+}
+```
+
+The adapter also needs a `QueryExecutor` (minimal `query()` + `queryRows()` interface) and the `Materialisable.materialise()` method that delegates to `executeMaterialise()`:
+
+```ts
+class MyAdapter implements DatabaseAdapter, Materialisable {
+  private readonly dialect = new MySqlDialect();
+
+  async materialise(deltas, schemas) {
+    return executeMaterialise(this.executor, this.dialect, deltas, schemas);
+  }
 }
 ```
 
