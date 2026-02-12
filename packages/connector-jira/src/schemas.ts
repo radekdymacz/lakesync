@@ -20,7 +20,11 @@ const JIRA_ISSUES_SCHEMA: TableSchema = {
 		{ name: "reporter_name", type: "string" },
 		{ name: "reporter_email", type: "string" },
 		{ name: "labels", type: "string" },
-		{ name: "project_key", type: "string" },
+		{
+			name: "project_key",
+			type: "string",
+			references: { table: "jira_projects", column: "key", cardinality: "many-to-one" },
+		},
 		{ name: "project_name", type: "string" },
 		{ name: "created", type: "string" },
 		{ name: "updated", type: "string" },
@@ -32,7 +36,11 @@ const JIRA_COMMENTS_SCHEMA: TableSchema = {
 	table: "jira_comments",
 	columns: [
 		{ name: "jira_id", type: "string" },
-		{ name: "issue_key", type: "string" },
+		{
+			name: "issue_key",
+			type: "string",
+			references: { table: "jira_issues", column: "key", cardinality: "many-to-one" },
+		},
 		{ name: "body", type: "string" },
 		{ name: "author_name", type: "string" },
 		{ name: "author_email", type: "string" },

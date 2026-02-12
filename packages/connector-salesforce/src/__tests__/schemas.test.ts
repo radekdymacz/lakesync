@@ -133,4 +133,45 @@ describe("SALESFORCE_TABLE_SCHEMAS", () => {
 		const rowKeys = Object.keys(mapLead(fullLead).row);
 		expect(schemaColumns).toEqual(rowKeys);
 	});
+
+	it("sf_contacts.account_id references sf_accounts", () => {
+		const col = schemaFor("sf_contacts").columns.find((c) => c.name === "account_id")!;
+		expect(col.references).toEqual({
+			table: "sf_accounts",
+			column: "sf_id",
+			cardinality: "many-to-one",
+		});
+	});
+
+	it("sf_opportunities.account_id references sf_accounts", () => {
+		const col = schemaFor("sf_opportunities").columns.find((c) => c.name === "account_id")!;
+		expect(col.references).toEqual({
+			table: "sf_accounts",
+			column: "sf_id",
+			cardinality: "many-to-one",
+		});
+	});
+
+	it("sf_leads converted columns reference correct tables", () => {
+		const leads = schemaFor("sf_leads");
+		const accountRef = leads.columns.find((c) => c.name === "converted_account_id")!;
+		const contactRef = leads.columns.find((c) => c.name === "converted_contact_id")!;
+		const opptyRef = leads.columns.find((c) => c.name === "converted_opportunity_id")!;
+
+		expect(accountRef.references).toEqual({
+			table: "sf_accounts",
+			column: "sf_id",
+			cardinality: "many-to-one",
+		});
+		expect(contactRef.references).toEqual({
+			table: "sf_contacts",
+			column: "sf_id",
+			cardinality: "many-to-one",
+		});
+		expect(opptyRef.references).toEqual({
+			table: "sf_opportunities",
+			column: "sf_id",
+			cardinality: "many-to-one",
+		});
+	});
 });

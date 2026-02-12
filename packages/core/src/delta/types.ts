@@ -35,6 +35,16 @@ export const COLUMN_TYPES = ["string", "number", "boolean", "json", "null"] as c
 /** A valid column type. */
 export type ColumnType = (typeof COLUMN_TYPES)[number];
 
+/** Foreign key reference from a column to another table. */
+export interface ColumnReference {
+	/** Target table name (e.g. 'jira_issues'). */
+	table: string;
+	/** Target column name (e.g. 'key'). */
+	column: string;
+	/** Cardinality from this column's perspective. */
+	cardinality: "many-to-one" | "one-to-many";
+}
+
 /** Minimal schema for Phase 1. Column allow-list + type hints. */
 export interface TableSchema {
 	/** Destination table name (what gets created in the database). */
@@ -44,6 +54,8 @@ export interface TableSchema {
 	columns: Array<{
 		name: string;
 		type: ColumnType;
+		/** FK reference to another table. */
+		references?: ColumnReference;
 	}>;
 	/** Composite primary key columns. Defaults to `["row_id"]`. Each entry must be `"row_id"` or exist in `columns`. */
 	primaryKey?: string[];

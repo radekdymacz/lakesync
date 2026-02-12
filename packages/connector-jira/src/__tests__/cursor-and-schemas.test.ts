@@ -242,4 +242,24 @@ describe("JIRA_TABLE_SCHEMAS", () => {
 		}
 		expect(schema.columns).toHaveLength(mappingColumns.length);
 	});
+
+	it("jira_comments.issue_key references jira_issues", () => {
+		const schema = JIRA_TABLE_SCHEMAS.find((s) => s.table === "jira_comments")!;
+		const col = schema.columns.find((c) => c.name === "issue_key")!;
+		expect(col.references).toEqual({
+			table: "jira_issues",
+			column: "key",
+			cardinality: "many-to-one",
+		});
+	});
+
+	it("jira_issues.project_key references jira_projects", () => {
+		const schema = JIRA_TABLE_SCHEMAS.find((s) => s.table === "jira_issues")!;
+		const col = schema.columns.find((c) => c.name === "project_key")!;
+		expect(col.references).toEqual({
+			table: "jira_projects",
+			column: "key",
+			cardinality: "many-to-one",
+		});
+	});
 });
