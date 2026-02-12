@@ -35,6 +35,12 @@ export interface HttpTransportConfig {
 	gatewayId: string;
 	/** Bearer token for authentication */
 	token: string;
+	/**
+	 * Optional callback to retrieve a fresh token before each request.
+	 * When set, takes priority over the static `token` field.
+	 * On a 401 response, the callback is invoked again and the request retried once.
+	 */
+	getToken?: () => string | Promise<string>;
 	/** Optional custom fetch implementation (useful for testing) */
 	fetch?: typeof globalThis.fetch;
 }
@@ -49,34 +55,59 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 	private readonly baseUrl: string;
 	private readonly gatewayId: string;
 	private readonly token: string;
+	private readonly getToken: (() => string | Promise<string>) | undefined;
 	private readonly _fetch: typeof globalThis.fetch;
 
 	constructor(config: HttpTransportConfig) {
 		this.baseUrl = config.baseUrl.replace(/\/+$/, "");
 		this.gatewayId = config.gatewayId;
 		this.token = config.token;
+		this.getToken = config.getToken;
 		this._fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
+	}
+
+	/** Resolve the current bearer token, preferring getToken callback over static token. */
+	private async resolveToken(): Promise<string> {
+		if (this.getToken) {
+			return this.getToken();
+		}
+		return this.token;
 	}
 
 	/**
 	 * Push local deltas to the remote gateway.
 	 *
 	 * Sends a POST request with the push payload as BigInt-safe JSON.
+	 * On 401, if `getToken` is configured, refreshes the token and retries once.
 	 */
 	async push(
 		msg: SyncPush,
 	): Promise<Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>> {
 		const url = `${this.baseUrl}/sync/${this.gatewayId}/push`;
+		const body = JSON.stringify(msg, bigintReplacer);
 
 		try {
-			const response = await this._fetch(url, {
+			let token = await this.resolveToken();
+			let response = await this._fetch(url, {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
-					Authorization: `Bearer ${this.token}`,
+					Authorization: `Bearer ${token}`,
 				},
-				body: JSON.stringify(msg, bigintReplacer),
+				body,
 			});
+
+			if (response.status === 401 && this.getToken) {
+				token = await this.getToken();
+				response = await this._fetch(url, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${token}`,
+					},
+					body,
+				});
+			}
 
 			if (!response.ok) {
 				const text = await response.text().catch(() => "Unknown error");
@@ -99,6 +130,7 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 	 * Pull remote deltas from the gateway.
 	 *
 	 * Sends a GET request with query parameters for the pull cursor.
+	 * On 401, if `getToken` is configured, refreshes the token and retries once.
 	 */
 	async pull(msg: SyncPull): Promise<Result<SyncResponse, LakeSyncError>> {
 		const params = new URLSearchParams({
@@ -112,12 +144,23 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 		const url = `${this.baseUrl}/sync/${this.gatewayId}/pull?${params}`;
 
 		try {
-			const response = await this._fetch(url, {
+			let token = await this.resolveToken();
+			let response = await this._fetch(url, {
 				method: "GET",
 				headers: {
-					Authorization: `Bearer ${this.token}`,
+					Authorization: `Bearer ${token}`,
 				},
 			});
+
+			if (response.status === 401 && this.getToken) {
+				token = await this.getToken();
+				response = await this._fetch(url, {
+					method: "GET",
+					headers: {
+						Authorization: `Bearer ${token}`,
+					},
+				});
+			}
 
 			if (!response.ok) {
 				const text = await response.text().catch(() => "Unknown error");
@@ -140,15 +183,17 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 	 */
 	async executeAction(msg: ActionPush): Promise<Result<ActionResponse, LakeSyncError>> {
 		const url = `${this.baseUrl}/sync/${this.gatewayId}/action`;
+		const body = JSON.stringify(msg, bigintReplacer);
 
 		try {
+			const token = await this.resolveToken();
 			const response = await this._fetch(url, {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
-					Authorization: `Bearer ${this.token}`,
+					Authorization: `Bearer ${token}`,
 				},
-				body: JSON.stringify(msg, bigintReplacer),
+				body,
 			});
 
 			if (!response.ok) {
@@ -174,10 +219,11 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 		const url = `${this.baseUrl}/sync/${this.gatewayId}/actions`;
 
 		try {
+			const token = await this.resolveToken();
 			const response = await this._fetch(url, {
 				method: "GET",
 				headers: {
-					Authorization: `Bearer ${this.token}`,
+					Authorization: `Bearer ${token}`,
 				},
 			});
 
@@ -245,10 +291,11 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 		const url = `${this.baseUrl}/sync/${this.gatewayId}/checkpoint`;
 
 		try {
+			const token = await this.resolveToken();
 			const response = await this._fetch(url, {
 				method: "GET",
 				headers: {
-					Authorization: `Bearer ${this.token}`,
+					Authorization: `Bearer ${token}`,
 					Accept: "application/x-lakesync-checkpoint-stream",
 				},
 			});

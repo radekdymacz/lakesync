@@ -31,6 +31,11 @@ export interface WebSocketTransportConfig {
 	url: string;
 	/** Bearer token (passed as ?token= query param for browser compat). */
 	token: string;
+	/**
+	 * Optional callback to retrieve a fresh token on connect/reconnect.
+	 * When set, takes priority over the static `token` field.
+	 */
+	getToken?: () => string | Promise<string>;
 	/** Called when server broadcasts deltas. */
 	onBroadcast?: (deltas: RowDelta[], serverHlc: HLCTimestamp) => void;
 	/** Reconnect base delay in ms (default 1000). */
@@ -110,7 +115,7 @@ export class WebSocketTransport implements SyncTransport, RealtimeTransport, Che
 	connect(): void {
 		if (this.ws) return;
 		this.intentionalClose = false;
-		this.openWebSocket();
+		void this.openWebSocket();
 	}
 
 	/** Close the WebSocket connection and stop reconnecting. */
@@ -197,8 +202,9 @@ export class WebSocketTransport implements SyncTransport, RealtimeTransport, Che
 	// Internal
 	// -----------------------------------------------------------------------
 
-	private openWebSocket(): void {
-		const url = `${this.config.url}?token=${encodeURIComponent(this.config.token)}`;
+	private async openWebSocket(): Promise<void> {
+		const token = this.config.getToken ? await this.config.getToken() : this.config.token;
+		const url = `${this.config.url}?token=${encodeURIComponent(token)}`;
 		this.ws = new WebSocket(url);
 		this.ws.binaryType = "arraybuffer";
 
@@ -268,7 +274,7 @@ export class WebSocketTransport implements SyncTransport, RealtimeTransport, Che
 		this.reconnectAttempts++;
 		this.reconnectTimer = setTimeout(() => {
 			this.reconnectTimer = null;
-			this.openWebSocket();
+			void this.openWebSocket();
 		}, delay);
 	}
 

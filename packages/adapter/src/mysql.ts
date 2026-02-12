@@ -130,7 +130,12 @@ export class MySQLAdapter implements DatabaseAdapter, Materialisable {
 	private readonly dialect = new MySqlDialect();
 
 	constructor(config: DatabaseAdapterConfig) {
-		this.pool = mysql.createPool(config.connectionString);
+		this.pool = mysql.createPool({
+			uri: config.connectionString,
+			connectionLimit: config.poolMax ?? 10,
+			connectTimeout: config.connectionTimeoutMs ?? 30_000,
+			idleTimeout: config.idleTimeoutMs ?? 10_000,
+		});
 	}
 
 	private get executor(): QueryExecutor {

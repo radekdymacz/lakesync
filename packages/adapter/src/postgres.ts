@@ -139,6 +139,10 @@ export class PostgresAdapter implements DatabaseAdapter, Materialisable {
 	constructor(config: DatabaseAdapterConfig) {
 		const poolConfig: PoolConfig = {
 			connectionString: config.connectionString,
+			max: config.poolMax ?? 10,
+			idleTimeoutMillis: config.idleTimeoutMs ?? 10_000,
+			connectionTimeoutMillis: config.connectionTimeoutMs ?? 30_000,
+			statement_timeout: config.statementTimeoutMs ?? 30_000,
 		};
 		this.pool = new Pool(poolConfig);
 	}

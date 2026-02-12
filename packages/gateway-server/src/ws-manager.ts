@@ -19,10 +19,24 @@ import type { AuthClaims } from "./auth";
 import { verifyToken } from "./auth";
 import { extractBearerToken } from "./auth-middleware";
 
+/** Configuration for WebSocket connection and message rate limits. */
+export interface WebSocketLimitsConfig {
+	/** Maximum concurrent WebSocket connections (default: 1000). */
+	maxConnections?: number;
+	/** Maximum messages per second per client (default: 50). */
+	maxMessagesPerSecond?: number;
+}
+
 /** Metadata stored for each connected WebSocket client. */
 interface WsClientMeta {
 	clientId: string;
 	claims: Record<string, unknown>;
+}
+
+/** Per-client message rate tracking. */
+interface MessageRateEntry {
+	count: number;
+	windowStart: number;
 }
 
 /**
@@ -33,14 +47,34 @@ interface WsClientMeta {
 export class WebSocketManager {
 	private readonly wss: WebSocketServer;
 	private readonly clients = new Map<WsWebSocket, WsClientMeta>();
+	private readonly maxConnections: number;
+	private readonly maxMessagesPerSecond: number;
+	private readonly messageRates = new Map<WsWebSocket, MessageRateEntry>();
+	private rateResetTimer: ReturnType<typeof setInterval> | null = null;
 
 	constructor(
 		private readonly gateway: SyncGateway,
 		private readonly configStore: ConfigStore,
 		private readonly gatewayId: string,
 		private readonly jwtSecret: string | undefined,
+		limits?: WebSocketLimitsConfig,
 	) {
 		this.wss = new WebSocketServer({ noServer: true });
+		this.maxConnections = limits?.maxConnections ?? 1000;
+		this.maxMessagesPerSecond = limits?.maxMessagesPerSecond ?? 50;
+
+		// Reset message rate counters every second
+		this.rateResetTimer = setInterval(() => {
+			this.messageRates.clear();
+		}, 1000);
+		if (this.rateResetTimer.unref) {
+			this.rateResetTimer.unref();
+		}
+	}
+
+	/** The current number of connected clients. */
+	get connectionCount(): number {
+		return this.clients.size;
 	}
 
 	/** Attach upgrade listener to an HTTP server. */
@@ -60,6 +94,12 @@ export class WebSocketManager {
 
 	/** Close all connections and shut down the WebSocket server. */
 	close(): void {
+		if (this.rateResetTimer) {
+			clearInterval(this.rateResetTimer);
+			this.rateResetTimer = null;
+		}
+		this.messageRates.clear();
+
 		for (const ws of this.clients.keys()) {
 			try {
 				ws.close(1001, "Server shutting down");
@@ -80,6 +120,13 @@ export class WebSocketManager {
 		socket: import("node:stream").Duplex,
 		head: Buffer,
 	): Promise<void> {
+		// Reject if at connection limit
+		if (this.clients.size >= this.maxConnections) {
+			socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+			socket.destroy();
+			return;
+		}
+
 		const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
 		// Authenticate
@@ -120,17 +167,49 @@ export class WebSocketManager {
 			this.clients.set(ws, { clientId, claims });
 
 			ws.on("message", (data: Buffer) => {
+				// Per-client message rate limiting
+				if (!this.checkMessageRate(ws)) {
+					ws.close(1008, "Rate limit exceeded");
+					return;
+				}
 				void this.handleMessage(ws, data, clientId, claims);
 			});
 
 			ws.on("close", () => {
 				this.clients.delete(ws);
+				this.messageRates.delete(ws);
 			});
 
 			ws.on("error", () => {
 				this.clients.delete(ws);
+				this.messageRates.delete(ws);
 			});
 		});
+	}
+
+	// -----------------------------------------------------------------------
+	// Message rate limiting
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Check and increment the message rate for a client.
+	 * @returns `true` if the message is allowed, `false` if rate-limited.
+	 */
+	private checkMessageRate(ws: WsWebSocket): boolean {
+		const now = Date.now();
+		const entry = this.messageRates.get(ws);
+
+		if (!entry || now - entry.windowStart >= 1000) {
+			this.messageRates.set(ws, { count: 1, windowStart: now });
+			return true;
+		}
+
+		if (entry.count >= this.maxMessagesPerSecond) {
+			return false;
+		}
+
+		entry.count++;
+		return true;
 	}
 
 	// -----------------------------------------------------------------------

@@ -108,6 +108,7 @@ For a solo developer, the optimal execution order maximises parallelism where po
 | 12 | **8A** BigQuery adapter | PARALLEL with 8B + 8C, after 7 | — |
 | 12 | **8B** Fan-out adapter | PARALLEL with 8A + 8C, after 7 | — |
 | 12 | **8C** Data lifecycle | PARALLEL with 8A + 8B, after 7 | — |
+| 13 | **10** Production hardening | PARALLEL groups A–F, after 8 | — |
 
 ## All Tasks by Phase
 
@@ -372,6 +373,22 @@ The core `Gateway` class (`packages/gateway/`) is runtime-agnostic. This task ad
   - Background job moves data from hot to cold adapter when HLC age exceeds threshold
   - Example: last 30 days in Postgres, older data in Iceberg
 - **Task 8C.2** — Integration tests
+
+### Phase 9 — Simple Made Easy (done)
+
+- Rich Hickey review of codebase architecture. See [phase-9-simple-made-easy.md](./phase-9-simple-made-easy.md).
+
+### Phase 10 — Production Hardening
+
+See [phase-10-production-hardening.md](./phase-10-production-hardening.md) for the full plan.
+
+**ALL PARALLEL:**
+- **Group A** — Transport & client hardening (token refresh, offline detection)
+- **Group B** — Gateway server production readiness (graceful shutdown, health probes, request timeouts)
+- **Group C** — Adapter hardening (configurable pool options)
+- **Group D** — Rate limiting & WebSocket backpressure
+- **Group E** — Observability (structured logger, Prometheus metrics)
+- **Group F** — Connector cursor persistence
 
 ## New Packages Created
 

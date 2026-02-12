@@ -49,6 +49,14 @@ export interface LakeAdapter {
 export interface DatabaseAdapterConfig {
 	/** Connection string (e.g. postgres://user:pass@host/db) */
 	connectionString: string;
+	/** Maximum number of connections in the pool (default: 10). */
+	poolMax?: number;
+	/** Connection idle timeout in milliseconds (default: 10000). */
+	idleTimeoutMs?: number;
+	/** Connection acquisition timeout in milliseconds (default: 30000). */
+	connectionTimeoutMs?: number;
+	/** Statement timeout in milliseconds (default: 30000). */
+	statementTimeoutMs?: number;
 }
 
 /**

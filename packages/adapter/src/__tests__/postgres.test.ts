@@ -1,5 +1,6 @@
 import type { HLCTimestamp, TableSchema } from "@lakesync/core";
 import { AdapterError } from "@lakesync/core";
+import type { Pool } from "pg";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PostgresAdapter } from "../postgres";
 import { makeDelta } from "./test-helpers";
@@ -306,6 +307,34 @@ describe("PostgresAdapter", () => {
 		it("calls pool.end()", async () => {
 			await adapter.close();
 			expect(mockEnd).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe("pool configuration", () => {
+		it("applies default pool options when none specified", () => {
+			const adapter = new PostgresAdapter({
+				connectionString: "postgres://localhost/test",
+			});
+			const pool = adapter.pool as unknown as Pool;
+			expect(pool.options.max).toBe(10);
+			expect(pool.options.idleTimeoutMillis).toBe(10_000);
+			expect(pool.options.connectionTimeoutMillis).toBe(30_000);
+			expect(pool.options.statement_timeout).toBe(30_000);
+		});
+
+		it("maps custom pool options to pg PoolConfig", () => {
+			const adapter = new PostgresAdapter({
+				connectionString: "postgres://localhost/test",
+				poolMax: 25,
+				idleTimeoutMs: 60_000,
+				connectionTimeoutMs: 5_000,
+				statementTimeoutMs: 15_000,
+			});
+			const pool = adapter.pool as unknown as Pool;
+			expect(pool.options.max).toBe(25);
+			expect(pool.options.idleTimeoutMillis).toBe(60_000);
+			expect(pool.options.connectionTimeoutMillis).toBe(5_000);
+			expect(pool.options.statement_timeout).toBe(15_000);
 		});
 	});
 

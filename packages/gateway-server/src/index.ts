@@ -11,11 +11,20 @@ export {
 	type QueryFn,
 	SourcePoller,
 } from "./ingest";
+export { type LogEntry, Logger, type LogLevel } from "./logger";
+export {
+	Counter,
+	Gauge,
+	Histogram,
+	type Labels,
+	MetricsRegistry,
+} from "./metrics";
 export {
 	type DeltaPersistence,
 	MemoryPersistence,
 	SqlitePersistence,
 } from "./persistence";
+export { RateLimiter, type RateLimiterConfig } from "./rate-limiter";
 export { matchRoute, type RouteMatch } from "./router";
 export { GatewayServer, type GatewayServerConfig } from "./server";
 export {
@@ -24,4 +33,4 @@ export {
 	type SharedBufferConfig,
 	type SharedBufferError,
 } from "./shared-buffer";
-export { WebSocketManager } from "./ws-manager";
+export { type WebSocketLimitsConfig, WebSocketManager } from "./ws-manager";

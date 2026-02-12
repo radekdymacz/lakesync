@@ -60,6 +60,9 @@ export abstract class BaseSourcePoller {
 	private readonly scheduler: PollingScheduler;
 	private readonly pusher: ChunkedPusher;
 
+	/** Optional callback invoked after each poll with the current cursor state. */
+	public onCursorUpdate?: (state: Record<string, unknown>) => void;
+
 	constructor(config: {
 		name: string;
 		intervalMs: number;
@@ -87,7 +90,12 @@ export abstract class BaseSourcePoller {
 			pressure,
 		});
 
-		this.scheduler = new PollingScheduler(() => this.poll(), config.intervalMs);
+		this.scheduler = new PollingScheduler(async () => {
+			await this.poll();
+			if (this.onCursorUpdate) {
+				this.onCursorUpdate(this.getCursorState());
+			}
+		}, config.intervalMs);
 	}
 
 	/** Start the polling loop. */

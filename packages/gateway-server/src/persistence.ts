@@ -16,6 +16,10 @@ export interface DeltaPersistence {
 	clear(): void;
 	/** Release resources. */
 	close(): void;
+	/** Persist the cursor state for a connector. */
+	saveCursor(connectorName: string, cursor: string): void;
+	/** Load the persisted cursor state for a connector, or null if none exists. */
+	loadCursor(connectorName: string): string | null;
 }
 
 /**
@@ -24,6 +28,7 @@ export interface DeltaPersistence {
  */
 export class MemoryPersistence implements DeltaPersistence {
 	private buffer: RowDelta[] = [];
+	private cursors = new Map<string, string>();
 
 	appendBatch(deltas: RowDelta[]): void {
 		this.buffer.push(...deltas);
@@ -39,6 +44,15 @@ export class MemoryPersistence implements DeltaPersistence {
 
 	close(): void {
 		this.buffer = [];
+		this.cursors.clear();
+	}
+
+	saveCursor(connectorName: string, cursor: string): void {
+		this.cursors.set(connectorName, cursor);
+	}
+
+	loadCursor(connectorName: string): string | null {
+		return this.cursors.get(connectorName) ?? null;
 	}
 }
 
@@ -58,6 +72,9 @@ export class SqlitePersistence implements DeltaPersistence {
 		this.db.pragma("journal_mode = WAL");
 		this.db.exec(
 			"CREATE TABLE IF NOT EXISTS unflushed_deltas (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL)",
+		);
+		this.db.exec(
+			"CREATE TABLE IF NOT EXISTS connector_cursors (name TEXT PRIMARY KEY, cursor TEXT NOT NULL)",
 		);
 	}
 
@@ -80,6 +97,21 @@ export class SqlitePersistence implements DeltaPersistence {
 
 	clear(): void {
 		this.db.exec("DELETE FROM unflushed_deltas");
+	}
+
+	saveCursor(connectorName: string, cursor: string): void {
+		this.db
+			.prepare(
+				"INSERT INTO connector_cursors (name, cursor) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET cursor = excluded.cursor",
+			)
+			.run(connectorName, cursor);
+	}
+
+	loadCursor(connectorName: string): string | null {
+		const row = this.db
+			.prepare("SELECT cursor FROM connector_cursors WHERE name = ?")
+			.get(connectorName) as { cursor: string } | undefined;
+		return row?.cursor ?? null;
 	}
 
 	close(): void {

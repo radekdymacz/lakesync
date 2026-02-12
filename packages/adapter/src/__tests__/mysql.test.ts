@@ -1,5 +1,6 @@
 import type { HLCTimestamp, TableSchema } from "@lakesync/core";
 import { AdapterError } from "@lakesync/core";
+import mysql from "mysql2/promise";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MySQLAdapter } from "../mysql";
 import { makeDelta } from "./test-helpers";
@@ -329,6 +330,38 @@ describe("MySQLAdapter", () => {
 		it("calls pool.end()", async () => {
 			await adapter.close();
 			expect(mockEnd).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe("pool configuration", () => {
+		it("applies default pool options when none specified", () => {
+			const spy = vi.spyOn(mysql, "createPool");
+			new MySQLAdapter({
+				connectionString: "mysql://localhost/test",
+			});
+			expect(spy).toHaveBeenCalledTimes(1);
+			const opts = spy.mock.calls[0]![0] as Record<string, unknown>;
+			expect(opts.uri).toBe("mysql://localhost/test");
+			expect(opts.connectionLimit).toBe(10);
+			expect(opts.connectTimeout).toBe(30_000);
+			expect(opts.idleTimeout).toBe(10_000);
+			spy.mockRestore();
+		});
+
+		it("maps custom pool options to mysql2 pool config", () => {
+			const spy = vi.spyOn(mysql, "createPool");
+			new MySQLAdapter({
+				connectionString: "mysql://localhost/test",
+				poolMax: 25,
+				idleTimeoutMs: 60_000,
+				connectionTimeoutMs: 5_000,
+			});
+			expect(spy).toHaveBeenCalledTimes(1);
+			const opts = spy.mock.calls[0]![0] as Record<string, unknown>;
+			expect(opts.connectionLimit).toBe(25);
+			expect(opts.connectTimeout).toBe(5_000);
+			expect(opts.idleTimeout).toBe(60_000);
+			spy.mockRestore();
 		});
 	});
 

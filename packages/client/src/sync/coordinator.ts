@@ -100,6 +100,9 @@ export class SyncCoordinator {
 	private lastSyncedHlc = HLC.encode(0, 0);
 	private _lastSyncTime: Date | null = null;
 	private syncing = false;
+	private _online = true;
+	private onlineHandler: (() => void) | null = null;
+	private offlineHandler: (() => void) | null = null;
 	private readonly strategy: SyncStrategy;
 	private readonly autoSyncScheduler: AutoSyncScheduler;
 	private readonly actionProcessor: ActionProcessor | null;
@@ -184,6 +187,11 @@ export class SyncCoordinator {
 			lastSyncTime: this._lastSyncTime,
 			lastSyncedHlc: this.lastSyncedHlc,
 		};
+	}
+
+	/** Whether the client believes it is online. */
+	get isOnline(): boolean {
+		return this._online;
 	}
 
 	/** Push pending deltas to the gateway via the transport */
@@ -307,10 +315,13 @@ export class SyncCoordinator {
 	/**
 	 * Start auto-sync: periodic interval + visibility change handler.
 	 * Synchronises (push + pull) on tab focus and every N seconds.
+	 * Registers online/offline listeners to skip sync when offline
+	 * and trigger an immediate sync on reconnect.
 	 */
 	startAutoSync(): void {
 		this.transport.connect?.();
 		this.autoSyncScheduler.start();
+		this.setupOnlineListeners();
 	}
 
 	/**
@@ -349,6 +360,7 @@ export class SyncCoordinator {
 	/** Perform a single sync cycle (push + pull + actions, depending on syncMode). */
 	async syncOnce(): Promise<void> {
 		if (this.syncing) return;
+		if (!this._online) return;
 		this.syncing = true;
 		this.emit("onSyncStart");
 		try {
@@ -428,7 +440,43 @@ export class SyncCoordinator {
 	/** Stop auto-sync and clean up listeners */
 	stopAutoSync(): void {
 		this.autoSyncScheduler.stop();
+		this.teardownOnlineListeners();
 		// Disconnect persistent transport (e.g. WebSocket)
 		this.transport.disconnect?.();
+	}
+
+	/**
+	 * Register window online/offline event listeners.
+	 * Guards all browser API access with typeof checks for Node/SSR safety.
+	 */
+	private setupOnlineListeners(): void {
+		if (typeof window === "undefined") return;
+
+		if (typeof navigator !== "undefined" && typeof navigator.onLine === "boolean") {
+			this._online = navigator.onLine;
+		}
+
+		this.onlineHandler = () => {
+			this._online = true;
+			void this.syncOnce();
+		};
+		this.offlineHandler = () => {
+			this._online = false;
+		};
+		window.addEventListener("online", this.onlineHandler);
+		window.addEventListener("offline", this.offlineHandler);
+	}
+
+	/** Remove online/offline listeners. */
+	private teardownOnlineListeners(): void {
+		if (typeof window === "undefined") return;
+		if (this.onlineHandler) {
+			window.removeEventListener("online", this.onlineHandler);
+			this.onlineHandler = null;
+		}
+		if (this.offlineHandler) {
+			window.removeEventListener("offline", this.offlineHandler);
+			this.offlineHandler = null;
+		}
 	}
 }

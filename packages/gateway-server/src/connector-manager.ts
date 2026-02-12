@@ -25,6 +25,7 @@ import {
 } from "@lakesync/gateway";
 import { SourcePoller } from "./ingest/poller";
 import type { IngestSourceConfig } from "./ingest/types";
+import type { DeltaPersistence } from "./persistence";
 
 /** Common lifecycle interface for source pollers (SQL or API-based). */
 interface Poller {
@@ -44,6 +45,7 @@ export class ConnectorManager {
 	private readonly pollers = new Map<string, Poller>();
 	private readonly pollerRegistry: PollerRegistry;
 	private readonly adapterRegistry: AdapterFactoryRegistry;
+	private readonly persistence: DeltaPersistence | null;
 
 	constructor(
 		private readonly configStore: ConfigStore,
@@ -51,10 +53,12 @@ export class ConnectorManager {
 		options?: {
 			pollerRegistry?: PollerRegistry;
 			adapterRegistry?: AdapterFactoryRegistry;
+			persistence?: DeltaPersistence;
 		},
 	) {
 		this.pollerRegistry = options?.pollerRegistry ?? createPollerRegistry();
 		this.adapterRegistry = options?.adapterRegistry ?? defaultAdapterFactoryRegistry();
+		this.persistence = options?.persistence ?? null;
 	}
 
 	/**
@@ -84,6 +88,18 @@ export class ConnectorManager {
 		if (pollerFactory) {
 			try {
 				const poller = createPoller(config, this.gateway, this.pollerRegistry);
+
+				// Restore persisted cursor state
+				if (this.persistence) {
+					const saved = this.persistence.loadCursor(config.name);
+					if (saved) {
+						poller.setCursorState(JSON.parse(saved));
+					}
+					poller.onCursorUpdate = (state) => {
+						this.persistence!.saveCursor(config.name, JSON.stringify(state));
+					};
+				}
+
 				poller.start();
 				this.pollers.set(config.name, poller);
 				return result;
@@ -129,6 +145,18 @@ export class ConnectorManager {
 					intervalMs: config.ingest.intervalMs,
 				};
 				const poller = new SourcePoller(pollerConfig, this.gateway);
+
+				// Restore persisted cursor state
+				if (this.persistence) {
+					const saved = this.persistence.loadCursor(config.name);
+					if (saved) {
+						poller.setCursorState(JSON.parse(saved));
+					}
+					poller.onCursorUpdate = (state) => {
+						this.persistence!.saveCursor(config.name, JSON.stringify(state));
+					};
+				}
+
 				poller.start();
 				this.pollers.set(config.name, poller);
 			}

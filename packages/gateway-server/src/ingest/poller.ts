@@ -43,6 +43,9 @@ export class SourcePoller {
 	/** Diff snapshot per table (keyed by table name). */
 	private diffStates = new Map<string, DiffState>();
 
+	/** Optional callback invoked after each poll with the current cursor state. */
+	public onCursorUpdate?: (state: Record<string, unknown>) => void;
+
 	constructor(config: IngestSourceConfig, gateway: SyncGateway) {
 		this.config = config;
 		this.gateway = gateway;
@@ -88,6 +91,24 @@ export class SourcePoller {
 		}, this.config.intervalMs ?? DEFAULT_INTERVAL_MS);
 	}
 
+	/** Export cursor state as a JSON-serialisable object for external persistence. */
+	getCursorState(): Record<string, unknown> {
+		const cursors: Record<string, unknown> = {};
+		for (const [table, state] of this.cursorStates) {
+			cursors[table] = state.lastCursor;
+		}
+		return { cursorStates: cursors };
+	}
+
+	/** Restore cursor state from a previously exported snapshot. */
+	setCursorState(state: Record<string, unknown>): void {
+		const cursors = state.cursorStates as Record<string, unknown> | undefined;
+		if (!cursors) return;
+		for (const [table, cursor] of Object.entries(cursors)) {
+			this.cursorStates.set(table, { lastCursor: cursor });
+		}
+	}
+
 	/** Execute a single poll cycle across all configured tables. */
 	async poll(): Promise<void> {
 		const allDeltas: RowDelta[] = [];
@@ -103,7 +124,12 @@ export class SourcePoller {
 			}
 		}
 
-		if (allDeltas.length === 0) return;
+		if (allDeltas.length === 0) {
+			if (this.onCursorUpdate) {
+				this.onCursorUpdate(this.getCursorState());
+			}
+			return;
+		}
 
 		const push: SyncPush = {
 			clientId: this.clientId,
@@ -112,6 +138,10 @@ export class SourcePoller {
 		};
 
 		this.gateway.handlePush(push);
+
+		if (this.onCursorUpdate) {
+			this.onCursorUpdate(this.getCursorState());
+		}
 	}
 
 	// -----------------------------------------------------------------------
