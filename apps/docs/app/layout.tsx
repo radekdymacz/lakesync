@@ -6,10 +6,10 @@ import type { ReactNode } from "react";
 export const metadata: Metadata = {
 	title: {
 		template: "%s | LakeSync",
-		default: "LakeSync — Local-first sync for the modern web",
+		default: "LakeSync — Declare what data goes where",
 	},
 	description:
-		"Open-source local-first sync engine with column-level conflict resolution, offline support, and TypeScript-native APIs.",
+		"Open-source TypeScript sync engine. Pluggable adapters connect any source to any destination. Sync rules, materialisation, offline support, and column-level conflict resolution.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

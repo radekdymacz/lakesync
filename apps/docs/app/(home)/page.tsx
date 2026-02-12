@@ -93,18 +93,18 @@ export default function HomePage() {
 				</div>
 
 				<h1 className="mb-6 max-w-4xl text-center text-5xl font-bold tracking-tight sm:text-6xl lg:text-7xl">
-					Sync any data source{" "}
+					Declare what data goes where.{" "}
 					<span className="text-fd-muted-foreground">
-						to a local working set.
+						The engine handles the rest.
 					</span>
 				</h1>
 
 				<p className="mx-auto mb-10 max-w-2xl text-center text-lg leading-relaxed text-fd-muted-foreground">
 					LakeSync is an open-source TypeScript sync engine. Pluggable
-					adapters and source connectors connect to any data source.
-					Declarative sync rules define what data flows where. Consumers
-					get a local SQLite working set with real-time WebSocket sync,
-					offline support, and column-level conflict resolution.
+					adapters connect any readable or writable system. Declarative
+					sync rules define what data flows between them. Every adapter
+					is both a source and a destination &mdash; local SQLite,
+					Postgres, MySQL, BigQuery, or S3/Iceberg.
 				</p>
 
 				<div className="flex flex-wrap items-center justify-center gap-4">
@@ -146,14 +146,14 @@ export default function HomePage() {
 						Pluggable adapters
 					</div>
 					<h2 className="mb-6 text-center text-3xl font-bold">
-						Any readable source is an adapter
+						Any source, any destination
 					</h2>
 					<p className="mx-auto mb-16 max-w-2xl text-center leading-relaxed text-fd-muted-foreground">
 						Two interfaces: <code className="rounded bg-fd-accent/50 px-1.5 py-0.5 text-xs">DatabaseAdapter</code> for
-						SQL-like sources and <code className="rounded bg-fd-accent/50 px-1.5 py-0.5 text-xs">LakeAdapter</code> for
-						object storage. Source connectors poll external APIs (Jira, Salesforce)
-						and push changes as deltas. Adapters are both sources and destinations,
-						enabling cross-backend data flows.
+						SQL-like systems and <code className="rounded bg-fd-accent/50 px-1.5 py-0.5 text-xs">LakeAdapter</code> for
+						object storage. All three database adapters materialise deltas into
+						queryable destination tables. Source connectors poll external APIs
+						(Jira, Salesforce) and push changes as deltas.
 					</p>
 
 					<div className="mx-auto grid max-w-5xl grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
