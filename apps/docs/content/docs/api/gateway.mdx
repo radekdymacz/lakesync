@@ -1,6 +1,6 @@
 ---
 title: Gateway
-description: API reference for @lakesync/gateway — SyncGateway, configuration, push/pull, flush, sources, actions, and monitoring.
+description: API reference for @lakesync/gateway — SyncGateway, configuration, push/pull, flush, flush queue, sources, actions, and monitoring.
 ---
 
 The `@lakesync/gateway` package provides `SyncGateway` — the server-side engine that coordinates delta ingestion, conflict resolution, buffering, flush, source adapters, and action dispatch.
@@ -40,6 +40,9 @@ interface GatewayConfig {
   perTableBudgetBytes?: number;
   actionHandlers?: Record<string, ActionHandler>;
   schemas?: ReadonlyArray<TableSchema>;
+  materialisers?: ReadonlyArray<Materialisable>;
+  flushQueue?: FlushQueue;
+  onMaterialisationFailure?: (table: string, deltaCount: number, error: Error) => void;
 }
 ```
 
@@ -56,6 +59,9 @@ interface GatewayConfig {
 | `perTableBudgetBytes` | — | Per-table budget for auto-flush |
 | `actionHandlers` | — | Named action handlers for imperative actions |
 | `schemas` | — | Table schemas for materialisation after flush (see [Materialise Protocol](/docs/architecture#materialise-protocol)) |
+| `materialisers` | — | Additional `Materialisable` targets invoked after flush (non-fatal) |
+| `flushQueue` | auto | Flush queue for post-flush materialisation. When absent, a `MemoryFlushQueue` is created from the adapter and `materialisers`. |
+| `onMaterialisationFailure` | — | Callback invoked per-table when materialisation fails. Useful for metrics/alerting. |
 
 **Example:**
 
@@ -250,6 +256,135 @@ gateway.registerActionHandler("github", {
 
 gateway.describeActions();
 // { connectors: { github: [{ actionType: "create_pr", description: "..." }] } }
+```
+
+## Flush Queue
+
+The flush queue decouples flush from materialisation. After a successful flush, deltas are published to the queue for downstream processing. The gateway creates a `MemoryFlushQueue` by default (inline materialisation), but you can provide an `R2FlushQueue` or a custom implementation for async processing.
+
+### `FlushQueue`
+
+```ts
+interface FlushQueue {
+  publish(
+    entries: ReadonlyArray<RowDelta>,
+    context: FlushContext,
+  ): Promise<Result<void, FlushQueueError>>;
+}
+```
+
+### `FlushContext`
+
+```ts
+interface FlushContext {
+  gatewayId: string;
+  schemas: ReadonlyArray<TableSchema>;
+}
+```
+
+### `isFlushQueue(value)`
+
+```ts
+function isFlushQueue(value: unknown): value is FlushQueue;
+```
+
+Duck-typed type guard (same pattern as `isMaterialisable`).
+
+### `MemoryFlushQueue`
+
+```ts
+class MemoryFlushQueue implements FlushQueue {
+  constructor(
+    materialisers: ReadonlyArray<Materialisable>,
+    onFailure?: (table: string, deltaCount: number, error: Error) => void,
+  );
+}
+```
+
+Calls `processMaterialisation()` inline. This is the default when no `flushQueue` is provided in `GatewayConfig`.
+
+### `R2FlushQueue`
+
+```ts
+class R2FlushQueue implements FlushQueue {
+  constructor(adapter: LakeAdapter);
+}
+```
+
+Writes serialised delta batches to object storage under `materialise-jobs/{gatewayId}/{timestamp}-{rand}.json`. A separate polling consumer lists this prefix, processes each batch, then deletes the object. No queue service required.
+
+### `processMaterialisation(entries, schemas, config)`
+
+```ts
+function processMaterialisation(
+  entries: ReadonlyArray<RowDelta>,
+  schemas: ReadonlyArray<TableSchema>,
+  config: MaterialisationProcessorConfig,
+): Promise<void>;
+```
+
+Runs materialisation targets against flushed deltas. Iterates targets, catches failures per-table, calls `onFailure`, never throws.
+
+### `MaterialisationProcessorConfig`
+
+```ts
+interface MaterialisationProcessorConfig {
+  materialisers: ReadonlyArray<Materialisable>;
+  onFailure?: (table: string, deltaCount: number, error: Error) => void;
+}
+```
+
+### `collectMaterialisers(adapter, extra?)`
+
+```ts
+function collectMaterialisers(
+  adapter: unknown,
+  extra?: ReadonlyArray<Materialisable>,
+): Materialisable[];
+```
+
+Builds the full list of materialisation targets from an adapter (if it implements `Materialisable`) and any explicit extra materialisers.
+
+### `FlushCoordinatorDeps`
+
+```ts
+interface FlushCoordinatorDeps {
+  config: FlushConfig;
+  schemas?: ReadonlyArray<TableSchema>;
+  flushQueue?: FlushQueue;
+}
+```
+
+**Example — inline materialisation (default):**
+
+```ts
+import { SyncGateway } from "@lakesync/gateway";
+
+const gateway = new SyncGateway({
+  gatewayId: "my-gw",
+  maxBufferBytes: 4 * 1024 * 1024,
+  maxBufferAgeMs: 30_000,
+  adapter: pgAdapter,          // Materialisable — auto-creates MemoryFlushQueue
+  schemas: [{ table: "orders", columns: [{ name: "total", type: "number" }] }],
+  onMaterialisationFailure: (table, count, err) => {
+    console.error(`Materialise failed: ${table} (${count} deltas)`, err);
+  },
+});
+```
+
+**Example — async via R2:**
+
+```ts
+import { SyncGateway, R2FlushQueue } from "@lakesync/gateway";
+
+const gateway = new SyncGateway({
+  gatewayId: "my-gw",
+  maxBufferBytes: 4 * 1024 * 1024,
+  maxBufferAgeMs: 30_000,
+  adapter: s3Adapter,
+  flushQueue: new R2FlushQueue(s3Adapter),   // overrides default MemoryFlushQueue
+  schemas: [{ table: "orders", columns: [{ name: "total", type: "number" }] }],
+});
 ```
 
 ## Monitoring

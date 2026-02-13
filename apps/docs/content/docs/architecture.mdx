@@ -393,6 +393,52 @@ resolveConflictColumns(schema); // string[] — externalIdColumn or PK
 isSoftDelete(schema);           // boolean — defaults to true
 ```
 
+## Flush Queue Pipeline
+
+After a successful flush, deltas must be materialised into destination tables. The **FlushQueue** decouples these two steps — flush writes deltas to the adapter, then publishes them to a queue for asynchronous materialisation. This separation enables independent retry, backpressure, and fan-out without blocking the flush path.
+
+```mermaid
+flowchart LR
+    P[push] --> DB[DeltaBuffer]
+    DB -->|drain| FE[flushEntries]
+    FE -->|publish| FQ[FlushQueue]
+    FQ --> C[Consumer]
+    C --> PM[processMaterialisation]
+    PM --> DT[Destination Tables]
+```
+
+The pipeline: `push()` appends deltas to the `DeltaBuffer` (RAM). On flush, the `FlushCoordinator` drains the buffer, writes to the storage adapter via `flushEntries()`, then publishes the flushed deltas to the configured `FlushQueue`. A consumer picks them up and calls `processMaterialisation()`, which invokes each `Materialisable` target. Queue publish failures are non-fatal — they are warned but never fail the flush.
+
+### Implementations
+
+| Queue | Consumer | Use case |
+|-------|----------|----------|
+| **MemoryFlushQueue** | Inline (same process) | Default — calls `processMaterialisation()` synchronously, identical to pre-queue behaviour |
+| **R2FlushQueue** | Polling consumer | Writes JSON payloads to object storage (`materialise-jobs/{gatewayId}/...`); a separate consumer lists, processes, and deletes each object |
+| **CloudflareFlushQueue** | CF Queue worker | Claim-check pattern — writes payload to R2, publishes a lightweight reference message to a Cloudflare Queue. Consumer fetches from R2, materialises, then acks/retries |
+
+When no `flushQueue` is provided in the gateway config, a `MemoryFlushQueue` is created automatically — existing behaviour is preserved with zero configuration.
+
+### Claim-Check Pattern (Cloudflare)
+
+Cloudflare Queue messages are limited to 128 KB. The `CloudflareFlushQueue` works around this by writing the full delta payload to R2 first, then publishing only a reference (object key + metadata) to the queue. The consumer fetches the payload from R2, runs materialisation, deletes the R2 object on success, and retries the message on failure.
+
+```mermaid
+sequenceDiagram
+    participant GW as Gateway
+    participant R2 as R2 Storage
+    participant Q as CF Queue
+    participant W as Queue Worker
+
+    GW->>R2: PUT payload JSON
+    GW->>Q: send reference (objectKey)
+    Q->>W: deliver message
+    W->>R2: GET payload
+    W->>W: processMaterialisation()
+    W->>R2: DELETE payload
+    W->>Q: ack
+```
+
 ## Checkpoints
 
 For initial sync (when `lastSyncedHlc === 0`), the client downloads a **checkpoint** — a complete snapshot of the current state. Checkpoints are:

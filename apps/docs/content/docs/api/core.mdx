@@ -183,6 +183,7 @@ class SchemaError extends LakeSyncError {}       // code: "SCHEMA_MISMATCH"
 class AdapterError extends LakeSyncError {}      // code: "ADAPTER_ERROR"
 class AdapterNotFoundError extends LakeSyncError {} // code: "ADAPTER_NOT_FOUND"
 class BackpressureError extends LakeSyncError {} // code: "BACKPRESSURE"
+class FlushQueueError extends LakeSyncError {}   // code: "FLUSH_QUEUE_ERROR"
 ```
 
 ## Conflict Resolution

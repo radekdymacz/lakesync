@@ -90,6 +90,22 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - LifecycleAdapter delegates materialisation to the hot tier only
 - Auto-called after successful delta flush (non-fatal — failures are warned, never fail the flush)
 
+### FlushQueue (packages/gateway)
+- `FlushQueue` interface: producer-only queue sitting between flush and materialisation — `publish(entries, context)` returns `Result<void, FlushQueueError>`
+- `FlushContext`: `{ gatewayId: string; schemas: ReadonlyArray<TableSchema> }` — metadata passed alongside deltas
+- `isFlushQueue()` type guard: duck-typed check (same pattern as `isMaterialisable`)
+- `MemoryFlushQueue`: default implementation — calls `processMaterialisation()` inline (identical to previous synchronous path, fully backward-compatible)
+- `R2FlushQueue`: writes serialised delta batches to object storage under `materialise-jobs/{gatewayId}/{timestamp}-{rand}.json`; a separate polling consumer processes and deletes
+- `CloudflareFlushQueue` (apps/gateway-worker): claim-check pattern — writes payload to R2, publishes lightweight `MaterialiseJobMessage` reference to CF Queue (128 KB message limit)
+- `handleMaterialiseQueue()` (apps/gateway-worker): CF Queue consumer — fetches payload from R2, calls `processMaterialisation()`, deletes R2 object on success, `message.retry()` on failure
+- `processMaterialisation()`: standalone function extracted from FlushCoordinator — iterates materialisation targets, catches failures per-table, never throws
+- `collectMaterialisers()`: builds materialiser list from adapter (if `isMaterialisable`) + explicit `materialisers` array
+- `FlushQueueError` (`@lakesync/core`): error class with code `"FLUSH_QUEUE_ERROR"`
+- `GatewayConfig.flushQueue`: optional — when absent, gateway auto-builds `MemoryFlushQueue` from adapter + materialisers
+- `GatewayConfig.onMaterialisationFailure`: optional callback `(table, deltaCount, error)` for metrics/alerting
+- `GatewayServerConfig.flushQueue`: forwarded to underlying `SyncGateway`
+- gateway-worker `Env.MATERIALISE_QUEUE`: CF Queue binding for `CloudflareFlushQueue`
+
 ### Client SDK (packages/client)
 - LocalDB: sql.js WASM + IndexedDB snapshot persistence
 - SyncCoordinator: push/pull orchestration, auto-sync (10s interval + visibility)
@@ -213,3 +229,5 @@ For SEQUENTIAL tasks: execute one at a time.
 - gateway-server dynamic connectors: Jira/Salesforce use API-based pollers (no DatabaseAdapter), database connectors use SourcePoller + queryFn
 - ActionDispatcher caches non-retryable errors but not retryable ones (allows retry)
 - todo-app moved to `apps/examples/todo-app`
+- `MemoryFlushQueue` is auto-built from adapter + materialisers when no `flushQueue` is provided in `GatewayConfig`
+- FlushQueue `publish()` failures are non-fatal — warned, never fail the flush (same semantics as direct materialisation)
