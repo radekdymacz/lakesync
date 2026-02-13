@@ -3,7 +3,9 @@ import {
 	Err,
 	FlushError,
 	isDatabaseAdapter,
+	isMaterialisable,
 	type LakeAdapter,
+	type Materialisable,
 	Ok,
 	type Result,
 	type RowDelta,
@@ -19,6 +21,14 @@ export interface FlushCoordinatorDeps {
 	config: FlushConfig;
 	/** Table schemas for materialisation after flush. */
 	schemas?: ReadonlyArray<TableSchema>;
+	/**
+	 * Additional materialisers to invoke after successful flush.
+	 *
+	 * These are called in addition to the flush adapter itself (when it
+	 * implements `Materialisable`). Failures are non-fatal — warned but
+	 * never fail the flush.
+	 */
+	materialisers?: ReadonlyArray<Materialisable>;
 }
 
 /**
@@ -39,7 +49,8 @@ export class FlushCoordinator {
 	 * Flush all entries from the buffer to the adapter.
 	 *
 	 * Drains the buffer first, then writes to the adapter. On failure,
-	 * entries are restored to the buffer.
+	 * entries are restored to the buffer. On success, materialisers are
+	 * invoked as a non-fatal post-step.
 	 */
 	async flush(
 		buffer: DeltaBuffer,
@@ -66,12 +77,18 @@ export class FlushCoordinator {
 		}
 
 		try {
-			return await flushEntries(entries, byteSize, {
+			const result = await flushEntries(entries, byteSize, {
 				adapter,
 				config: deps.config,
 				restoreEntries: (e) => this.restoreEntries(buffer, e),
 				schemas: deps.schemas,
 			});
+
+			if (result.ok) {
+				await this.runMaterialisers(entries, adapter, deps);
+			}
+
+			return result;
 		} finally {
 			this.flushing = false;
 		}
@@ -104,7 +121,7 @@ export class FlushCoordinator {
 		this.flushing = true;
 
 		try {
-			return await flushEntries(
+			const result = await flushEntries(
 				entries,
 				0,
 				{
@@ -115,8 +132,60 @@ export class FlushCoordinator {
 				},
 				table,
 			);
+
+			if (result.ok) {
+				await this.runMaterialisers(entries, adapter, deps);
+			}
+
+			return result;
 		} finally {
 			this.flushing = false;
+		}
+	}
+
+	/**
+	 * Run all materialisers after successful flush (non-fatal).
+	 *
+	 * Invokes the flush adapter's own `materialise()` (when it implements
+	 * `Materialisable`), then any additional materialisers from deps.
+	 */
+	private async runMaterialisers(
+		entries: RowDelta[],
+		adapter: LakeAdapter | DatabaseAdapter,
+		deps: FlushCoordinatorDeps,
+	): Promise<void> {
+		const schemas = deps.schemas;
+		if (!schemas || schemas.length === 0) return;
+
+		const targets: Materialisable[] = [];
+
+		// Include the flush adapter itself when it supports materialisation
+		if (isMaterialisable(adapter)) {
+			targets.push(adapter);
+		}
+
+		// Include any additional materialisers from deps
+		if (deps.materialisers) {
+			targets.push(...deps.materialisers);
+		}
+
+		for (const target of targets) {
+			try {
+				const matResult = await target.materialise(entries, schemas);
+				if (!matResult.ok) {
+					const error = new Error(matResult.error.message);
+					console.warn(
+						`[lakesync] Materialisation failed (${entries.length} deltas): ${matResult.error.message}`,
+					);
+					notifyMaterialisationFailure(entries, error, deps.config);
+				}
+			} catch (error: unknown) {
+				const err = error instanceof Error ? error : new Error(String(error));
+				console.warn(
+					`[lakesync] Materialisation error (${entries.length} deltas): ${err.message}`,
+				);
+				notifyMaterialisationFailure(entries, err, deps.config);
+			}
 		}
 	}
 
@@ -125,5 +194,22 @@ export class FlushCoordinator {
 		for (const entry of entries) {
 			buffer.append(entry);
 		}
+	}
+}
+
+/**
+ * Notify the onMaterialisationFailure callback if configured.
+ * Extracts unique table names from deltas for per-table reporting.
+ */
+function notifyMaterialisationFailure(
+	entries: RowDelta[],
+	error: Error,
+	config: FlushConfig,
+): void {
+	if (!config.onMaterialisationFailure) return;
+	const tables = new Set(entries.map((e) => e.table));
+	for (const table of tables) {
+		const count = entries.filter((e) => e.table === table).length;
+		config.onMaterialisationFailure(table, count, error);
 	}
 }

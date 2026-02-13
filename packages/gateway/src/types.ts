@@ -4,6 +4,7 @@ import type {
 	DatabaseAdapter,
 	HLCTimestamp,
 	LakeAdapter,
+	Materialisable,
 	RowDelta,
 	TableSchema,
 } from "@lakesync/core";
@@ -58,6 +59,8 @@ export interface GatewayConfig extends BufferConfig {
 	actionHandlers?: Record<string, ActionHandler>;
 	/** Table schemas for materialisation after flush. */
 	schemas?: ReadonlyArray<TableSchema>;
+	/** Additional materialisers invoked after successful flush (non-fatal). */
+	materialisers?: ReadonlyArray<Materialisable>;
 }
 
 /** Gateway runtime state */

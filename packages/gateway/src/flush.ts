@@ -12,7 +12,6 @@ import {
 	HLC,
 	type HLCTimestamp,
 	isDatabaseAdapter,
-	isMaterialisable,
 	type LakeAdapter,
 	Ok,
 	type Result,
@@ -65,23 +64,6 @@ export interface FlushStrategy {
 	): Promise<Result<void, FlushError>>;
 }
 
-/**
- * Notify the onMaterialisationFailure callback if configured.
- * Extracts unique table names from deltas for per-table reporting.
- */
-function notifyMaterialisationFailure(
-	entries: RowDelta[],
-	error: Error,
-	config: FlushConfig,
-): void {
-	if (!config.onMaterialisationFailure) return;
-	const tables = new Set(entries.map((e) => e.table));
-	for (const table of tables) {
-		const count = entries.filter((e) => e.table === table).length;
-		config.onMaterialisationFailure(table, count, error);
-	}
-}
-
 /** Strategy for flushing deltas to a DatabaseAdapter (batch INSERT). */
 class DatabaseFlushStrategy implements FlushStrategy {
 	async flush(
@@ -95,26 +77,6 @@ class DatabaseFlushStrategy implements FlushStrategy {
 			if (!result.ok) {
 				deps.restoreEntries(entries);
 				return Err(new FlushError(`Database flush failed: ${result.error.message}`));
-			}
-
-			// Materialise after successful delta insertion (non-fatal)
-			if (deps.schemas && deps.schemas.length > 0 && isMaterialisable(adapter)) {
-				try {
-					const matResult = await adapter.materialise(entries, deps.schemas);
-					if (!matResult.ok) {
-						const error = new Error(matResult.error.message);
-						console.warn(
-							`[lakesync] Materialisation failed (${entries.length} deltas): ${matResult.error.message}`,
-						);
-						notifyMaterialisationFailure(entries, error, deps.config);
-					}
-				} catch (error: unknown) {
-					const err = error instanceof Error ? error : new Error(String(error));
-					console.warn(
-						`[lakesync] Materialisation error (${entries.length} deltas): ${err.message}`,
-					);
-					notifyMaterialisationFailure(entries, err, deps.config);
-				}
 			}
 
 			return Ok(undefined);

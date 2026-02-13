@@ -273,6 +273,7 @@ export class SyncGateway implements IngestTarget {
 				catalogue: this.config.catalogue,
 			},
 			schemas: this.config.schemas,
+			materialisers: this.config.materialisers,
 		});
 	}
 
@@ -291,6 +292,7 @@ export class SyncGateway implements IngestTarget {
 				catalogue: this.config.catalogue,
 			},
 			schemas: this.config.schemas,
+			materialisers: this.config.materialisers,
 		});
 	}
 

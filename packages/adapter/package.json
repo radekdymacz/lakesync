@@ -37,11 +37,16 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"peerDependencies": {
-		"@lakesync/core": "workspace:*"
+		"@lakesync/core": "workspace:*",
+		"@lakesync/parquet": "workspace:*"
+	},
+	"optionalDependencies": {
+		"mssql": "^11.0.0"
 	},
 	"dependencies": {
 		"@aws-sdk/client-s3": "^3.0.0",
 		"@google-cloud/bigquery": "^8.1.1",
+		"fast-json-stable-stringify": "^2.1.0",
 		"mysql2": "^3.16.3",
 		"pg": "^8.18.0"
 	},
