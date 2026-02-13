@@ -706,8 +706,8 @@ describe("SyncGateway", () => {
 			expect(result.error.code).toBe("SCHEMA_MISMATCH");
 		}
 
-		// The first two valid deltas should still be in the buffer
-		expect(gw.bufferStats.logSize).toBe(2);
+		// No deltas should be in the buffer — validation rejects the entire batch
+		expect(gw.bufferStats.logSize).toBe(0);
 	});
 
 	it("returns BackpressureError when buffer exceeds limit", () => {

@@ -9,6 +9,7 @@ export {
 	type SyncState,
 } from "./coordinator";
 export { SyncEngine, type SyncEngineConfig } from "./engine";
+export { OnlineManager } from "./online-manager";
 export { SchemaSynchroniser } from "./schema-sync";
 export {
 	PullFirstStrategy,

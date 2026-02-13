@@ -30,10 +30,10 @@ import {
 import { ActionDispatcher } from "./action-dispatcher";
 import { DeltaBuffer } from "./buffer";
 import { FlushCoordinator } from "./flush-coordinator";
-import { type FlushQueue, MemoryFlushQueue } from "./flush-queue";
-import { collectMaterialisers } from "./materialisation-processor";
+import { buildFlushQueue, type FlushQueue } from "./flush-queue";
 import { SourceRegistry } from "./source-registry";
 import type { GatewayConfig, HandlePushResult } from "./types";
+import { ValidationPipeline } from "./validation-pipeline";
 
 export type { SyncPush, SyncPull, SyncResponse };
 
@@ -52,6 +52,7 @@ export class SyncGateway implements IngestTarget {
 	private readonly sources: SourceRegistry;
 	private readonly flushCoordinator: FlushCoordinator;
 	private readonly flushQueue: FlushQueue | undefined;
+	private readonly validationPipeline: ValidationPipeline;
 
 	constructor(config: GatewayConfig, adapter?: LakeAdapter | DatabaseAdapter) {
 		this.config = { sourceAdapters: {}, ...config };
@@ -62,16 +63,14 @@ export class SyncGateway implements IngestTarget {
 		this.sources = new SourceRegistry(this.config.sourceAdapters);
 		this.flushCoordinator = new FlushCoordinator();
 
-		// Build flush queue — explicit config takes precedence, otherwise
-		// build a MemoryFlushQueue from the adapter + materialisers
-		if (config.flushQueue) {
-			this.flushQueue = config.flushQueue;
-		} else {
-			const targets = collectMaterialisers(this.adapter, config.materialisers);
-			if (targets.length > 0) {
-				this.flushQueue = new MemoryFlushQueue(targets, config.onMaterialisationFailure);
-			}
+		// Build validation pipeline from config
+		this.validationPipeline = new ValidationPipeline();
+		if (this.config.schemaManager) {
+			const sm = this.config.schemaManager;
+			this.validationPipeline.add((delta) => sm.validateDelta(delta));
 		}
+
+		this.flushQueue = buildFlushQueue(config, this.adapter);
 	}
 
 	// -----------------------------------------------------------------------
@@ -94,31 +93,27 @@ export class SyncGateway implements IngestTarget {
 		const bpResult = this.checkBackpressure();
 		if (!bpResult.ok) return bpResult;
 
+		// Phase 1 — Validate all deltas (no side effects)
+		for (const delta of msg.deltas) {
+			if (this.buffer.hasDelta(delta.deltaId)) continue;
+
+			const validationResult = this.validationPipeline.validate(delta);
+			if (!validationResult.ok) return Err(validationResult.error);
+		}
+
+		// Phase 2 — Apply all validated deltas
 		let accepted = 0;
 		const ingested: RowDelta[] = [];
 
 		for (const delta of msg.deltas) {
-			// Step 2: Filter duplicates
 			if (this.buffer.hasDelta(delta.deltaId)) {
 				accepted++;
 				continue;
 			}
 
-			// Step 3: Validate schema
-			if (this.config.schemaManager) {
-				const schemaResult = this.config.schemaManager.validateDelta(delta);
-				if (!schemaResult.ok) {
-					return Err(schemaResult.error);
-				}
-			}
-
-			// Step 4: Validate HLC
 			const recvResult = this.hlc.recv(delta.hlc);
-			if (!recvResult.ok) {
-				return Err(recvResult.error);
-			}
+			if (!recvResult.ok) return Err(recvResult.error);
 
-			// Step 5: Resolve conflicts + append
 			const key = rowKey(delta.table, delta.rowId);
 			const existing = this.buffer.getRow(key);
 

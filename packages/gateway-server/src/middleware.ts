@@ -8,11 +8,11 @@ import type { Logger } from "./logger";
 import type { RouteMatch } from "./router";
 
 // ---------------------------------------------------------------------------
-// Request context — accumulated state passed through the pipeline
+// Request context — immutable input + accumulated middleware state
 // ---------------------------------------------------------------------------
 
-/** Mutable context accumulated as middleware runs. */
-export interface RequestContext {
+/** Immutable request input — set once at context creation and never mutated. */
+export interface RequestInput {
 	readonly req: IncomingMessage;
 	readonly res: ServerResponse;
 	readonly method: string;
@@ -21,7 +21,11 @@ export interface RequestContext {
 	readonly requestId: string;
 	readonly logger: Logger;
 	/** CORS headers to include on every response. */
-	corsHeaders: Record<string, string>;
+	readonly corsHeaders: Record<string, string>;
+}
+
+/** Mutable context accumulated as middleware runs. Extends immutable input. */
+export interface RequestContext extends RequestInput {
 	/** Matched route (set by route-matching middleware). */
 	route?: RouteMatch;
 	/** Authenticated claims (set by auth middleware, undefined when auth disabled). */

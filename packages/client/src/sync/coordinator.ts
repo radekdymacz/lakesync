@@ -15,6 +15,7 @@ import type { SyncQueue } from "../queue/types";
 import { ActionProcessor } from "./action-processor";
 import { AutoSyncScheduler } from "./auto-sync";
 import { SyncEngine } from "./engine";
+import { OnlineManager } from "./online-manager";
 import { PullFirstStrategy, type SyncStrategy } from "./strategy";
 import { SyncTracker } from "./tracker";
 import type { TransportWithCapabilities } from "./transport";
@@ -91,9 +92,7 @@ export class SyncCoordinator {
 	/** The underlying sync engine for advanced consumers. */
 	readonly engine: SyncEngine;
 	private readonly transport: TransportWithCapabilities;
-	private _online = true;
-	private onlineHandler: (() => void) | null = null;
-	private offlineHandler: (() => void) | null = null;
+	private readonly onlineManager: OnlineManager;
 	private readonly autoSyncScheduler: AutoSyncScheduler;
 	private readonly actionProcessor: ActionProcessor | null;
 	private listeners: { [K in keyof SyncEvents]: Array<SyncEvents[K]> } = {
@@ -141,6 +140,10 @@ export class SyncCoordinator {
 		const intervalMs = transport.supportsRealtime ? realtimeHeartbeatMs : autoSyncIntervalMs;
 
 		// Initialise composed modules
+		this.onlineManager = new OnlineManager();
+		this.onlineManager.onOnline = () => {
+			void this.syncOnce();
+		};
 		this.autoSyncScheduler = new AutoSyncScheduler(() => this.syncOnce(), intervalMs);
 
 		if (config?.actionQueue) {
@@ -203,7 +206,7 @@ export class SyncCoordinator {
 
 	/** Whether the client believes it is online. */
 	get isOnline(): boolean {
-		return this._online;
+		return this.onlineManager.isOnline;
 	}
 
 	/** Push pending deltas to the gateway via the transport */
@@ -251,12 +254,12 @@ export class SyncCoordinator {
 	startAutoSync(): void {
 		this.transport.connect?.();
 		this.autoSyncScheduler.start();
-		this.setupOnlineListeners();
+		this.onlineManager.start();
 	}
 
 	/** Perform a single sync cycle (push + pull + actions, depending on syncMode). */
 	async syncOnce(): Promise<void> {
-		if (!this._online) return;
+		if (!this.onlineManager.isOnline) return;
 		this.emit("onSyncStart");
 		try {
 			const ran = await this.engine.syncOnce(() => this.processActionQueue());
@@ -335,43 +338,8 @@ export class SyncCoordinator {
 	/** Stop auto-sync and clean up listeners */
 	stopAutoSync(): void {
 		this.autoSyncScheduler.stop();
-		this.teardownOnlineListeners();
+		this.onlineManager.stop();
 		// Disconnect persistent transport (e.g. WebSocket)
 		this.transport.disconnect?.();
-	}
-
-	/**
-	 * Register window online/offline event listeners.
-	 * Guards all browser API access with typeof checks for Node/SSR safety.
-	 */
-	private setupOnlineListeners(): void {
-		if (typeof window === "undefined") return;
-
-		if (typeof navigator !== "undefined" && typeof navigator.onLine === "boolean") {
-			this._online = navigator.onLine;
-		}
-
-		this.onlineHandler = () => {
-			this._online = true;
-			void this.syncOnce();
-		};
-		this.offlineHandler = () => {
-			this._online = false;
-		};
-		window.addEventListener("online", this.onlineHandler);
-		window.addEventListener("offline", this.offlineHandler);
-	}
-
-	/** Remove online/offline listeners. */
-	private teardownOnlineListeners(): void {
-		if (typeof window === "undefined") return;
-		if (this.onlineHandler) {
-			window.removeEventListener("online", this.onlineHandler);
-			this.onlineHandler = null;
-		}
-		if (this.offlineHandler) {
-			window.removeEventListener("offline", this.offlineHandler);
-			this.offlineHandler = null;
-		}
 	}
 }

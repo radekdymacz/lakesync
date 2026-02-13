@@ -101,7 +101,8 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - `processMaterialisation()`: standalone function extracted from FlushCoordinator — iterates materialisation targets, catches failures per-table, never throws
 - `collectMaterialisers()`: builds materialiser list from adapter (if `isMaterialisable`) + explicit `materialisers` array
 - `FlushQueueError` (`@lakesync/core`): error class with code `"FLUSH_QUEUE_ERROR"`
-- `GatewayConfig.flushQueue`: optional — when absent, gateway auto-builds `MemoryFlushQueue` from adapter + materialisers
+- `buildFlushQueue(config, adapter)`: explicit factory function — builds `MemoryFlushQueue` from adapter + materialisers when no explicit queue provided. Gateway constructor calls this instead of implicit auto-building.
+- `GatewayConfig.flushQueue`: optional — when absent, `buildFlushQueue()` creates a `MemoryFlushQueue` from adapter + materialisers
 - `GatewayConfig.onMaterialisationFailure`: optional callback `(table, deltaCount, error)` for metrics/alerting
 - `GatewayServerConfig.flushQueue`: forwarded to underlying `SyncGateway`
 - gateway-worker `Env.MATERIALISE_QUEUE`: CF Queue binding for `CloudflareFlushQueue`
@@ -109,7 +110,8 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 ### Client SDK (packages/client)
 - LocalDB: sql.js WASM + IndexedDB snapshot persistence
 - `SyncEngine`: pure sync operations (push, pull, syncOnce) extracted from coordinator. `syncOnce()` is an explicit pull-then-push transaction — ordering is structural, not temporal.
-- `SyncCoordinator`: composes `SyncEngine` + `AutoSyncScheduler` + event system. Delegates sync to engine, handles scheduling/lifecycle. Exposes `readonly engine: SyncEngine` for advanced consumers.
+- `SyncCoordinator`: composes `SyncEngine` + `AutoSyncScheduler` + `OnlineManager` + event system. Delegates sync to engine, handles scheduling/lifecycle. Exposes `readonly engine: SyncEngine` for advanced consumers.
+- `OnlineManager`: standalone online/offline lifecycle — registers window listeners, exposes `isOnline`, `onOnline`/`onOffline` callbacks. Decomplected from coordinator.
 - SyncTracker: wraps LocalDB + queue + HLC; insert/update/delete with auto delta extraction
 - Transport interfaces are split by capability: `SyncTransport` (core push/pull, required), `CheckpointTransport` (checkpoint downloads for initial sync), `RealtimeTransport` (WebSocket real-time broadcast), `ActionTransport` (imperative action execution)
 - `TransportWithCapabilities = SyncTransport & Partial<CheckpointTransport> & Partial<RealtimeTransport> & Partial<ActionTransport>`
@@ -129,7 +131,9 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - Adapter-sourced pull: `handlePull({ source: "name" })` queries named DatabaseAdapter with sync rules filtering
 
 ### Gateway (packages/gateway)
-- `SyncGateway`: thin facade composing `DeltaBuffer`, `ActionDispatcher`, `SchemaManager`, and `flushEntries`
+- `SyncGateway`: thin facade composing `DeltaBuffer`, `ActionDispatcher`, `ValidationPipeline`, and `flushEntries`
+- `SyncGateway.handlePush()`: two-phase push — (1) validate all deltas with no side effects, (2) apply all validated deltas. No partial buffer mutation on validation failure.
+- `ValidationPipeline` + `DeltaValidator`: composable delta validation. Gateway builds pipeline from `SchemaManager` at init; `handlePush` calls `pipeline.validate()` instead of inline conditionals. New validators can be added without modifying push logic.
 - `SyncGateway.rehydrate(deltas)`: restores persisted deltas without push validation
 - `DeltaBuffer`: atomic `BufferSnapshot` pattern — immutable state (log, index, deltaIds, bytes, tableStats) swapped atomically on each mutation. Same pattern as `SchemaSnapshot`.
 - `ActionDispatcher`: dispatches imperative actions to registered `ActionHandler`s with idempotency
@@ -141,8 +145,10 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 
 ### Gateway Server (packages/gateway-server)
 - Self-hosted gateway server wrapping SyncGateway in a node:http server (works in Node.js and Bun)
-- Middleware pipeline architecture: `runPipeline()` composes independent middleware (CORS, auth, drain guard, timeout, rate limit, route matching, dispatch). Each middleware is a focused `(context, next)` function.
-- Data-driven route dispatch: `Record<string, RouteHandler>` map built by `buildRouteHandlers()` — routes are data, dispatch is a map lookup. Open for extension.
+- `GatewayServer` is a thin lifecycle shell (start/stop/flush) — composition logic is in standalone functions
+- `buildServerPipeline(config, state)`: standalone function returning `Middleware[]` — all 9 middleware stages (CORS, static routes, drain guard, timeout, active request tracking, route matching, auth, rate limit, dispatch) are composable closures
+- `buildServerRouteHandlers(deps)`: standalone function returning `Record<string, RouteHandler>` — all 11 route handlers as standalone closures. Routes are data, dispatch is a map lookup. Open for extension.
+- `RequestInput` (immutable request metadata) vs `RequestContext` (extends with accumulated middleware state: route, auth)
 - Routes mirror gateway-worker: /sync/:id/push, /sync/:id/pull, /sync/:id/action, /sync/:id/actions, /sync/:id/ws, /admin/flush/:id, /admin/schema/:id, /admin/sync-rules/:id, /admin/connectors/:id, /admin/metrics/:id, /health
 - Optional JWT auth (HMAC-SHA256) when `jwtSecret` is provided
 - CORS support with configurable origins
@@ -233,5 +239,6 @@ For SEQUENTIAL tasks: execute one at a time.
 - gateway-server dynamic connectors: Jira/Salesforce use API-based pollers (no DatabaseAdapter), database connectors use SourcePoller + queryFn
 - ActionDispatcher caches non-retryable errors but not retryable ones (allows retry)
 - todo-app moved to `apps/examples/todo-app`
-- `MemoryFlushQueue` is auto-built from adapter + materialisers when no `flushQueue` is provided in `GatewayConfig`
+- `MemoryFlushQueue` is auto-built via `buildFlushQueue()` when no `flushQueue` is provided in `GatewayConfig`
+- `handlePush` validates all deltas before applying any — schema error on delta N means NO deltas (including 1..N-1) are buffered
 - FlushQueue `publish()` failures are non-fatal — warned, never fail the flush (same semantics as direct materialisation)

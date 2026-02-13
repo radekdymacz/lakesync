@@ -28,6 +28,7 @@ export {
 } from "./flush";
 export { FlushCoordinator, type FlushCoordinatorDeps } from "./flush-coordinator";
 export {
+	buildFlushQueue,
 	type FlushContext,
 	type FlushQueue,
 	isFlushQueue,
@@ -80,3 +81,4 @@ export {
 	validatePushBody,
 	validateSchemaBody,
 } from "./validation";
+export { type DeltaValidator, ValidationPipeline } from "./validation-pipeline";

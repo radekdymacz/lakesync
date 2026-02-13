@@ -2,44 +2,28 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AdapterFactoryRegistry } from "@lakesync/adapter";
 import { jiraPollerFactory } from "@lakesync/connector-jira";
 import { salesforcePollerFactory } from "@lakesync/connector-salesforce";
-import type {
-	DatabaseAdapter,
-	HLCTimestamp,
-	LakeAdapter,
-	PollerRegistry,
-	RowDelta,
-	SyncResponse,
-} from "@lakesync/core";
-import { bigintReplacer, createPollerRegistry, isDatabaseAdapter } from "@lakesync/core";
-import type { ConfigStore, FlushQueue, HandlerResult } from "@lakesync/gateway";
+import type { DatabaseAdapter, LakeAdapter, PollerRegistry } from "@lakesync/core";
+import { createPollerRegistry } from "@lakesync/core";
+import type { ConfigStore, FlushQueue } from "@lakesync/gateway";
 import {
 	DEFAULT_MAX_BUFFER_AGE_MS,
 	DEFAULT_MAX_BUFFER_BYTES,
-	handleActionRequest,
-	handleFlushRequest,
-	handleListConnectorTypes,
-	handleMetrics,
-	handlePullRequest,
-	handlePushRequest,
-	handleSaveSchema,
-	handleSaveSyncRules,
-	MAX_PUSH_PAYLOAD_BYTES,
 	MemoryConfigStore,
 	SyncGateway,
 } from "@lakesync/gateway";
-import { authenticateRequest } from "./auth-middleware";
 import type { DistributedLock } from "./cluster";
 import { ConnectorManager } from "./connector-manager";
-import { corsHeaders, handlePreflight } from "./cors-middleware";
+import { corsHeaders } from "./cors-middleware";
 import { SourcePoller } from "./ingest/poller";
 import type { IngestSourceConfig } from "./ingest/types";
 import { Logger, type LogLevel } from "./logger";
 import { MetricsRegistry } from "./metrics";
-import type { Middleware, RequestContext, RouteHandler } from "./middleware";
+import type { Middleware, RequestContext } from "./middleware";
 import { runPipeline } from "./middleware";
 import { type DeltaPersistence, MemoryPersistence, SqlitePersistence } from "./persistence";
+import { buildServerPipeline, type PipelineState } from "./pipeline";
 import { RateLimiter, type RateLimiterConfig } from "./rate-limiter";
-import { matchRoute } from "./router";
+import { buildServerRouteHandlers } from "./route-handlers";
 import { SharedBuffer, type SharedBufferConfig } from "./shared-buffer";
 import { type WebSocketLimitsConfig, WebSocketManager } from "./ws-manager";
 
@@ -109,57 +93,7 @@ export interface GatewayServerConfig {
 const DEFAULT_PORT = 3000;
 const DEFAULT_FLUSH_INTERVAL_MS = 30_000;
 const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
-const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_FLUSH_TIMEOUT_MS = 60_000;
-const DEFAULT_ADAPTER_HEALTH_TIMEOUT_MS = 5_000;
-
-// ---------------------------------------------------------------------------
-// Node HTTP helpers
-// ---------------------------------------------------------------------------
-
-/** Read the full request body as a string. */
-function readBody(req: IncomingMessage): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const chunks: Buffer[] = [];
-		req.on("data", (chunk: Buffer) => chunks.push(chunk));
-		req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-		req.on("error", reject);
-	});
-}
-
-/** Send a JSON response. */
-function sendJson(
-	res: ServerResponse,
-	body: unknown,
-	status = 200,
-	extraHeaders?: Record<string, string>,
-): void {
-	const json = JSON.stringify(body, bigintReplacer);
-	res.writeHead(status, {
-		"Content-Type": "application/json",
-		...extraHeaders,
-	});
-	res.end(json);
-}
-
-/** Send a JSON error response. */
-function sendError(
-	res: ServerResponse,
-	message: string,
-	status: number,
-	extraHeaders?: Record<string, string>,
-): void {
-	sendJson(res, { error: message }, status, extraHeaders);
-}
-
-/** Send a HandlerResult as HTTP response. */
-function sendResult(
-	res: ServerResponse,
-	result: HandlerResult,
-	corsH: Record<string, string>,
-): void {
-	sendJson(res, result.body, result.status, corsH);
-}
 
 // ---------------------------------------------------------------------------
 // GatewayServer
@@ -170,8 +104,9 @@ function sendResult(
  *
  * Composes extracted modules: cors-middleware, auth-middleware, router,
  * ws-manager, and connector-manager. Request handling follows a
- * middleware pipeline: cors -> static routes -> drain -> timeout ->
- * route match -> auth -> rate limit -> dispatch.
+ * middleware pipeline built by {@link buildServerPipeline}: cors ->
+ * static routes -> drain -> timeout -> route match -> auth -> rate
+ * limit -> dispatch.
  *
  * @example
  * ```ts
@@ -198,7 +133,7 @@ export class GatewayServer {
 	private readonly logger: Logger;
 	private readonly metrics: MetricsRegistry;
 	private readonly pipeline: Middleware[];
-	private readonly routeHandlers: Record<string, RouteHandler>;
+	private readonly pipelineState: PipelineState;
 
 	private httpServer: Server | null = null;
 	private wsManager: WebSocketManager | null = null;
@@ -258,9 +193,55 @@ export class GatewayServer {
 		this.logger = new Logger(config.logLevel ?? "info");
 		this.metrics = new MetricsRegistry();
 
+		// Pipeline state — shared mutable object bridging the class fields
+		// to the standalone pipeline functions. Reads/writes are proxied
+		// so the pipeline always sees the current draining/activeRequests.
+		this.pipelineState = {
+			get draining() {
+				return self.draining;
+			},
+			set draining(v: boolean) {
+				self.draining = v;
+			},
+			get activeRequests() {
+				return self.activeRequests;
+			},
+			set activeRequests(v: number) {
+				self.activeRequests = v;
+			},
+		};
+		// eslint-disable-next-line @typescript-eslint/no-this-alias
+		const self = this;
+
+		const updateBufferGauges = () => this.updateBufferGauges();
+
 		// Build route handler map and middleware pipeline
-		this.routeHandlers = this.buildRouteHandlers();
-		this.pipeline = this.buildPipeline();
+		const routeHandlers = buildServerRouteHandlers({
+			gateway: this.gateway,
+			configStore: this.configStore,
+			persistence: this.persistence,
+			connectors: this.connectors,
+			metrics: this.metrics,
+			sharedBuffer: this.sharedBuffer,
+			gatewayId: this.config.gatewayId,
+			getWsManager: () => this.wsManager,
+			updateBufferGauges,
+		});
+
+		this.pipeline = buildServerPipeline(
+			{
+				allowedOrigins: config.allowedOrigins,
+				jwtSecret: config.jwtSecret,
+				requestTimeoutMs: config.requestTimeoutMs,
+				gatewayId: this.config.gatewayId,
+				rateLimiter: this.rateLimiter,
+				adapter: config.adapter,
+			},
+			this.pipelineState,
+			routeHandlers,
+			this.metrics,
+			updateBufferGauges,
+		);
 	}
 
 	/**
@@ -393,206 +374,6 @@ export class GatewayServer {
 	}
 
 	// -----------------------------------------------------------------------
-	// Middleware pipeline construction
-	// -----------------------------------------------------------------------
-
-	/** Build the middleware pipeline executed for every request. */
-	private buildPipeline(): Middleware[] {
-		return [
-			this.corsPreflight.bind(this),
-			this.staticRoutes.bind(this),
-			this.drainGuard.bind(this),
-			this.requestTimeout.bind(this),
-			this.activeRequestTracking.bind(this),
-			this.routeMatching.bind(this),
-			this.authMiddleware.bind(this),
-			this.rateLimitMiddleware.bind(this),
-			this.routeDispatch.bind(this),
-		];
-	}
-
-	// -----------------------------------------------------------------------
-	// Middleware: CORS preflight
-	// -----------------------------------------------------------------------
-
-	private async corsPreflight(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
-		if (handlePreflight(ctx.method, ctx.res, ctx.corsHeaders)) return;
-		await next();
-	}
-
-	// -----------------------------------------------------------------------
-	// Middleware: Static routes (no auth, available during drain)
-	// -----------------------------------------------------------------------
-
-	private async staticRoutes(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
-		const { pathname, method, res, corsHeaders: corsH } = ctx;
-
-		if (pathname === "/health" && method === "GET") {
-			sendJson(res, { status: "ok" }, 200, corsH);
-			return;
-		}
-
-		if (pathname === "/ready" && method === "GET") {
-			await this.handleReady(res, corsH);
-			return;
-		}
-
-		if (pathname === "/metrics" && method === "GET") {
-			this.updateBufferGauges();
-			const body = this.metrics.expose();
-			res.writeHead(200, {
-				"Content-Type": "text/plain; version=0.0.4; charset=utf-8",
-				...corsH,
-			});
-			res.end(body);
-			return;
-		}
-
-		if (pathname === "/connectors/types" && method === "GET") {
-			const result = handleListConnectorTypes();
-			sendResult(res, result, corsH);
-			return;
-		}
-
-		await next();
-	}
-
-	// -----------------------------------------------------------------------
-	// Middleware: Drain guard
-	// -----------------------------------------------------------------------
-
-	private async drainGuard(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
-		if (this.draining) {
-			sendError(ctx.res, "Service is shutting down", 503, ctx.corsHeaders);
-			return;
-		}
-		await next();
-	}
-
-	// -----------------------------------------------------------------------
-	// Middleware: Request timeout
-	// -----------------------------------------------------------------------
-
-	private async requestTimeout(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
-		const timeoutMs = this.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-		ctx.res.setTimeout(timeoutMs, () => {
-			if (!ctx.res.writableEnded) {
-				sendError(ctx.res, "Request timeout", 504, ctx.corsHeaders);
-			}
-		});
-		await next();
-	}
-
-	// -----------------------------------------------------------------------
-	// Middleware: Active request tracking (for graceful shutdown)
-	// -----------------------------------------------------------------------
-
-	private async activeRequestTracking(
-		_ctx: RequestContext,
-		next: () => Promise<void>,
-	): Promise<void> {
-		this.activeRequests++;
-		try {
-			await next();
-		} finally {
-			this.activeRequests--;
-		}
-	}
-
-	// -----------------------------------------------------------------------
-	// Middleware: Route matching
-	// -----------------------------------------------------------------------
-
-	private async routeMatching(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
-		const route = matchRoute(ctx.pathname, ctx.method);
-		if (!route) {
-			sendError(ctx.res, "Not found", 404, ctx.corsHeaders);
-			return;
-		}
-
-		if (route.gatewayId !== this.config.gatewayId) {
-			sendError(ctx.res, "Gateway ID mismatch", 404, ctx.corsHeaders);
-			return;
-		}
-
-		ctx.route = route;
-		await next();
-	}
-
-	// -----------------------------------------------------------------------
-	// Middleware: Authentication
-	// -----------------------------------------------------------------------
-
-	private async authMiddleware(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
-		const route = ctx.route!;
-		const authResult = await authenticateRequest(
-			ctx.req,
-			route.gatewayId,
-			route.action,
-			this.config.jwtSecret,
-		);
-		if (!authResult.authenticated) {
-			sendError(ctx.res, authResult.message, authResult.status, ctx.corsHeaders);
-			return;
-		}
-		ctx.auth = this.config.jwtSecret ? authResult.claims : undefined;
-		await next();
-	}
-
-	// -----------------------------------------------------------------------
-	// Middleware: Rate limiting
-	// -----------------------------------------------------------------------
-
-	private async rateLimitMiddleware(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
-		if (this.rateLimiter) {
-			const clientKey = ctx.auth?.clientId ?? ctx.req.socket.remoteAddress ?? "unknown";
-			if (!this.rateLimiter.tryConsume(clientKey)) {
-				const retryAfter = this.rateLimiter.retryAfterSeconds(clientKey);
-				sendError(ctx.res, "Too many requests", 429, {
-					...ctx.corsHeaders,
-					"Retry-After": String(retryAfter),
-				});
-				return;
-			}
-		}
-		await next();
-	}
-
-	// -----------------------------------------------------------------------
-	// Middleware: Route dispatch (terminal — looks up handler from map)
-	// -----------------------------------------------------------------------
-
-	private async routeDispatch(ctx: RequestContext): Promise<void> {
-		const handler = this.routeHandlers[ctx.route!.action];
-		if (!handler) {
-			sendError(ctx.res, "Not found", 404, ctx.corsHeaders);
-			return;
-		}
-		await handler(ctx);
-	}
-
-	// -----------------------------------------------------------------------
-	// Data-driven route handler map
-	// -----------------------------------------------------------------------
-
-	/** Build the action -> handler map for route dispatch. */
-	private buildRouteHandlers(): Record<string, RouteHandler> {
-		return {
-			push: (ctx) => this.handlePush(ctx),
-			pull: (ctx) => this.handlePull(ctx),
-			action: (ctx) => this.handleAction(ctx),
-			"describe-actions": (ctx) => this.handleDescribeActions(ctx),
-			flush: (ctx) => this.handleFlush(ctx),
-			schema: (ctx) => this.handleSaveSchemaRoute(ctx),
-			"sync-rules": (ctx) => this.handleSaveSyncRulesRoute(ctx),
-			"register-connector": (ctx) => this.handleRegisterConnectorRoute(ctx),
-			"unregister-connector": (ctx) => this.handleUnregisterConnectorRoute(ctx),
-			"list-connectors": (ctx) => this.handleListConnectorsRoute(ctx),
-			metrics: (ctx) => this.handleMetricsRoute(ctx),
-		};
-	}
-
-	// -----------------------------------------------------------------------
 	// Request entry point — builds context and runs the pipeline
 	// -----------------------------------------------------------------------
 
@@ -626,150 +407,6 @@ export class GatewayServer {
 	}
 
 	// -----------------------------------------------------------------------
-	// Route handlers — thin wrappers delegating to shared handlers or modules
-	// -----------------------------------------------------------------------
-
-	private async handlePush(ctx: RequestContext): Promise<void> {
-		const { req, res, corsHeaders: corsH, auth, logger: reqLogger } = ctx;
-		const start = performance.now();
-		const contentLength = Number(req.headers["content-length"] ?? "0");
-		if (contentLength > MAX_PUSH_PAYLOAD_BYTES) {
-			this.metrics.pushTotal.inc({ status: "error" });
-			sendError(res, "Payload too large (max 1 MiB)", 413, corsH);
-			return;
-		}
-
-		const raw = await readBody(req);
-		const result = handlePushRequest(this.gateway, raw, auth?.clientId, {
-			persistBatch: (deltas) => this.persistence.appendBatch(deltas),
-			clearPersistence: () => this.persistence.clear(),
-			broadcastFn: (deltas, serverHlc, excludeClientId) =>
-				this.wsManager?.broadcastDeltas(deltas, serverHlc, excludeClientId),
-		});
-
-		// Shared buffer write-through for cross-instance visibility
-		if (result.status === 200 && this.sharedBuffer) {
-			const pushResult = result.body as { deltas: RowDelta[]; serverHlc: HLCTimestamp };
-			if (pushResult.deltas.length > 0) {
-				const writeResult = await this.sharedBuffer.writeThroughPush(pushResult.deltas);
-				if (!writeResult.ok) {
-					this.metrics.pushTotal.inc({ status: "error" });
-					sendError(res, writeResult.error.message, 502, corsH);
-					return;
-				}
-			}
-		}
-
-		const status = result.status === 200 ? "ok" : "error";
-		const durationMs = Math.round(performance.now() - start);
-		this.metrics.pushTotal.inc({ status });
-		this.metrics.pushLatency.observe({}, performance.now() - start);
-		this.updateBufferGauges();
-		reqLogger.info("push completed", { status: result.status, durationMs });
-
-		sendResult(res, result, corsH);
-	}
-
-	private async handlePull(ctx: RequestContext): Promise<void> {
-		const { url, res, corsHeaders: corsH, auth, logger: reqLogger } = ctx;
-		const syncRules = await this.configStore.getSyncRules(this.config.gatewayId);
-		const result = await handlePullRequest(
-			this.gateway,
-			{
-				since: url.searchParams.get("since"),
-				clientId: url.searchParams.get("clientId"),
-				limit: url.searchParams.get("limit"),
-				source: url.searchParams.get("source"),
-			},
-			auth?.customClaims,
-			syncRules,
-		);
-
-		// Merge with shared buffer for cross-instance visibility
-		let body = result.body;
-		if (result.status === 200 && this.sharedBuffer) {
-			const sinceParam = url.searchParams.get("since");
-			if (sinceParam) {
-				try {
-					const sinceHlc = BigInt(sinceParam) as HLCTimestamp;
-					body = await this.sharedBuffer.mergePull(body as SyncResponse, sinceHlc);
-				} catch {
-					// If since parsing fails, pull handler already returned an error
-				}
-			}
-		}
-
-		const pullStatus = result.status === 200 ? "ok" : "error";
-		this.metrics.pullTotal.inc({ status: pullStatus });
-		reqLogger.info("pull completed", { status: result.status });
-
-		sendJson(res, body, result.status, corsH);
-	}
-
-	private async handleAction(ctx: RequestContext): Promise<void> {
-		const { req, res, corsHeaders: corsH, auth } = ctx;
-		const raw = await readBody(req);
-		const result = await handleActionRequest(this.gateway, raw, auth?.clientId, auth?.customClaims);
-		sendResult(res, result, corsH);
-	}
-
-	private handleDescribeActions(ctx: RequestContext): void {
-		sendJson(ctx.res, this.gateway.describeActions(), 200, ctx.corsHeaders);
-	}
-
-	private async handleFlush(ctx: RequestContext): Promise<void> {
-		const { res, corsHeaders: corsH, logger: reqLogger } = ctx;
-		const start = performance.now();
-		const result = await handleFlushRequest(this.gateway, {
-			clearPersistence: () => this.persistence.clear(),
-		});
-		const durationMs = Math.round(performance.now() - start);
-		const status = result.status === 200 ? "ok" : "error";
-		this.metrics.flushTotal.inc({ status });
-		this.metrics.flushDuration.observe({}, performance.now() - start);
-		this.updateBufferGauges();
-		reqLogger.info("flush completed", { status: result.status, durationMs });
-		sendResult(res, result, corsH);
-	}
-
-	private async handleSaveSchemaRoute(ctx: RequestContext): Promise<void> {
-		const raw = await readBody(ctx.req);
-		const result = await handleSaveSchema(raw, this.configStore, this.config.gatewayId);
-		sendResult(ctx.res, result, ctx.corsHeaders);
-	}
-
-	private async handleSaveSyncRulesRoute(ctx: RequestContext): Promise<void> {
-		const raw = await readBody(ctx.req);
-		const result = await handleSaveSyncRules(raw, this.configStore, this.config.gatewayId);
-		sendResult(ctx.res, result, ctx.corsHeaders);
-	}
-
-	// -----------------------------------------------------------------------
-	// Connector management — delegates to ConnectorManager
-	// -----------------------------------------------------------------------
-
-	private async handleRegisterConnectorRoute(ctx: RequestContext): Promise<void> {
-		const raw = await readBody(ctx.req);
-		const result = await this.connectors.register(raw);
-		sendResult(ctx.res, result, ctx.corsHeaders);
-	}
-
-	private async handleUnregisterConnectorRoute(ctx: RequestContext): Promise<void> {
-		const result = await this.connectors.unregister(ctx.route!.connectorName!);
-		sendResult(ctx.res, result, ctx.corsHeaders);
-	}
-
-	private async handleListConnectorsRoute(ctx: RequestContext): Promise<void> {
-		const result = await this.connectors.list();
-		sendJson(ctx.res, result.body, result.status, ctx.corsHeaders);
-	}
-
-	private handleMetricsRoute(ctx: RequestContext): void {
-		const result = handleMetrics(this.gateway, { process: process.memoryUsage() });
-		sendResult(ctx.res, result, ctx.corsHeaders);
-	}
-
-	// -----------------------------------------------------------------------
 	// Buffer gauge helpers
 	// -----------------------------------------------------------------------
 
@@ -778,60 +415,6 @@ export class GatewayServer {
 		const stats = this.gateway.bufferStats;
 		this.metrics.bufferBytes.set({}, stats.byteSize);
 		this.metrics.bufferDeltas.set({}, stats.logSize);
-	}
-
-	// -----------------------------------------------------------------------
-	// Readiness probe
-	// -----------------------------------------------------------------------
-
-	/** Handle GET /ready — checks draining status and adapter health. */
-	private async handleReady(res: ServerResponse, corsH: Record<string, string>): Promise<void> {
-		if (this.draining) {
-			sendJson(res, { status: "not_ready", reason: "draining" }, 503, corsH);
-			return;
-		}
-
-		const adapterHealthy = await this.checkAdapterHealth();
-		if (!adapterHealthy) {
-			sendJson(res, { status: "not_ready", reason: "adapter unreachable" }, 503, corsH);
-			return;
-		}
-
-		sendJson(res, { status: "ready" }, 200, corsH);
-	}
-
-	/**
-	 * Check whether the configured adapter is reachable.
-	 *
-	 * For a DatabaseAdapter, attempts a lightweight query with a timeout.
-	 * For a LakeAdapter, attempts a headObject call (404 still means reachable).
-	 * Returns true when no adapter is configured (stateless mode).
-	 */
-	private async checkAdapterHealth(): Promise<boolean> {
-		const adapter = this.config.adapter;
-		if (!adapter) return true;
-
-		const timeoutMs = DEFAULT_ADAPTER_HEALTH_TIMEOUT_MS;
-		const timeoutPromise = new Promise<false>((resolve) => {
-			setTimeout(() => resolve(false), timeoutMs);
-		});
-
-		try {
-			if (isDatabaseAdapter(adapter)) {
-				const healthCheck = adapter
-					.queryDeltasSince(0n as HLCTimestamp, [])
-					.then((result) => result.ok);
-				return await Promise.race([healthCheck, timeoutPromise]);
-			}
-			// LakeAdapter — try headObject on a known key
-			const healthCheck = (adapter as LakeAdapter)
-				.headObject("__health__")
-				.then(() => true)
-				.catch(() => true); // S3 404 is still "reachable"
-			return await Promise.race([healthCheck, timeoutPromise]);
-		} catch {
-			return false;
-		}
 	}
 
 	// -----------------------------------------------------------------------

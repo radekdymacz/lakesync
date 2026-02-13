@@ -1,12 +1,14 @@
 import {
+	type DatabaseAdapter,
 	type FlushQueueError,
+	type LakeAdapter,
 	type Materialisable,
 	Ok,
 	type Result,
 	type RowDelta,
 	type TableSchema,
 } from "@lakesync/core";
-import { processMaterialisation } from "./materialisation-processor";
+import { collectMaterialisers, processMaterialisation } from "./materialisation-processor";
 
 /** Context passed alongside deltas when publishing to the flush queue. */
 export interface FlushContext {
@@ -71,4 +73,27 @@ export class MemoryFlushQueue implements FlushQueue {
 		});
 		return Ok(undefined);
 	}
+}
+
+/**
+ * Build a flush queue from config.
+ *
+ * When no explicit queue is provided, builds a `MemoryFlushQueue` from the
+ * adapter (if materialisable) and extra materialisers. Returns `undefined`
+ * when no materialisation targets exist.
+ */
+export function buildFlushQueue(
+	config: {
+		flushQueue?: FlushQueue;
+		materialisers?: ReadonlyArray<Materialisable>;
+		onMaterialisationFailure?: (table: string, deltaCount: number, error: Error) => void;
+	},
+	adapter: LakeAdapter | DatabaseAdapter | null,
+): FlushQueue | undefined {
+	if (config.flushQueue) return config.flushQueue;
+	const targets = collectMaterialisers(adapter, config.materialisers);
+	if (targets.length > 0) {
+		return new MemoryFlushQueue(targets, config.onMaterialisationFailure);
+	}
+	return undefined;
 }

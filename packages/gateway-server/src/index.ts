@@ -22,6 +22,7 @@ export {
 export {
 	type Middleware,
 	type RequestContext,
+	type RequestInput,
 	type RouteHandler,
 	runPipeline,
 } from "./middleware";
@@ -30,7 +31,18 @@ export {
 	MemoryPersistence,
 	SqlitePersistence,
 } from "./persistence";
+export {
+	buildServerPipeline,
+	type PipelineConfig,
+	type PipelineState,
+	sendError,
+	sendJson,
+} from "./pipeline";
 export { RateLimiter, type RateLimiterConfig } from "./rate-limiter";
+export {
+	buildServerRouteHandlers,
+	type RouteHandlerDeps,
+} from "./route-handlers";
 export { matchRoute, type RouteMatch } from "./router";
 export { GatewayServer, type GatewayServerConfig } from "./server";
 export {
