@@ -27,7 +27,6 @@ import {
 	MemoryConfigStore,
 	SyncGateway,
 } from "@lakesync/gateway";
-import type { AuthClaims } from "./auth";
 import { authenticateRequest } from "./auth-middleware";
 import type { DistributedLock } from "./cluster";
 import { ConnectorManager } from "./connector-manager";
@@ -36,6 +35,8 @@ import { SourcePoller } from "./ingest/poller";
 import type { IngestSourceConfig } from "./ingest/types";
 import { Logger, type LogLevel } from "./logger";
 import { MetricsRegistry } from "./metrics";
+import type { Middleware, RequestContext, RouteHandler } from "./middleware";
+import { runPipeline } from "./middleware";
 import { type DeltaPersistence, MemoryPersistence, SqlitePersistence } from "./persistence";
 import { RateLimiter, type RateLimiterConfig } from "./rate-limiter";
 import { matchRoute } from "./router";
@@ -168,8 +169,9 @@ function sendResult(
  * Self-hosted HTTP gateway server wrapping {@link SyncGateway}.
  *
  * Composes extracted modules: cors-middleware, auth-middleware, router,
- * ws-manager, and connector-manager. Request handling follows the
- * pipeline: cors -> auth -> route -> handler.
+ * ws-manager, and connector-manager. Request handling follows a
+ * middleware pipeline: cors -> static routes -> drain -> timeout ->
+ * route match -> auth -> rate limit -> dispatch.
  *
  * @example
  * ```ts
@@ -195,6 +197,8 @@ export class GatewayServer {
 	private readonly rateLimiter: RateLimiter | null;
 	private readonly logger: Logger;
 	private readonly metrics: MetricsRegistry;
+	private readonly pipeline: Middleware[];
+	private readonly routeHandlers: Record<string, RouteHandler>;
 
 	private httpServer: Server | null = null;
 	private wsManager: WebSocketManager | null = null;
@@ -253,6 +257,10 @@ export class GatewayServer {
 		this.rateLimiter = config.rateLimiter ? new RateLimiter(config.rateLimiter) : null;
 		this.logger = new Logger(config.logLevel ?? "info");
 		this.metrics = new MetricsRegistry();
+
+		// Build route handler map and middleware pipeline
+		this.routeHandlers = this.buildRouteHandlers();
+		this.pipeline = this.buildPipeline();
 	}
 
 	/**
@@ -385,31 +393,40 @@ export class GatewayServer {
 	}
 
 	// -----------------------------------------------------------------------
-	// Request handling — cors -> auth -> route -> handler
+	// Middleware pipeline construction
 	// -----------------------------------------------------------------------
 
-	private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		const method = req.method ?? "GET";
-		const rawUrl = req.url ?? "/";
-		const url = new URL(rawUrl, `http://${req.headers.host ?? "localhost"}`);
-		const pathname = url.pathname;
-		const origin = req.headers.origin ?? null;
-		const requestId = crypto.randomUUID();
-		const reqLogger = this.logger.child({ requestId, method, path: pathname });
+	/** Build the middleware pipeline executed for every request. */
+	private buildPipeline(): Middleware[] {
+		return [
+			this.corsPreflight.bind(this),
+			this.staticRoutes.bind(this),
+			this.drainGuard.bind(this),
+			this.requestTimeout.bind(this),
+			this.activeRequestTracking.bind(this),
+			this.routeMatching.bind(this),
+			this.authMiddleware.bind(this),
+			this.rateLimitMiddleware.bind(this),
+			this.routeDispatch.bind(this),
+		];
+	}
 
-		// Track active requests
-		this.metrics.activeRequests.inc();
-		res.on("close", () => {
-			this.metrics.activeRequests.dec();
-		});
+	// -----------------------------------------------------------------------
+	// Middleware: CORS preflight
+	// -----------------------------------------------------------------------
 
-		// Step 1: CORS headers
-		const corsH = corsHeaders(origin, { allowedOrigins: this.config.allowedOrigins });
+	private async corsPreflight(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
+		if (handlePreflight(ctx.method, ctx.res, ctx.corsHeaders)) return;
+		await next();
+	}
 
-		// Step 2: CORS preflight
-		if (handlePreflight(method, res, corsH)) return;
+	// -----------------------------------------------------------------------
+	// Middleware: Static routes (no auth, available during drain)
+	// -----------------------------------------------------------------------
 
-		// Step 3: Static routes (no auth) — always available even during drain
+	private async staticRoutes(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
+		const { pathname, method, res, corsHeaders: corsH } = ctx;
+
 		if (pathname === "/health" && method === "GET") {
 			sendJson(res, { status: "ok" }, 200, corsH);
 			return;
@@ -420,7 +437,6 @@ export class GatewayServer {
 			return;
 		}
 
-		// Prometheus metrics endpoint (no auth required)
 		if (pathname === "/metrics" && method === "GET") {
 			this.updateBufferGauges();
 			const body = this.metrics.expose();
@@ -438,128 +454,183 @@ export class GatewayServer {
 			return;
 		}
 
-		// Step 3b: Reject new requests during drain
+		await next();
+	}
+
+	// -----------------------------------------------------------------------
+	// Middleware: Drain guard
+	// -----------------------------------------------------------------------
+
+	private async drainGuard(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
 		if (this.draining) {
-			sendError(res, "Service is shutting down", 503, corsH);
+			sendError(ctx.res, "Service is shutting down", 503, ctx.corsHeaders);
 			return;
 		}
+		await next();
+	}
 
-		// Step 3c: Request timeout
+	// -----------------------------------------------------------------------
+	// Middleware: Request timeout
+	// -----------------------------------------------------------------------
+
+	private async requestTimeout(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
 		const timeoutMs = this.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-		res.setTimeout(timeoutMs, () => {
-			if (!res.writableEnded) {
-				sendError(res, "Request timeout", 504, corsH);
+		ctx.res.setTimeout(timeoutMs, () => {
+			if (!ctx.res.writableEnded) {
+				sendError(ctx.res, "Request timeout", 504, ctx.corsHeaders);
 			}
 		});
+		await next();
+	}
 
-		// Track active requests for graceful shutdown
+	// -----------------------------------------------------------------------
+	// Middleware: Active request tracking (for graceful shutdown)
+	// -----------------------------------------------------------------------
+
+	private async activeRequestTracking(
+		_ctx: RequestContext,
+		next: () => Promise<void>,
+	): Promise<void> {
 		this.activeRequests++;
 		try {
-			await this.dispatchRoute(req, res, method, url, pathname, corsH, reqLogger);
+			await next();
 		} finally {
 			this.activeRequests--;
 		}
 	}
 
-	/** Dispatch an authenticated request to the correct route handler. */
-	private async dispatchRoute(
-		req: IncomingMessage,
-		res: ServerResponse,
-		method: string,
-		url: URL,
-		pathname: string,
-		corsH: Record<string, string>,
-		reqLogger: Logger,
-	): Promise<void> {
-		// Step 4: Route matching
-		const route = matchRoute(pathname, method);
+	// -----------------------------------------------------------------------
+	// Middleware: Route matching
+	// -----------------------------------------------------------------------
+
+	private async routeMatching(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
+		const route = matchRoute(ctx.pathname, ctx.method);
 		if (!route) {
-			sendError(res, "Not found", 404, corsH);
+			sendError(ctx.res, "Not found", 404, ctx.corsHeaders);
 			return;
 		}
 
 		if (route.gatewayId !== this.config.gatewayId) {
-			sendError(res, "Gateway ID mismatch", 404, corsH);
+			sendError(ctx.res, "Gateway ID mismatch", 404, ctx.corsHeaders);
 			return;
 		}
 
-		// Step 5: Authentication
+		ctx.route = route;
+		await next();
+	}
+
+	// -----------------------------------------------------------------------
+	// Middleware: Authentication
+	// -----------------------------------------------------------------------
+
+	private async authMiddleware(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
+		const route = ctx.route!;
 		const authResult = await authenticateRequest(
-			req,
+			ctx.req,
 			route.gatewayId,
 			route.action,
 			this.config.jwtSecret,
 		);
 		if (!authResult.authenticated) {
-			sendError(res, authResult.message, authResult.status, corsH);
+			sendError(ctx.res, authResult.message, authResult.status, ctx.corsHeaders);
 			return;
 		}
-		const auth: AuthClaims | undefined = this.config.jwtSecret ? authResult.claims : undefined;
+		ctx.auth = this.config.jwtSecret ? authResult.claims : undefined;
+		await next();
+	}
 
-		// Step 5b: Rate limiting (after auth, before dispatch)
+	// -----------------------------------------------------------------------
+	// Middleware: Rate limiting
+	// -----------------------------------------------------------------------
+
+	private async rateLimitMiddleware(ctx: RequestContext, next: () => Promise<void>): Promise<void> {
 		if (this.rateLimiter) {
-			const clientKey = auth?.clientId ?? req.socket.remoteAddress ?? "unknown";
+			const clientKey = ctx.auth?.clientId ?? ctx.req.socket.remoteAddress ?? "unknown";
 			if (!this.rateLimiter.tryConsume(clientKey)) {
 				const retryAfter = this.rateLimiter.retryAfterSeconds(clientKey);
-				sendError(res, "Too many requests", 429, {
-					...corsH,
+				sendError(ctx.res, "Too many requests", 429, {
+					...ctx.corsHeaders,
 					"Retry-After": String(retryAfter),
 				});
 				return;
 			}
 		}
+		await next();
+	}
 
-		// Step 6: Route dispatch
-		switch (route.action) {
-			case "push":
-				await this.handlePush(req, res, corsH, auth, reqLogger);
-				break;
-			case "pull":
-				await this.handlePull(url, res, corsH, auth, reqLogger);
-				break;
-			case "action":
-				await this.handleAction(req, res, corsH, auth);
-				break;
-			case "describe-actions":
-				this.handleDescribeActions(res, corsH);
-				break;
-			case "flush":
-				await this.handleFlush(res, corsH, reqLogger);
-				break;
-			case "schema":
-				await this.handleSaveSchemaRoute(req, res, corsH);
-				break;
-			case "sync-rules":
-				await this.handleSaveSyncRulesRoute(req, res, corsH);
-				break;
-			case "register-connector":
-				await this.handleRegisterConnectorRoute(req, res, corsH);
-				break;
-			case "unregister-connector":
-				await this.handleUnregisterConnectorRoute(route.connectorName!, res, corsH);
-				break;
-			case "list-connectors":
-				await this.handleListConnectorsRoute(res, corsH);
-				break;
-			case "metrics":
-				this.handleMetricsRoute(res, corsH);
-				break;
-			default:
-				sendError(res, "Not found", 404, corsH);
+	// -----------------------------------------------------------------------
+	// Middleware: Route dispatch (terminal — looks up handler from map)
+	// -----------------------------------------------------------------------
+
+	private async routeDispatch(ctx: RequestContext): Promise<void> {
+		const handler = this.routeHandlers[ctx.route!.action];
+		if (!handler) {
+			sendError(ctx.res, "Not found", 404, ctx.corsHeaders);
+			return;
 		}
+		await handler(ctx);
+	}
+
+	// -----------------------------------------------------------------------
+	// Data-driven route handler map
+	// -----------------------------------------------------------------------
+
+	/** Build the action -> handler map for route dispatch. */
+	private buildRouteHandlers(): Record<string, RouteHandler> {
+		return {
+			push: (ctx) => this.handlePush(ctx),
+			pull: (ctx) => this.handlePull(ctx),
+			action: (ctx) => this.handleAction(ctx),
+			"describe-actions": (ctx) => this.handleDescribeActions(ctx),
+			flush: (ctx) => this.handleFlush(ctx),
+			schema: (ctx) => this.handleSaveSchemaRoute(ctx),
+			"sync-rules": (ctx) => this.handleSaveSyncRulesRoute(ctx),
+			"register-connector": (ctx) => this.handleRegisterConnectorRoute(ctx),
+			"unregister-connector": (ctx) => this.handleUnregisterConnectorRoute(ctx),
+			"list-connectors": (ctx) => this.handleListConnectorsRoute(ctx),
+			metrics: (ctx) => this.handleMetricsRoute(ctx),
+		};
+	}
+
+	// -----------------------------------------------------------------------
+	// Request entry point — builds context and runs the pipeline
+	// -----------------------------------------------------------------------
+
+	private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		const method = req.method ?? "GET";
+		const rawUrl = req.url ?? "/";
+		const url = new URL(rawUrl, `http://${req.headers.host ?? "localhost"}`);
+		const pathname = url.pathname;
+		const origin = req.headers.origin ?? null;
+		const requestId = crypto.randomUUID();
+		const reqLogger = this.logger.child({ requestId, method, path: pathname });
+
+		// Track active requests metric
+		this.metrics.activeRequests.inc();
+		res.on("close", () => {
+			this.metrics.activeRequests.dec();
+		});
+
+		const ctx: RequestContext = {
+			req,
+			res,
+			method,
+			url,
+			pathname,
+			requestId,
+			logger: reqLogger,
+			corsHeaders: corsHeaders(origin, { allowedOrigins: this.config.allowedOrigins }),
+		};
+
+		await runPipeline(this.pipeline, ctx);
 	}
 
 	// -----------------------------------------------------------------------
 	// Route handlers — thin wrappers delegating to shared handlers or modules
 	// -----------------------------------------------------------------------
 
-	private async handlePush(
-		req: IncomingMessage,
-		res: ServerResponse,
-		corsH: Record<string, string>,
-		auth?: AuthClaims,
-		reqLogger?: Logger,
-	): Promise<void> {
+	private async handlePush(ctx: RequestContext): Promise<void> {
+		const { req, res, corsHeaders: corsH, auth, logger: reqLogger } = ctx;
 		const start = performance.now();
 		const contentLength = Number(req.headers["content-length"] ?? "0");
 		if (contentLength > MAX_PUSH_PAYLOAD_BYTES) {
@@ -594,18 +665,13 @@ export class GatewayServer {
 		this.metrics.pushTotal.inc({ status });
 		this.metrics.pushLatency.observe({}, performance.now() - start);
 		this.updateBufferGauges();
-		reqLogger?.info("push completed", { status: result.status, durationMs });
+		reqLogger.info("push completed", { status: result.status, durationMs });
 
 		sendResult(res, result, corsH);
 	}
 
-	private async handlePull(
-		url: URL,
-		res: ServerResponse,
-		corsH: Record<string, string>,
-		auth?: AuthClaims,
-		reqLogger?: Logger,
-	): Promise<void> {
+	private async handlePull(ctx: RequestContext): Promise<void> {
+		const { url, res, corsHeaders: corsH, auth, logger: reqLogger } = ctx;
 		const syncRules = await this.configStore.getSyncRules(this.config.gatewayId);
 		const result = await handlePullRequest(
 			this.gateway,
@@ -635,31 +701,24 @@ export class GatewayServer {
 
 		const pullStatus = result.status === 200 ? "ok" : "error";
 		this.metrics.pullTotal.inc({ status: pullStatus });
-		reqLogger?.info("pull completed", { status: result.status });
+		reqLogger.info("pull completed", { status: result.status });
 
 		sendJson(res, body, result.status, corsH);
 	}
 
-	private async handleAction(
-		req: IncomingMessage,
-		res: ServerResponse,
-		corsH: Record<string, string>,
-		auth?: AuthClaims,
-	): Promise<void> {
+	private async handleAction(ctx: RequestContext): Promise<void> {
+		const { req, res, corsHeaders: corsH, auth } = ctx;
 		const raw = await readBody(req);
 		const result = await handleActionRequest(this.gateway, raw, auth?.clientId, auth?.customClaims);
 		sendResult(res, result, corsH);
 	}
 
-	private handleDescribeActions(res: ServerResponse, corsH: Record<string, string>): void {
-		sendJson(res, this.gateway.describeActions(), 200, corsH);
+	private handleDescribeActions(ctx: RequestContext): void {
+		sendJson(ctx.res, this.gateway.describeActions(), 200, ctx.corsHeaders);
 	}
 
-	private async handleFlush(
-		res: ServerResponse,
-		corsH: Record<string, string>,
-		reqLogger?: Logger,
-	): Promise<void> {
+	private async handleFlush(ctx: RequestContext): Promise<void> {
+		const { res, corsHeaders: corsH, logger: reqLogger } = ctx;
 		const start = performance.now();
 		const result = await handleFlushRequest(this.gateway, {
 			clearPersistence: () => this.persistence.clear(),
@@ -669,64 +728,45 @@ export class GatewayServer {
 		this.metrics.flushTotal.inc({ status });
 		this.metrics.flushDuration.observe({}, performance.now() - start);
 		this.updateBufferGauges();
-		reqLogger?.info("flush completed", { status: result.status, durationMs });
+		reqLogger.info("flush completed", { status: result.status, durationMs });
 		sendResult(res, result, corsH);
 	}
 
-	private async handleSaveSchemaRoute(
-		req: IncomingMessage,
-		res: ServerResponse,
-		corsH: Record<string, string>,
-	): Promise<void> {
-		const raw = await readBody(req);
+	private async handleSaveSchemaRoute(ctx: RequestContext): Promise<void> {
+		const raw = await readBody(ctx.req);
 		const result = await handleSaveSchema(raw, this.configStore, this.config.gatewayId);
-		sendResult(res, result, corsH);
+		sendResult(ctx.res, result, ctx.corsHeaders);
 	}
 
-	private async handleSaveSyncRulesRoute(
-		req: IncomingMessage,
-		res: ServerResponse,
-		corsH: Record<string, string>,
-	): Promise<void> {
-		const raw = await readBody(req);
+	private async handleSaveSyncRulesRoute(ctx: RequestContext): Promise<void> {
+		const raw = await readBody(ctx.req);
 		const result = await handleSaveSyncRules(raw, this.configStore, this.config.gatewayId);
-		sendResult(res, result, corsH);
+		sendResult(ctx.res, result, ctx.corsHeaders);
 	}
 
 	// -----------------------------------------------------------------------
 	// Connector management — delegates to ConnectorManager
 	// -----------------------------------------------------------------------
 
-	private async handleRegisterConnectorRoute(
-		req: IncomingMessage,
-		res: ServerResponse,
-		corsH: Record<string, string>,
-	): Promise<void> {
-		const raw = await readBody(req);
+	private async handleRegisterConnectorRoute(ctx: RequestContext): Promise<void> {
+		const raw = await readBody(ctx.req);
 		const result = await this.connectors.register(raw);
-		sendResult(res, result, corsH);
+		sendResult(ctx.res, result, ctx.corsHeaders);
 	}
 
-	private async handleUnregisterConnectorRoute(
-		name: string,
-		res: ServerResponse,
-		corsH: Record<string, string>,
-	): Promise<void> {
-		const result = await this.connectors.unregister(name);
-		sendResult(res, result, corsH);
+	private async handleUnregisterConnectorRoute(ctx: RequestContext): Promise<void> {
+		const result = await this.connectors.unregister(ctx.route!.connectorName!);
+		sendResult(ctx.res, result, ctx.corsHeaders);
 	}
 
-	private async handleListConnectorsRoute(
-		res: ServerResponse,
-		corsH: Record<string, string>,
-	): Promise<void> {
+	private async handleListConnectorsRoute(ctx: RequestContext): Promise<void> {
 		const result = await this.connectors.list();
-		sendJson(res, result.body, result.status, corsH);
+		sendJson(ctx.res, result.body, result.status, ctx.corsHeaders);
 	}
 
-	private handleMetricsRoute(res: ServerResponse, corsH: Record<string, string>): void {
+	private handleMetricsRoute(ctx: RequestContext): void {
 		const result = handleMetrics(this.gateway, { process: process.memoryUsage() });
-		sendResult(res, result, corsH);
+		sendResult(ctx.res, result, ctx.corsHeaders);
 	}
 
 	// -----------------------------------------------------------------------

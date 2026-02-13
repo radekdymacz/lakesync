@@ -86,6 +86,9 @@ const todoSchemas: TableSchema[] = [
 	{ table: "todos", columns: [{ name: "title", type: "string" }] },
 ];
 
+/** Drain the microtask queue so fire-and-forget publishToQueue completes. */
+const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
+
 describe("FlushCoordinator — materialisation via FlushQueue", () => {
 	it("calls materialise on the adapter when it is materialisable and flush succeeds", async () => {
 		const materialiseCalls: Array<{ deltas: RowDelta[]; schemas: TableSchema[] }> = [];
@@ -106,6 +109,7 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			schemas: todoSchemas,
 			flushQueue: buildFlushQueue(dbAdapter),
 		});
+		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
 		expect(materialiseCalls).toHaveLength(1);
@@ -140,6 +144,7 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			schemas: todoSchemas,
 			flushQueue: buildFlushQueue(dbAdapter, [extraMaterialiser]),
 		});
+		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
 		expect(adapterCalls).toHaveLength(1);
@@ -197,6 +202,7 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			schemas: todoSchemas,
 			flushQueue: buildFlushQueue(dbAdapter),
 		});
+		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
 		expect(warnSpy).toHaveBeenCalled();
@@ -221,6 +227,7 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			schemas: todoSchemas,
 			flushQueue: buildFlushQueue(dbAdapter),
 		});
+		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
 		expect(warnSpy).toHaveBeenCalled();
@@ -268,6 +275,7 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			schemas: todoSchemas,
 			flushQueue: buildFlushQueue(dbAdapter, undefined, onFailure),
 		});
+		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
 		expect(onFailure).toHaveBeenCalledTimes(1);
@@ -294,6 +302,7 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			schemas: todoSchemas,
 			flushQueue: buildFlushQueue(dbAdapter, undefined, onFailure),
 		});
+		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
 		expect(onFailure).not.toHaveBeenCalled();
@@ -319,6 +328,7 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			schemas: todoSchemas,
 			flushQueue: buildFlushQueue(dbAdapter, undefined, onFailure),
 		});
+		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
 		expect(onFailure).toHaveBeenCalledTimes(1);
@@ -346,6 +356,7 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			schemas: todoSchemas,
 			flushQueue: buildFlushQueue(dbAdapter),
 		});
+		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
 		expect(materialiseCalls).toHaveLength(1);

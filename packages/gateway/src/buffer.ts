@@ -43,79 +43,114 @@ function estimateDeltaBytes(delta: RowDelta): number {
 	return bytes;
 }
 
+/** Immutable snapshot of buffer state — swapped atomically on each mutation. */
+interface BufferSnapshot {
+	readonly log: ReadonlyArray<RowDelta>;
+	readonly index: ReadonlyMap<RowKey, RowDelta>;
+	readonly deltaIds: ReadonlySet<string>;
+	readonly estimatedBytes: number;
+	readonly createdAt: number;
+	readonly tableBytes: ReadonlyMap<string, number>;
+	readonly tableLog: ReadonlyMap<string, ReadonlyArray<RowDelta>>;
+}
+
+/** Create an empty buffer snapshot. */
+function emptySnapshot(): BufferSnapshot {
+	return {
+		log: [],
+		index: new Map(),
+		deltaIds: new Set(),
+		estimatedBytes: 0,
+		createdAt: Date.now(),
+		tableBytes: new Map(),
+		tableLog: new Map(),
+	};
+}
+
 /**
  * Dual-structure delta buffer.
  *
  * Maintains an append-only log for event streaming (pull) and flush,
  * plus a row-level index for O(1) conflict resolution lookups.
+ *
+ * All mutable state is held in a single {@link BufferSnapshot} that is
+ * swapped atomically on each mutation — no intermediate inconsistent
+ * state is possible.
  */
 export class DeltaBuffer {
-	private log: RowDelta[] = [];
-	private index: Map<RowKey, RowDelta> = new Map();
-	private deltaIds = new Set<string>();
-	private estimatedBytes = 0;
-	private createdAt: number = Date.now();
-	private tableBytes = new Map<string, number>();
-	private tableLog = new Map<string, RowDelta[]>();
+	private state: BufferSnapshot = emptySnapshot();
 
 	/** Append a delta to the log and upsert the index (post-conflict-resolution). */
 	append(delta: RowDelta): void {
-		this.log.push(delta);
+		const prev = this.state;
 		const key = rowKey(delta.table, delta.rowId);
-		this.index.set(key, delta);
-		this.deltaIds.add(delta.deltaId);
 		const bytes = estimateDeltaBytes(delta);
-		this.estimatedBytes += bytes;
-		// Per-table tracking
-		this.tableBytes.set(delta.table, (this.tableBytes.get(delta.table) ?? 0) + bytes);
-		const tableEntries = this.tableLog.get(delta.table);
-		if (tableEntries) {
-			tableEntries.push(delta);
-		} else {
-			this.tableLog.set(delta.table, [delta]);
-		}
+
+		const newLog = [...prev.log, delta];
+		const newIndex = new Map(prev.index);
+		newIndex.set(key, delta);
+		const newDeltaIds = new Set(prev.deltaIds);
+		newDeltaIds.add(delta.deltaId);
+		const newTableBytes = new Map(prev.tableBytes);
+		newTableBytes.set(delta.table, (newTableBytes.get(delta.table) ?? 0) + bytes);
+		const newTableLog = new Map(prev.tableLog);
+		const existingTableEntries = newTableLog.get(delta.table);
+		newTableLog.set(delta.table, existingTableEntries ? [...existingTableEntries, delta] : [delta]);
+
+		this.state = {
+			log: newLog,
+			index: newIndex,
+			deltaIds: newDeltaIds,
+			estimatedBytes: prev.estimatedBytes + bytes,
+			createdAt: prev.createdAt,
+			tableBytes: newTableBytes,
+			tableLog: newTableLog,
+		};
 	}
 
 	/** Get the current merged state for a row (for conflict resolution). */
 	getRow(key: RowKey): RowDelta | undefined {
-		return this.index.get(key);
+		return this.state.index.get(key);
 	}
 
 	/** Check if a delta with this ID already exists in the log (for idempotency). */
 	hasDelta(deltaId: string): boolean {
-		return this.deltaIds.has(deltaId);
+		return this.state.deltaIds.has(deltaId);
 	}
 
 	/** Return change events from the log since a given HLC. */
 	getEventsSince(hlc: HLCTimestamp, limit: number): { deltas: RowDelta[]; hasMore: boolean } {
+		const log = this.state.log;
 		let lo = 0;
-		let hi = this.log.length;
+		let hi = log.length;
 		while (lo < hi) {
 			const mid = (lo + hi) >>> 1;
-			if (HLC.compare(this.log[mid]!.hlc, hlc) <= 0) {
+			if (HLC.compare(log[mid]!.hlc, hlc) <= 0) {
 				lo = mid + 1;
 			} else {
 				hi = mid;
 			}
 		}
-		const hasMore = this.log.length - lo > limit;
-		return { deltas: this.log.slice(lo, lo + limit), hasMore };
+		const hasMore = log.length - lo > limit;
+		return { deltas: log.slice(lo, lo + limit) as RowDelta[], hasMore };
 	}
 
 	/** Check if the buffer should be flushed based on size or age thresholds. */
 	shouldFlush(config: { maxBytes: number; maxAgeMs: number }): boolean {
-		if (this.log.length === 0) return false;
-		return this.estimatedBytes >= config.maxBytes || Date.now() - this.createdAt >= config.maxAgeMs;
+		const { log, estimatedBytes, createdAt } = this.state;
+		if (log.length === 0) return false;
+		return estimatedBytes >= config.maxBytes || Date.now() - createdAt >= config.maxAgeMs;
 	}
 
 	/** Per-table buffer statistics. */
 	tableStats(): Array<{ table: string; byteSize: number; deltaCount: number }> {
+		const { tableBytes, tableLog } = this.state;
 		const stats: Array<{ table: string; byteSize: number; deltaCount: number }> = [];
-		for (const [table, bytes] of this.tableBytes) {
+		for (const [table, bytes] of tableBytes) {
 			stats.push({
 				table,
 				byteSize: bytes,
-				deltaCount: this.tableLog.get(table)?.length ?? 0,
+				deltaCount: tableLog.get(table)?.length ?? 0,
 			});
 		}
 		return stats;
@@ -123,25 +158,40 @@ export class DeltaBuffer {
 
 	/** Drain only the specified table's deltas, leaving other tables intact. */
 	drainTable(table: string): RowDelta[] {
-		const tableDeltas = this.tableLog.get(table) ?? [];
-		if (tableDeltas.length === 0) return [];
+		const prev = this.state;
+		const tableDeltas = prev.tableLog.get(table);
+		if (!tableDeltas || tableDeltas.length === 0) return [];
 
-		// Remove from main log
-		this.log = this.log.filter((d) => d.table !== table);
+		// Build new snapshot without the drained table
+		const drainedDeltaIds = new Set(tableDeltas.map((d) => d.deltaId));
+		const drainedRowKeys = new Set(tableDeltas.map((d) => rowKey(d.table, d.rowId)));
 
-		// Remove from index and deltaIds
-		for (const delta of tableDeltas) {
-			this.index.delete(rowKey(delta.table, delta.rowId));
-			this.deltaIds.delete(delta.deltaId);
+		const newLog = prev.log.filter((d) => d.table !== table);
+		const newIndex = new Map(prev.index);
+		for (const key of drainedRowKeys) {
+			newIndex.delete(key);
 		}
+		const newDeltaIds = new Set(prev.deltaIds);
+		for (const id of drainedDeltaIds) {
+			newDeltaIds.delete(id);
+		}
+		const tableByteSize = prev.tableBytes.get(table) ?? 0;
+		const newTableBytes = new Map(prev.tableBytes);
+		newTableBytes.delete(table);
+		const newTableLog = new Map(prev.tableLog);
+		newTableLog.delete(table);
 
-		// Adjust byte tracking
-		const tableByteSize = this.tableBytes.get(table) ?? 0;
-		this.estimatedBytes -= tableByteSize;
-		this.tableBytes.delete(table);
-		this.tableLog.delete(table);
+		this.state = {
+			log: newLog,
+			index: newIndex,
+			deltaIds: newDeltaIds,
+			estimatedBytes: prev.estimatedBytes - tableByteSize,
+			createdAt: prev.createdAt,
+			tableBytes: newTableBytes,
+			tableLog: newTableLog,
+		};
 
-		return tableDeltas;
+		return [...tableDeltas];
 	}
 
 	/**
@@ -152,18 +202,13 @@ export class DeltaBuffer {
 	 * transactional semantics.
 	 */
 	snapshot(): { entries: RowDelta[]; byteSize: number } {
-		return { entries: [...this.log], byteSize: this.estimatedBytes };
+		const { log, estimatedBytes } = this.state;
+		return { entries: [...log], byteSize: estimatedBytes };
 	}
 
 	/** Clear all buffer state. */
 	clear(): void {
-		this.log = [];
-		this.index.clear();
-		this.deltaIds.clear();
-		this.estimatedBytes = 0;
-		this.createdAt = Date.now();
-		this.tableBytes.clear();
-		this.tableLog.clear();
+		this.state = emptySnapshot();
 	}
 
 	/** Drain the log for flush. Returns log entries and clears both structures. */
@@ -175,21 +220,22 @@ export class DeltaBuffer {
 
 	/** Number of log entries */
 	get logSize(): number {
-		return this.log.length;
+		return this.state.log.length;
 	}
 
 	/** Number of unique rows in the index */
 	get indexSize(): number {
-		return this.index.size;
+		return this.state.index.size;
 	}
 
 	/** Estimated byte size of the buffer */
 	get byteSize(): number {
-		return this.estimatedBytes;
+		return this.state.estimatedBytes;
 	}
 
 	/** Average byte size per delta in the buffer (0 if empty). */
 	get averageDeltaBytes(): number {
-		return this.log.length === 0 ? 0 : this.estimatedBytes / this.log.length;
+		const { log, estimatedBytes } = this.state;
+		return log.length === 0 ? 0 : estimatedBytes / log.length;
 	}
 }

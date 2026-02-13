@@ -20,6 +20,12 @@ export {
 	MetricsRegistry,
 } from "./metrics";
 export {
+	type Middleware,
+	type RequestContext,
+	type RouteHandler,
+	runPipeline,
+} from "./middleware";
+export {
 	type DeltaPersistence,
 	MemoryPersistence,
 	SqlitePersistence,

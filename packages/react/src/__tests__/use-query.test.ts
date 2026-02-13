@@ -104,7 +104,7 @@ describe("useQuery", () => {
 		expect(result.current.data).toEqual([]);
 	});
 
-	it("re-runs query when dataVersion changes (onChange)", async () => {
+	it("re-runs query when onChange fires with matching table", async () => {
 		const coord = mockCoordinator({ ok: true, value: [{ _rowId: "1", text: "A", done: 0 }] });
 
 		const { result } = renderHook(() => useQuery<Todo>("SELECT * FROM todos"), {
@@ -117,7 +117,7 @@ describe("useQuery", () => {
 
 		expect(coord.tracker.query).toHaveBeenCalledTimes(1);
 
-		// Simulate remote sync — triggers onChange
+		// Simulate remote sync with table info
 		coord.tracker.query.mockResolvedValue({
 			ok: true,
 			value: [
@@ -126,6 +126,41 @@ describe("useQuery", () => {
 			],
 		});
 
+		act(() => {
+			for (const cb of coord._listeners.onChange) {
+				cb(1, ["todos"]);
+			}
+		});
+
+		await waitFor(() => {
+			expect(result.current.data).toHaveLength(2);
+		});
+
+		expect(coord.tracker.query).toHaveBeenCalledTimes(2);
+	});
+
+	it("re-runs query when onChange fires without table info (fallback)", async () => {
+		const coord = mockCoordinator({ ok: true, value: [{ _rowId: "1", text: "A", done: 0 }] });
+
+		const { result } = renderHook(() => useQuery<Todo>("SELECT * FROM todos"), {
+			wrapper: wrapper(coord),
+		});
+
+		await waitFor(() => {
+			expect(result.current.isLoading).toBe(false);
+		});
+
+		expect(coord.tracker.query).toHaveBeenCalledTimes(1);
+
+		coord.tracker.query.mockResolvedValue({
+			ok: true,
+			value: [
+				{ _rowId: "1", text: "A", done: 0 },
+				{ _rowId: "2", text: "B", done: 0 },
+			],
+		});
+
+		// Fire onChange without table info — should still re-run (fallback)
 		act(() => {
 			for (const cb of coord._listeners.onChange) {
 				cb(1);
@@ -137,6 +172,34 @@ describe("useQuery", () => {
 		});
 
 		expect(coord.tracker.query).toHaveBeenCalledTimes(2);
+	});
+
+	it("does NOT re-run query when onChange fires for a different table", async () => {
+		const coord = mockCoordinator({ ok: true, value: [{ _rowId: "1", text: "A", done: 0 }] });
+
+		const { result } = renderHook(() => useQuery<Todo>("SELECT * FROM todos"), {
+			wrapper: wrapper(coord),
+		});
+
+		await waitFor(() => {
+			expect(result.current.isLoading).toBe(false);
+		});
+
+		expect(coord.tracker.query).toHaveBeenCalledTimes(1);
+
+		// Simulate remote sync to "users" table — should NOT re-run a query on "todos"
+		act(() => {
+			for (const cb of coord._listeners.onChange) {
+				cb(1, ["users"]);
+			}
+		});
+
+		// Give React a chance to process; query count should stay at 1
+		await waitFor(() => {
+			expect(result.current.isLoading).toBe(false);
+		});
+
+		expect(coord.tracker.query).toHaveBeenCalledTimes(1);
 	});
 
 	it("re-runs query when sql changes", async () => {
@@ -190,6 +253,43 @@ describe("useQuery", () => {
 
 		await waitFor(() => {
 			expect(coord.tracker.query).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	it("re-runs for JOIN queries when either table changes", async () => {
+		const coord = mockCoordinator({ ok: true, value: [] });
+
+		const { result } = renderHook(
+			() => useQuery("SELECT t.*, u.name FROM todos t JOIN users u ON t.userId = u._rowId"),
+			{ wrapper: wrapper(coord) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.isLoading).toBe(false);
+		});
+
+		expect(coord.tracker.query).toHaveBeenCalledTimes(1);
+
+		// Delta to "users" should trigger re-run
+		act(() => {
+			for (const cb of coord._listeners.onChange) {
+				cb(1, ["users"]);
+			}
+		});
+
+		await waitFor(() => {
+			expect(coord.tracker.query).toHaveBeenCalledTimes(2);
+		});
+
+		// Delta to "todos" should also trigger re-run
+		act(() => {
+			for (const cb of coord._listeners.onChange) {
+				cb(1, ["todos"]);
+			}
+		});
+
+		await waitFor(() => {
+			expect(coord.tracker.query).toHaveBeenCalledTimes(3);
 		});
 	});
 });

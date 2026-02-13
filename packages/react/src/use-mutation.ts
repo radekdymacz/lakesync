@@ -20,12 +20,12 @@ export interface UseMutationResult {
 /**
  * Wraps SyncTracker mutations with automatic query invalidation.
  *
- * After each successful mutation, `dataVersion` is incremented so all
- * active `useQuery` hooks re-run.
+ * After each successful mutation, the affected table's version is
+ * incremented so only `useQuery` hooks reading from that table re-run.
  */
 export function useMutation(): UseMutationResult {
 	const { tracker } = useLakeSyncStable();
-	const { invalidate } = useLakeSyncData();
+	const { invalidateTables } = useLakeSyncData();
 
 	const insert = useCallback(
 		async (
@@ -34,10 +34,10 @@ export function useMutation(): UseMutationResult {
 			data: Record<string, unknown>,
 		): Promise<Result<void, LakeSyncError>> => {
 			const result = await tracker.insert(table, rowId, data);
-			if (result.ok) invalidate();
+			if (result.ok) invalidateTables([table]);
 			return result;
 		},
-		[tracker, invalidate],
+		[tracker, invalidateTables],
 	);
 
 	const update = useCallback(
@@ -47,19 +47,19 @@ export function useMutation(): UseMutationResult {
 			data: Record<string, unknown>,
 		): Promise<Result<void, LakeSyncError>> => {
 			const result = await tracker.update(table, rowId, data);
-			if (result.ok) invalidate();
+			if (result.ok) invalidateTables([table]);
 			return result;
 		},
-		[tracker, invalidate],
+		[tracker, invalidateTables],
 	);
 
 	const remove = useCallback(
 		async (table: string, rowId: string): Promise<Result<void, LakeSyncError>> => {
 			const result = await tracker.delete(table, rowId);
-			if (result.ok) invalidate();
+			if (result.ok) invalidateTables([table]);
 			return result;
 		},
-		[tracker, invalidate],
+		[tracker, invalidateTables],
 	);
 
 	return { insert, update, remove };

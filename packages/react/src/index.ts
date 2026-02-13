@@ -5,6 +5,7 @@ export type {
 	LakeSyncStableContextValue,
 } from "./context";
 export { LakeSyncProvider, useLakeSync, useLakeSyncData, useLakeSyncStable } from "./context";
+export { extractTables } from "./extract-tables";
 export type { ActionParams, UseActionDiscoveryResult, UseActionResult } from "./use-action";
 export { useAction, useActionDiscovery } from "./use-action";
 export type { UseConnectorTypesResult } from "./use-connector-types";

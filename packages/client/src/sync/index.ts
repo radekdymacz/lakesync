@@ -8,6 +8,7 @@ export {
 	type SyncMode,
 	type SyncState,
 } from "./coordinator";
+export { SyncEngine, type SyncEngineConfig } from "./engine";
 export { SchemaSynchroniser } from "./schema-sync";
 export {
 	PullFirstStrategy,

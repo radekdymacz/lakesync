@@ -50,7 +50,7 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - `Result<T, E>` — never throw from public APIs
 - `HLCTimestamp` = branded bigint (48-bit wall + 16-bit counter)
 - Column-level LWW with clientId tiebreak
-- DeltaBuffer = dual structure (log + index)
+- DeltaBuffer = atomic `BufferSnapshot` pattern (immutable state swapped atomically, like SchemaManager)
 - Deterministic deltaId via SHA-256 of stable-stringified payload
 - `TableSchema` = `{ table: string; columns: Array<{ name: string; type: ... }> }`
 
@@ -108,7 +108,8 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 
 ### Client SDK (packages/client)
 - LocalDB: sql.js WASM + IndexedDB snapshot persistence
-- SyncCoordinator: push/pull orchestration, auto-sync (10s interval + visibility)
+- `SyncEngine`: pure sync operations (push, pull, syncOnce) extracted from coordinator. `syncOnce()` is an explicit pull-then-push transaction — ordering is structural, not temporal.
+- `SyncCoordinator`: composes `SyncEngine` + `AutoSyncScheduler` + event system. Delegates sync to engine, handles scheduling/lifecycle. Exposes `readonly engine: SyncEngine` for advanced consumers.
 - SyncTracker: wraps LocalDB + queue + HLC; insert/update/delete with auto delta extraction
 - Transport interfaces are split by capability: `SyncTransport` (core push/pull, required), `CheckpointTransport` (checkpoint downloads for initial sync), `RealtimeTransport` (WebSocket real-time broadcast), `ActionTransport` (imperative action execution)
 - `TransportWithCapabilities = SyncTransport & Partial<CheckpointTransport> & Partial<RealtimeTransport> & Partial<ActionTransport>`
@@ -130,15 +131,18 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 ### Gateway (packages/gateway)
 - `SyncGateway`: thin facade composing `DeltaBuffer`, `ActionDispatcher`, `SchemaManager`, and `flushEntries`
 - `SyncGateway.rehydrate(deltas)`: restores persisted deltas without push validation
-- `DeltaBuffer`: dual structure (log + index) with byte-size tracking, per-table stats, and age-based flush
+- `DeltaBuffer`: atomic `BufferSnapshot` pattern — immutable state (log, index, deltaIds, bytes, tableStats) swapped atomically on each mutation. Same pattern as `SchemaSnapshot`.
 - `ActionDispatcher`: dispatches imperative actions to registered `ActionHandler`s with idempotency
 - `SchemaManager`: schema versioning, delta validation, safe evolution (add nullable columns only). Uses atomic `SchemaSnapshot` pattern (single state object swapped atomically).
 - `ConfigStore` / `MemoryConfigStore`: stores sync rules, schemas, and connector configs
+- `FlushCoordinator`: queue publish is fire-and-forget — flush returns immediately after adapter write, materialisation runs asynchronously via `FlushQueue`
 - `flushEntries`: unified flush module — handles both Lake (Parquet/JSON) and Database adapter paths, auto-materialise
 - Shared request handlers (`handlePushRequest`, `handlePullRequest`, etc.) used by both gateway-worker and gateway-server
 
 ### Gateway Server (packages/gateway-server)
 - Self-hosted gateway server wrapping SyncGateway in a node:http server (works in Node.js and Bun)
+- Middleware pipeline architecture: `runPipeline()` composes independent middleware (CORS, auth, drain guard, timeout, rate limit, route matching, dispatch). Each middleware is a focused `(context, next)` function.
+- Data-driven route dispatch: `Record<string, RouteHandler>` map built by `buildRouteHandlers()` — routes are data, dispatch is a map lookup. Open for extension.
 - Routes mirror gateway-worker: /sync/:id/push, /sync/:id/pull, /sync/:id/action, /sync/:id/actions, /sync/:id/ws, /admin/flush/:id, /admin/schema/:id, /admin/sync-rules/:id, /admin/connectors/:id, /admin/metrics/:id, /health
 - Optional JWT auth (HMAC-SHA256) when `jwtSecret` is provided
 - CORS support with configurable origins
@@ -166,9 +170,9 @@ TurboRepo + Bun. Packages in `packages/`, apps in `apps/`.
 - Serve endpoint: `GET /sync/:gatewayId/checkpoint` with JWT-claim filtering
 
 ### React Hooks (packages/react)
-- `LakeSyncProvider`: context provider wrapping `SyncCoordinator`; maintains a `dataVersion` counter incremented on every remote delta
-- `useQuery<T>(sql, params?)`: reactive SQL query hook — re-runs on remote deltas, local mutations, or param changes
-- `useMutation()`: wraps `SyncTracker.insert/update/delete` with automatic `dataVersion` invalidation
+- `LakeSyncProvider`: context provider wrapping `SyncCoordinator`; maintains per-table `tableVersions` map + `globalVersion` fallback for table-scoped reactivity
+- `useQuery<T>(sql, params?)`: reactive SQL query hook with table-scoped reactivity — extracts table names from SQL via `extractTables()`, only re-runs when affected tables change (not on every delta)
+- `useMutation()`: wraps `SyncTracker.insert/update/delete` with table-scoped invalidation via `invalidateTables([table])`
 - `useAction()`: executes imperative actions via `SyncCoordinator.executeAction()`, tracks `lastResult` and `isPending`
 - `useActionDiscovery()`: fetches available connectors and their supported action types from the gateway
 - `useSyncStatus()`: observes sync lifecycle — `isSyncing`, `lastSyncTime`, `queueDepth`, `error`
@@ -209,7 +213,7 @@ For SEQUENTIAL tasks: execute one at a time.
 - Adapter tests skip cleanly without Docker (top-level await + describe.skipIf)
 - Multi-client tests need a shared monotonic clock — `Date.now()` HLCs are flaky within fast tests (same ms). Use `createSharedClock()` injected into gateway + all coordinators
 - Gateway HLC is private — override post-construction: `(gateway as any).hlc = new HLC(clock)`
-- SyncCoordinator advances `lastSyncedHlc` on push via `serverHlc` — pull-before-push is the correct sync pattern
+- `SyncEngine.syncOnce()` enforces pull-before-push structurally — ordering is built into the transaction, not a convention
 - todo-app tsconfig must exclude `__tests__/` to avoid tsc errors on vitest globals
 - gateway-worker: ALL routes except /health require JWT (including admin routes)
 - gateway-worker flush route is `/admin/flush/:gatewayId` (not `/sync/`)

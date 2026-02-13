@@ -6,18 +6,16 @@ import {
 	HLC,
 	type HLCTimestamp,
 	type LakeSyncError,
-	LWWResolver,
 	type Result,
-	type RowDelta,
 } from "@lakesync/core";
 import type { LocalDB } from "../db/local-db";
 import type { ActionQueue } from "../queue/action-types";
 import { IDBQueue } from "../queue/idb-queue";
 import type { SyncQueue } from "../queue/types";
 import { ActionProcessor } from "./action-processor";
-import { applyRemoteDeltas } from "./applier";
 import { AutoSyncScheduler } from "./auto-sync";
-import { PullFirstStrategy, type SyncContext, type SyncStrategy } from "./strategy";
+import { SyncEngine } from "./engine";
+import { PullFirstStrategy, type SyncStrategy } from "./strategy";
 import { SyncTracker } from "./tracker";
 import type { TransportWithCapabilities } from "./transport";
 
@@ -84,26 +82,18 @@ const REALTIME_HEARTBEAT_MS = 60_000;
  * Uses a {@link TransportWithCapabilities} abstraction to communicate with the gateway,
  * allowing both in-process (LocalTransport) and remote (HttpTransport) usage.
  *
- * Delegates auto-sync scheduling to {@link AutoSyncScheduler} and action
- * processing to {@link ActionProcessor}.
+ * Composes {@link SyncEngine} for core sync operations,
+ * {@link AutoSyncScheduler} for periodic sync, and
+ * {@link ActionProcessor} for imperative action execution.
  */
 export class SyncCoordinator {
 	readonly tracker: SyncTracker;
-	private readonly queue: SyncQueue;
-	private readonly hlc: HLC;
+	/** The underlying sync engine for advanced consumers. */
+	readonly engine: SyncEngine;
 	private readonly transport: TransportWithCapabilities;
-	private readonly db: LocalDB;
-	private readonly resolver = new LWWResolver();
-	private readonly _clientId: string;
-	private readonly maxRetries: number;
-	private readonly syncMode: SyncMode;
-	private lastSyncedHlc = HLC.encode(0, 0);
-	private _lastSyncTime: Date | null = null;
-	private syncing = false;
 	private _online = true;
 	private onlineHandler: (() => void) | null = null;
 	private offlineHandler: (() => void) | null = null;
-	private readonly strategy: SyncStrategy;
 	private readonly autoSyncScheduler: AutoSyncScheduler;
 	private readonly actionProcessor: ActionProcessor | null;
 	private listeners: { [K in keyof SyncEvents]: Array<SyncEvents[K]> } = {
@@ -115,15 +105,35 @@ export class SyncCoordinator {
 	};
 
 	constructor(db: LocalDB, transport: TransportWithCapabilities, config?: SyncCoordinatorConfig) {
-		this.db = db;
 		this.transport = transport;
-		this.hlc = config?.hlc ?? new HLC();
-		this.queue = config?.queue ?? new IDBQueue();
-		this._clientId = config?.clientId ?? `client-${crypto.randomUUID()}`;
-		this.maxRetries = config?.maxRetries ?? 10;
-		this.syncMode = config?.syncMode ?? "full";
-		this.strategy = config?.strategy ?? new PullFirstStrategy();
-		this.tracker = new SyncTracker(db, this.queue, this.hlc, this._clientId);
+		const hlc = config?.hlc ?? new HLC();
+		const queue = config?.queue ?? new IDBQueue();
+		const clientId = config?.clientId ?? `client-${crypto.randomUUID()}`;
+
+		// Create the sync engine
+		this.engine = new SyncEngine({
+			db,
+			transport,
+			queue,
+			hlc,
+			clientId,
+			maxRetries: config?.maxRetries ?? 10,
+			syncMode: config?.syncMode ?? "full",
+			strategy: config?.strategy ?? new PullFirstStrategy(),
+		});
+
+		// Wire engine callbacks to coordinator events
+		this.engine.onRemoteDeltasApplied = (count) => {
+			this.emit("onChange", count);
+		};
+		this.engine.onDeadLetter = (count) => {
+			this.emit(
+				"onError",
+				new Error(`Dead-lettered ${count} entries after ${config?.maxRetries ?? 10} retries`),
+			);
+		};
+
+		this.tracker = new SyncTracker(db, queue, hlc, clientId);
 
 		// Compute auto-sync interval
 		const autoSyncIntervalMs = config?.autoSyncIntervalMs ?? AUTO_SYNC_INTERVAL_MS;
@@ -137,8 +147,8 @@ export class SyncCoordinator {
 			this.actionProcessor = new ActionProcessor({
 				actionQueue: config.actionQueue,
 				transport,
-				clientId: this._clientId,
-				hlc: this.hlc,
+				clientId,
+				hlc,
 				maxRetries: config?.maxActionRetries ?? 5,
 			});
 			this.actionProcessor.setOnComplete((actionId, result) => {
@@ -151,7 +161,9 @@ export class SyncCoordinator {
 		// Register broadcast handler for realtime transports
 		if (this.transport.onBroadcast) {
 			this.transport.onBroadcast((deltas, serverHlc) => {
-				void this.handleBroadcast(deltas, serverHlc);
+				void this.engine.handleBroadcast(deltas, serverHlc).catch((err) => {
+					this.emit("onError", err instanceof Error ? err : new Error(String(err)));
+				});
 			});
 		}
 	}
@@ -183,9 +195,9 @@ export class SyncCoordinator {
 	/** Readable snapshot of the current sync state. */
 	get state(): SyncState {
 		return {
-			syncing: this.syncing,
-			lastSyncTime: this._lastSyncTime,
-			lastSyncedHlc: this.lastSyncedHlc,
+			syncing: this.engine.syncing,
+			lastSyncTime: this.engine.lastSyncTime,
+			lastSyncedHlc: this.engine.lastSyncedHlc,
 		};
 	}
 
@@ -196,42 +208,7 @@ export class SyncCoordinator {
 
 	/** Push pending deltas to the gateway via the transport */
 	async pushToGateway(): Promise<void> {
-		const peekResult = await this.queue.peek(100);
-		if (!peekResult.ok || peekResult.value.length === 0) return;
-
-		// Dead-letter entries that exceeded max retries
-		const deadLettered = peekResult.value.filter((e) => e.retryCount >= this.maxRetries);
-		const entries = peekResult.value.filter((e) => e.retryCount < this.maxRetries);
-
-		if (deadLettered.length > 0) {
-			console.warn(
-				`[SyncCoordinator] Dead-lettering ${deadLettered.length} entries after ${this.maxRetries} retries`,
-			);
-			await this.queue.ack(deadLettered.map((e) => e.id));
-			this.emit(
-				"onError",
-				new Error(`Dead-lettered ${deadLettered.length} entries after ${this.maxRetries} retries`),
-			);
-		}
-
-		if (entries.length === 0) return;
-
-		const ids = entries.map((e) => e.id);
-		await this.queue.markSending(ids);
-
-		const pushResult = await this.transport.push({
-			clientId: this._clientId,
-			deltas: entries.map((e) => e.delta),
-			lastSeenHlc: this.hlc.now(),
-		});
-
-		if (pushResult.ok) {
-			await this.queue.ack(ids);
-			this.lastSyncedHlc = pushResult.value.serverHlc;
-			this._lastSyncTime = new Date();
-		} else {
-			await this.queue.nack(ids);
-		}
+		return this.engine.push();
 	}
 
 	/**
@@ -242,74 +219,27 @@ export class SyncCoordinator {
 	 * pull instead of a buffer pull.
 	 */
 	async pullFrom(source: string): Promise<number> {
-		return this.pullFromGateway(source);
+		return this.engine.pullFrom(source);
 	}
 
 	/** Pull remote deltas from the gateway and apply them */
 	async pullFromGateway(source?: string): Promise<number> {
-		const pullResult = await this.transport.pull({
-			clientId: this._clientId,
-			sinceHlc: this.lastSyncedHlc,
-			maxDeltas: 1000,
-			source,
-		});
-
-		if (!pullResult.ok || pullResult.value.deltas.length === 0) return 0;
-
-		const { deltas, serverHlc } = pullResult.value;
-		const applyResult = await applyRemoteDeltas(this.db, deltas, this.resolver, this.queue);
-
-		if (applyResult.ok) {
-			this.lastSyncedHlc = serverHlc;
-			this._lastSyncTime = new Date();
-			if (applyResult.value > 0) {
-				this.emit("onChange", applyResult.value);
-			}
-			return applyResult.value;
-		}
-		return 0;
-	}
-
-	/**
-	 * Handle a server-initiated broadcast of deltas.
-	 *
-	 * Applies the deltas using the same conflict resolution and idempotency
-	 * logic as a regular pull. Advances `lastSyncedHlc` and emits `onChange`.
-	 */
-	private async handleBroadcast(deltas: RowDelta[], serverHlc: HLCTimestamp): Promise<void> {
-		if (deltas.length === 0) return;
-
-		try {
-			const applyResult = await applyRemoteDeltas(this.db, deltas, this.resolver, this.queue);
-
-			if (applyResult.ok) {
-				if (HLC.compare(serverHlc, this.lastSyncedHlc) > 0) {
-					this.lastSyncedHlc = serverHlc;
-				}
-				this._lastSyncTime = new Date();
-				if (applyResult.value > 0) {
-					this.emit("onChange", applyResult.value);
-				}
-			}
-		} catch (err) {
-			this.emit("onError", err instanceof Error ? err : new Error(String(err)));
-		}
+		return this.engine.pull(source);
 	}
 
 	/** Get the queue depth */
 	async queueDepth(): Promise<number> {
-		const result = await this.queue.depth();
-		return result.ok ? result.value : 0;
+		return this.engine.queueDepth();
 	}
 
 	/** Get the client identifier */
 	get clientId(): string {
-		return this._clientId;
+		return this.engine.clientId;
 	}
 
 	/** Get the last successful sync time, or null if never synced */
 	get lastSyncTime(): Date | null {
-		return this._lastSyncTime;
+		return this.engine.lastSyncTime;
 	}
 
 	/**
@@ -324,52 +254,17 @@ export class SyncCoordinator {
 		this.setupOnlineListeners();
 	}
 
-	/**
-	 * Perform initial sync via checkpoint download.
-	 *
-	 * Called on first sync when `lastSyncedHlc` is zero. Downloads the
-	 * server's checkpoint (which is pre-filtered by JWT claims server-side),
-	 * applies the deltas locally, and advances the sync cursor to the
-	 * snapshot's HLC. If no checkpoint is available or the transport does
-	 * not support checkpoints, falls back to incremental pull.
-	 */
-	private async initialSync(): Promise<void> {
-		if (!this.transport.checkpoint) return;
-		const result = await this.transport.checkpoint();
-		if (!result.ok || result.value === null) return;
-		const { deltas, snapshotHlc } = result.value;
-		if (deltas.length > 0) {
-			await applyRemoteDeltas(this.db, deltas, this.resolver, this.queue);
-		}
-		this.lastSyncedHlc = snapshotHlc;
-		this._lastSyncTime = new Date();
-	}
-
-	/** Build a {@link SyncContext} exposing sync operations for the current cycle. */
-	private createSyncContext(): SyncContext {
-		return {
-			isFirstSync: this.lastSyncedHlc === HLC.encode(0, 0),
-			syncMode: this.syncMode,
-			initialSync: () => this.initialSync(),
-			pull: () => this.pullFromGateway(),
-			push: () => this.pushToGateway(),
-			processActions: () => this.processActionQueue(),
-		};
-	}
-
 	/** Perform a single sync cycle (push + pull + actions, depending on syncMode). */
 	async syncOnce(): Promise<void> {
-		if (this.syncing) return;
 		if (!this._online) return;
-		this.syncing = true;
 		this.emit("onSyncStart");
 		try {
-			await this.strategy.execute(this.createSyncContext());
-			this.emit("onSyncComplete");
+			const ran = await this.engine.syncOnce(() => this.processActionQueue());
+			if (ran) {
+				this.emit("onSyncComplete");
+			}
 		} catch (err) {
 			this.emit("onError", err instanceof Error ? err : new Error(String(err)));
-		} finally {
-			this.syncing = false;
 		}
 	}
 

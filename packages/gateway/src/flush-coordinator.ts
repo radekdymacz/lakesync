@@ -79,7 +79,7 @@ export class FlushCoordinator {
 			});
 
 			if (result.ok && deps.flushQueue) {
-				await this.publishToQueue(entries, deps);
+				void this.publishToQueue(entries, deps);
 			}
 
 			return result;
@@ -128,7 +128,7 @@ export class FlushCoordinator {
 			);
 
 			if (result.ok && deps.flushQueue) {
-				await this.publishToQueue(entries, deps);
+				void this.publishToQueue(entries, deps);
 			}
 
 			return result;

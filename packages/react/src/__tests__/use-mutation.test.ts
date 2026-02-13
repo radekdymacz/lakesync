@@ -135,4 +135,19 @@ describe("useMutation", () => {
 
 		expect(result.current.ctx.dataVersion).toBe(versionBefore);
 	});
+
+	it("insert invalidates only the affected table", async () => {
+		const coord = mockCoordinator();
+
+		const { result } = renderHook(() => ({ mutation: useMutation(), ctx: useLakeSync() }), {
+			wrapper: wrapper(coord),
+		});
+
+		await act(async () => {
+			await result.current.mutation.insert("todos", "row-1", { text: "Buy milk" });
+		});
+
+		expect(result.current.ctx.tableVersions.get("todos")).toBe(1);
+		expect(result.current.ctx.tableVersions.has("users")).toBe(false);
+	});
 });

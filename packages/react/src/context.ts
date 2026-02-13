@@ -19,8 +19,18 @@ export interface LakeSyncStableContextValue {
 export interface LakeSyncDataContextValue {
 	/** Monotonically increasing counter — bumped on every data change. */
 	dataVersion: number;
-	/** Increment dataVersion to trigger query re-runs. */
+	/**
+	 * Global version counter — bumped when table info is unavailable.
+	 * Used by `useQuery` as a fallback to ensure all queries re-run
+	 * when the specific affected tables are unknown.
+	 */
+	globalVersion: number;
+	/** Per-table version counters — bumped only for affected tables. */
+	tableVersions: ReadonlyMap<string, number>;
+	/** Increment dataVersion to trigger query re-runs (all tables). */
 	invalidate: () => void;
+	/** Increment version for specific tables only. */
+	invalidateTables: (tables: string[]) => void;
 }
 
 /**
@@ -48,6 +58,10 @@ export interface LakeSyncProviderProps {
  * `dataVersion` counter that increments on every remote delta application,
  * triggering reactive query re-runs in `useQuery`.
  *
+ * Also maintains per-table version counters (`tableVersions`) so that
+ * `useQuery` can subscribe to only the tables it reads from, avoiding
+ * unnecessary re-renders when unrelated tables change.
+ *
  * Uses a split context pattern: stable refs (coordinator, tracker) are
  * provided separately from reactive data (dataVersion) so that hooks
  * like `useSyncStatus` and `useAction` do not re-render on data changes.
@@ -55,20 +69,38 @@ export interface LakeSyncProviderProps {
 export function LakeSyncProvider(props: LakeSyncProviderProps) {
 	const { coordinator, children } = props;
 	const [dataVersion, setDataVersion] = useState(0);
+	const [globalVersion, setGlobalVersion] = useState(0);
+	const [tableVersions, setTableVersions] = useState<ReadonlyMap<string, number>>(new Map());
+
+	const invalidateTables = useCallback((tables: string[]) => {
+		setDataVersion((v) => v + 1);
+		setTableVersions((prev) => {
+			const next = new Map(prev);
+			for (const table of tables) {
+				next.set(table, (next.get(table) ?? 0) + 1);
+			}
+			return next;
+		});
+	}, []);
 
 	const invalidate = useCallback(() => {
 		setDataVersion((v) => v + 1);
+		setGlobalVersion((v) => v + 1);
 	}, []);
 
 	useEffect(() => {
-		const handleChange = () => {
-			setDataVersion((v) => v + 1);
+		const handleChange = (_count: number, tables?: string[]) => {
+			if (tables && tables.length > 0) {
+				invalidateTables(tables);
+			} else {
+				invalidate();
+			}
 		};
 		coordinator.on("onChange", handleChange);
 		return () => {
 			coordinator.off("onChange", handleChange);
 		};
-	}, [coordinator]);
+	}, [coordinator, invalidate, invalidateTables]);
 
 	const stableValue = useMemo<LakeSyncStableContextValue>(
 		() => ({
@@ -81,9 +113,12 @@ export function LakeSyncProvider(props: LakeSyncProviderProps) {
 	const dataValue = useMemo<LakeSyncDataContextValue>(
 		() => ({
 			dataVersion,
+			globalVersion,
+			tableVersions,
 			invalidate,
+			invalidateTables,
 		}),
-		[dataVersion, invalidate],
+		[dataVersion, globalVersion, tableVersions, invalidate, invalidateTables],
 	);
 
 	return createElement(
@@ -110,7 +145,7 @@ export function useLakeSyncStable(): LakeSyncStableContextValue {
 }
 
 /**
- * Access reactive data (dataVersion, invalidate) from context.
+ * Access reactive data (dataVersion, tableVersions, invalidate) from context.
  *
  * @throws if called outside a `<LakeSyncProvider>`.
  */

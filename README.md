@@ -229,7 +229,7 @@ function TodoList() {
 }
 ```
 
-Queries re-run automatically when remote deltas arrive. Actions dispatch imperative operations to connectors. `useActionDiscovery()` enables dynamic UI based on registered action handlers.
+Queries re-run automatically when affected tables change — `useQuery` extracts table names from SQL and only re-renders when relevant deltas arrive, not on every sync. Actions dispatch imperative operations to connectors. `useActionDiscovery()` enables dynamic UI based on registered action handlers.
 
 ## Quick Start
 
@@ -376,7 +376,7 @@ graph TB
 - **Pluggable adapters** — `LakeAdapter` (object storage) and `DatabaseAdapter` (SQL) interfaces. Swap backends at the gateway level.
 - **HLC timestamps** (branded bigints) — 48-bit wall clock + 16-bit counter, monotonic ordering across distributed clients without coordination
 - **Deterministic delta IDs** — SHA-256 hash of `(clientId, hlc, table, rowId, columns)` enables idempotent push
-- **DeltaBuffer** — dual structure (append log + row index) gives O(1) conflict checks and O(n) flush
+- **DeltaBuffer** — atomic `BufferSnapshot` pattern (append log + row index) swapped atomically on each mutation, giving O(1) conflict checks and O(n) flush with no intermediate inconsistent state
 - **Result\<T, E\>** everywhere — no exceptions cross API boundaries; all errors are typed and composable
 - **Adapter composition** — `CompositeAdapter` (route by table), `FanOutAdapter` (replicate writes), `LifecycleAdapter` (hot/cold tiers). All implement `DatabaseAdapter` so they nest freely.
 - **Table sharding** — split a tenant's traffic across multiple Durable Objects by table name. The shard router fans out pushes and merges pull results automatically.
@@ -386,16 +386,17 @@ graph TB
 - **Source polling** — two strategies for change detection: cursor-based (e.g. Jira's `updated` field) and diff-based (snapshot comparison for APIs without cursor support). Both use memory-bounded accumulation with configurable chunk size and memory budget.
 - **Actions** — imperative operations dispatched through the gateway to connector-registered `ActionHandler`s. Supports idempotency, discovery, and validation. Decoupled from sync — actions go to external systems, deltas come back.
 - **Materialise** — opt-in `Materialisable` interface for adapters that can project deltas into queryable destination tables. Auto-invoked after flush. Hybrid column model: synced columns + `props JSONB` + `synced_at`.
-- **Gateway decomposition** — `SyncGateway` is a thin facade composing `DeltaBuffer` (append log + row index), `ActionDispatcher` (action routing + idempotency), `SchemaManager` (validation), and `flushEntries` (adapter flush).
+- **SyncEngine extraction** — pure sync operations (`push`, `pull`, `syncOnce`) are extracted into a `SyncEngine` class. `syncOnce()` is an explicit pull-then-push transaction — ordering is structural, not a convention. `SyncCoordinator` composes the engine with scheduling and lifecycle.
+- **Gateway decomposition** — `SyncGateway` is a thin facade composing `DeltaBuffer` (atomic snapshot pattern), `ActionDispatcher` (action routing + idempotency), `SchemaManager` (validation), and `FlushCoordinator` (fire-and-forget queue publish). `GatewayServer` uses a middleware pipeline with data-driven route dispatch.
 
 ## Packages
 
 | Package | Description |
 |---------|-------------|
 | [`@lakesync/core`](packages/core) | HLC timestamps, delta types, LWW conflict resolution, sync rules, Result type |
-| [`@lakesync/client`](packages/client) | Client SDK: SyncCoordinator, SyncTracker, LocalDB, transports, queues, initial sync |
+| [`@lakesync/client`](packages/client) | Client SDK: SyncEngine, SyncCoordinator, SyncTracker, LocalDB, transports, queues, initial sync |
 | [`@lakesync/gateway`](packages/gateway) | Sync gateway: SyncGateway facade, DeltaBuffer, ActionDispatcher, SchemaManager, adapter-sourced pull |
-| [`@lakesync/gateway-server`](packages/gateway-server) | Self-hosted gateway server (Node.js / Bun) with SQLite persistence, JWT auth, and WebSocket support |
+| [`@lakesync/gateway-server`](packages/gateway-server) | Self-hosted gateway server (Node.js / Bun) with middleware pipeline, SQLite persistence, JWT auth, and WebSocket support |
 | [`@lakesync/adapter`](packages/adapter) | Storage adapters: MinIO/S3, Postgres, MySQL, BigQuery, Composite, FanOut, Lifecycle, migration tooling |
 | [`@lakesync/proto`](packages/proto) | Protobuf codec for the wire protocol |
 | [`@lakesync/parquet`](packages/parquet) | Parquet read/write via parquet-wasm |

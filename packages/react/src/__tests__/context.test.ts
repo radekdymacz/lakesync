@@ -126,4 +126,64 @@ describe("LakeSyncProvider + useLakeSync", () => {
 
 		expect(result.current.dataVersion).toBe(1);
 	});
+
+	it("provides tableVersions map in context", () => {
+		const coord = mockCoordinator();
+		const { result } = renderHook(() => useLakeSync(), {
+			wrapper: wrapper(coord),
+		});
+
+		expect(result.current.tableVersions).toBeInstanceOf(Map);
+		expect(result.current.tableVersions.size).toBe(0);
+	});
+
+	it("bumps specific table versions when onChange fires with tables", () => {
+		const coord = mockCoordinator();
+		const { result } = renderHook(() => useLakeSync(), {
+			wrapper: wrapper(coord),
+		});
+
+		act(() => {
+			for (const cb of coord._listeners.onChange) {
+				cb(1, ["todos"]);
+			}
+		});
+
+		expect(result.current.tableVersions.get("todos")).toBe(1);
+		expect(result.current.tableVersions.has("users")).toBe(false);
+	});
+
+	it("bumps globalVersion when onChange fires without tables", () => {
+		const coord = mockCoordinator();
+		const { result } = renderHook(() => useLakeSync(), {
+			wrapper: wrapper(coord),
+		});
+
+		expect(result.current.globalVersion).toBe(0);
+
+		// Fire onChange without tables — should bump globalVersion
+		act(() => {
+			for (const cb of coord._listeners.onChange) {
+				cb(1);
+			}
+		});
+
+		expect(result.current.globalVersion).toBe(1);
+		expect(result.current.dataVersion).toBe(1);
+	});
+
+	it("invalidateTables bumps only specified tables", () => {
+		const coord = mockCoordinator();
+		const { result } = renderHook(() => useLakeSync(), {
+			wrapper: wrapper(coord),
+		});
+
+		act(() => {
+			result.current.invalidateTables(["todos"]);
+		});
+
+		expect(result.current.tableVersions.get("todos")).toBe(1);
+		expect(result.current.tableVersions.has("users")).toBe(false);
+		expect(result.current.dataVersion).toBe(1);
+	});
 });
