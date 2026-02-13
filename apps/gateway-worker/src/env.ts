@@ -14,4 +14,6 @@ export interface Env {
 	SHARD_CONFIG?: string;
 	/** Optional maximum buffer size in bytes (overrides the default 4 MiB). */
 	MAX_BUFFER_BYTES?: string;
+	/** Optional CF Queue binding for async materialisation. */
+	MATERIALISE_QUEUE?: Queue;
 }

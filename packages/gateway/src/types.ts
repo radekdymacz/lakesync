@@ -8,6 +8,7 @@ import type {
 	RowDelta,
 	TableSchema,
 } from "@lakesync/core";
+import type { FlushQueue } from "./flush-queue";
 import type { SchemaManager } from "./schema-manager";
 
 /** Result returned by {@link SyncGateway.handlePush}. */
@@ -61,6 +62,15 @@ export interface GatewayConfig extends BufferConfig {
 	schemas?: ReadonlyArray<TableSchema>;
 	/** Additional materialisers invoked after successful flush (non-fatal). */
 	materialisers?: ReadonlyArray<Materialisable>;
+	/**
+	 * Optional flush queue for post-flush materialisation.
+	 *
+	 * When not provided, a `MemoryFlushQueue` is created automatically
+	 * from the adapter (if materialisable) and `materialisers`.
+	 */
+	flushQueue?: FlushQueue;
+	/** Optional callback invoked when materialisation fails. Useful for metrics/alerting. */
+	onMaterialisationFailure?: (table: string, deltaCount: number, error: Error) => void;
 }
 
 /** Gateway runtime state */

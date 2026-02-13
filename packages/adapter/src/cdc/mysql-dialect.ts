@@ -305,7 +305,6 @@ export class MySqlCdcDialect implements CdcDialect {
 		};
 
 		const buildJsonColumns = (prefix: string): string => {
-			const args = columns.map((c) => `'${c}', ${prefix}.\`${c}\``).join(", ");
 			return `JSON_ARRAY(${columns.map((c) => `JSON_OBJECT('column', '${c}', 'value', ${prefix}.\`${c}\`)`).join(", ")})`;
 		};
 
@@ -378,10 +377,7 @@ export function parseChangelogRows(rows: ChangelogRow[]): CdcRawChange[] {
  *
  * Exported for unit testing.
  */
-export function extractColumnsFromJson(
-	json: string | null,
-	op: string,
-): ColumnDelta[] {
+export function extractColumnsFromJson(json: string | null, op: string): ColumnDelta[] {
 	if (op === "delete" || json === null) return [];
 
 	const parsed: unknown = typeof json === "string" ? JSON.parse(json) : json;
@@ -389,12 +385,7 @@ export function extractColumnsFromJson(
 
 	const columns: ColumnDelta[] = [];
 	for (const entry of parsed) {
-		if (
-			typeof entry === "object" &&
-			entry !== null &&
-			"column" in entry &&
-			"value" in entry
-		) {
+		if (typeof entry === "object" && entry !== null && "column" in entry && "value" in entry) {
 			columns.push({
 				column: String((entry as { column: unknown }).column),
 				value: (entry as { value: unknown }).value ?? null,

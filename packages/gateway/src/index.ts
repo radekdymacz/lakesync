@@ -27,6 +27,12 @@ export {
 	hlcRange,
 } from "./flush";
 export { FlushCoordinator, type FlushCoordinatorDeps } from "./flush-coordinator";
+export {
+	type FlushContext,
+	type FlushQueue,
+	isFlushQueue,
+	MemoryFlushQueue,
+} from "./flush-queue";
 export { SyncGateway, type SyncPull, type SyncPush, type SyncResponse } from "./gateway";
 export {
 	type CachedActionResult,
@@ -35,6 +41,12 @@ export {
 	MemoryIdempotencyCache,
 } from "./idempotency-cache";
 export { bigintReplacer, bigintReviver } from "./json";
+export {
+	collectMaterialisers,
+	type MaterialisationProcessorConfig,
+	processMaterialisation,
+} from "./materialisation-processor";
+export { R2FlushQueue } from "./r2-flush-queue";
 export {
 	type HandlerResult,
 	handleActionRequest,

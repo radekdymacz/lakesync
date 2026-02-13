@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>LakeSync Cloud — Universal Data Sync, Backup & Analytics</title>
+	<meta name="description" content="Declare what data goes where. The engine handles the rest. Sync, backup, migrate, and analyse data across SQL, SaaS, files, and AI — all from one platform." />
+
+	<!-- Open Graph -->
+	<meta property="og:type" content="website" />
+	<meta property="og:url" content="https://lakesync.cloud" />
+	<meta property="og:title" content="LakeSync Cloud — Declare what data goes where" />
+	<meta property="og:description" content="Sync, backup, migrate, and analyse data across SQL databases, SaaS tools, file stores, and AI systems — all from one managed platform." />
+	<meta property="og:image" content="https://lakesync.cloud/og-image.png" />
+	<meta property="og:image:width" content="1500" />
+	<meta property="og:image:height" content="788" />
+	<meta property="og:site_name" content="LakeSync" />
+
+	<!-- Twitter / X -->
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:title" content="LakeSync Cloud — Declare what data goes where" />
+	<meta name="twitter:description" content="Sync, backup, migrate, and analyse data across SQL databases, SaaS tools, file stores, and AI systems — all from one managed platform." />
+	<meta name="twitter:image" content="https://lakesync.cloud/og-image.png" />
+	<script src="https://cdn.tailwindcss.com"></script>
+	<script>
+		tailwind.config = {
+			darkMode: 'class',
+			theme: {
+				extend: {
+					fontFamily: {
+						sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI Adjusted', 'Segoe UI', 'Liberation Sans', 'sans-serif'],
+						mono: ['SFMono-Regular', 'Menlo', 'Consolas', 'PT Mono', 'Liberation Mono', 'Courier', 'monospace'],
+					},
+					colors: {
+						notion: {
+							text: '#37352f',
+							'text-secondary': 'rgba(55, 53, 47, 0.65)',
+							'text-tertiary': 'rgba(55, 53, 47, 0.5)',
+							bg: '#ffffff',
+							'bg-secondary': '#f7f6f3',
+							'bg-tertiary': '#fbfbfa',
+							hover: 'rgba(55, 53, 47, 0.08)',
+							border: 'rgba(55, 53, 47, 0.16)',
+							'border-light': 'rgba(55, 53, 47, 0.09)',
+							blue: '#2383e2',
+						},
+					},
+				},
+			},
+		}
+	</script>
+	<style>
+		:root {
+			--bg: #ffffff;
+			--bg-secondary: #f7f6f3;
+			--fg: #37352f;
+			--fg-secondary: rgba(55, 53, 47, 0.65);
+			--fg-tertiary: rgba(55, 53, 47, 0.5);
+			--border: rgba(55, 53, 47, 0.16);
+			--border-light: rgba(55, 53, 47, 0.09);
+			--accent: #2383e2;
+		}
+		.dark {
+			--bg: #191919;
+			--bg-secondary: #202020;
+			--fg: rgba(255, 255, 255, 0.9);
+			--fg-secondary: rgba(255, 255, 255, 0.6);
+			--fg-tertiary: rgba(255, 255, 255, 0.4);
+			--border: rgba(255, 255, 255, 0.13);
+			--border-light: rgba(255, 255, 255, 0.07);
+			--accent: #529cca;
+		}
+		html { scroll-behavior: smooth; }
+		body {
+			background: var(--bg);
+			color: var(--fg);
+			transition: background 0.2s, color 0.2s;
+		}
+		.code-block {
+			background: #1e1e1e;
+			color: #d4d4d4;
+		}
+		.code-block .kw { color: #569cd6; }
+		.code-block .str { color: #ce9178; }
+		.code-block .fn { color: #dcdcaa; }
+		.code-block .cm { color: #6a9955; }
+		.code-block .num { color: #b5cea8; }
+		.code-block .type { color: #4ec9b0; }
+		.code-block .op { color: #d4d4d4; }
+
+		@keyframes fadeUp {
+			from { opacity: 0; transform: translateY(20px); }
+			to { opacity: 1; transform: translateY(0); }
+		}
+		.animate-fade-up {
+			animation: fadeUp 0.6s ease-out forwards;
+		}
+		.animate-fade-up-delay {
+			animation: fadeUp 0.6s ease-out 0.15s forwards;
+			opacity: 0;
+		}
+		.animate-fade-up-delay-2 {
+			animation: fadeUp 0.6s ease-out 0.3s forwards;
+			opacity: 0;
+		}
+
+		/* Scrollbar */
+		pre::-webkit-scrollbar { height: 6px; }
+		pre::-webkit-scrollbar-track { background: transparent; }
+		pre::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+	</style>
+</head>
+<body class="font-sans antialiased">
+
+	<!-- Nav -->
+	<nav id="nav" class="fixed top-0 left-0 right-0 z-50 transition-all duration-200">
+		<div class="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+			<!-- Logo -->
+			<a href="/" class="flex items-center gap-2.5">
+				<div class="w-7 h-7 rounded-md bg-neutral-900 dark:bg-white flex items-center justify-center">
+					<span class="text-white dark:text-neutral-900 text-xs font-bold tracking-tight">LS</span>
+				</div>
+				<span class="font-semibold text-[15px]">LakeSync</span>
+			</a>
+
+			<!-- Links -->
+			<div class="hidden sm:flex items-center gap-6 text-sm" style="color: var(--fg-secondary)">
+				<a href="#features" class="hover:text-[--fg] transition-colors">Features</a>
+				<a href="#use-cases" class="hover:text-[--fg] transition-colors">Use Cases</a>
+				<a href="/docs" class="hover:text-[--fg] transition-colors">Docs</a>
+			</div>
+
+			<!-- Right -->
+			<div class="flex items-center gap-3">
+				<button id="theme-toggle" class="w-8 h-8 flex items-center justify-center rounded-md hover:bg-[--bg-secondary] transition-colors" style="color: var(--fg-secondary)">
+					<svg id="icon-sun" class="w-4 h-4 hidden dark:block" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+					<svg id="icon-moon" class="w-4 h-4 block dark:hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+				</button>
+				<a href="#waitlist" class="hidden sm:inline-flex h-8 px-3.5 items-center rounded-md bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-sm font-medium hover:bg-neutral-800 dark:hover:bg-neutral-100 transition-colors">
+					Get Started
+				</a>
+			</div>
+		</div>
+	</nav>
+
+	<!-- Hero -->
+	<section class="min-h-[90vh] flex items-center justify-center pt-14">
+		<div class="max-w-5xl mx-auto px-6 py-24 text-center">
+			<h1 class="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-[1.1] animate-fade-up">
+				Declare what data goes where.
+				<br />
+				<span style="color: var(--fg-tertiary)">The engine handles the rest.</span>
+			</h1>
+			<p class="mt-6 text-lg sm:text-xl max-w-2xl mx-auto leading-relaxed animate-fade-up-delay" style="color: var(--fg-secondary)">
+				Sync, backup, migrate, and analyse data across SQL databases, SaaS tools, file stores, and AI systems — all from one managed platform.
+			</p>
+			<div class="mt-10 flex items-center justify-center gap-4 animate-fade-up-delay-2">
+				<a href="#waitlist" class="h-11 px-6 inline-flex items-center rounded-md bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 font-medium hover:bg-neutral-800 dark:hover:bg-neutral-100 transition-colors">
+					Get Started Free
+					<svg class="ml-2 w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+				</a>
+				<a href="/docs" class="h-11 px-6 inline-flex items-center rounded-md font-medium border transition-colors hover:bg-[--bg-secondary]" style="border-color: var(--border)">
+					<svg class="mr-2 w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+					View Docs
+				</a>
+			</div>
+			<p class="mt-4 text-sm" style="color: var(--fg-tertiary)">No credit card required. Free tier included.</p>
+		</div>
+	</section>
+
+	<!-- Code Example -->
+	<section class="py-16">
+		<div class="max-w-3xl mx-auto px-6">
+			<div class="code-block rounded-xl overflow-hidden shadow-lg">
+				<div class="flex items-center gap-2 px-4 py-3 border-b border-white/10">
+					<div class="w-3 h-3 rounded-full bg-white/20"></div>
+					<div class="w-3 h-3 rounded-full bg-white/20"></div>
+					<div class="w-3 h-3 rounded-full bg-white/20"></div>
+					<span class="ml-2 text-xs text-white/40">app.ts</span>
+				</div>
+				<pre class="p-5 text-sm leading-relaxed overflow-x-auto"><code><span class="kw">import</span> { <span class="fn">createClient</span> } <span class="kw">from</span> <span class="str">"lakesync"</span>;
+
+<span class="kw">const</span> client = <span class="kw">await</span> <span class="fn">createClient</span>({
+  <span class="op">schemas:</span> [{ <span class="op">table:</span> <span class="str">"orders"</span>, <span class="op">columns:</span> [...] }],
+  <span class="op">gateway:</span> {
+    <span class="op">url:</span> <span class="str">"https://api.lakesync.cloud"</span>,  <span class="cm">// we run the infra</span>
+    <span class="op">gatewayId:</span> <span class="str">"your-project-id"</span>,
+    <span class="op">token:</span> apiToken,
+  },
+});
+
+<span class="cm">// That's it. Data syncs automatically.</span>
+<span class="kw">const</span> orders = client.<span class="fn">query</span>(<span class="str">"SELECT * FROM orders"</span>);</code></pre>
+			</div>
+		</div>
+	</section>
+
+	<!-- Data Categories -->
+	<section id="features" class="py-20">
+		<div class="max-w-5xl mx-auto px-6">
+			<h2 class="text-3xl sm:text-4xl font-bold text-center tracking-tight">
+				One engine for all your data
+			</h2>
+			<p class="mt-4 text-center text-lg max-w-xl mx-auto" style="color: var(--fg-secondary)">
+				SQL databases, SaaS tools, file stores, AI systems. LakeSync bridges them all.
+			</p>
+			<div class="mt-16 grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+				<!-- SQL Data -->
+				<div class="rounded-xl p-6 border transition-colors" style="border-color: var(--border-light); background: var(--bg-secondary)">
+					<div class="w-10 h-10 rounded-lg flex items-center justify-center mb-4" style="background: rgba(35, 131, 226, 0.1)">
+						<svg class="w-5 h-5" style="color: #2383e2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+					</div>
+					<h3 class="font-semibold text-[15px]">SQL Data</h3>
+					<p class="mt-2 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+						Postgres, MySQL, BigQuery. Sync between databases, materialise into destination tables, migrate without downtime.
+					</p>
+				</div>
+				<!-- SaaS Data -->
+				<div class="rounded-xl p-6 border transition-colors" style="border-color: var(--border-light); background: var(--bg-secondary)">
+					<div class="w-10 h-10 rounded-lg flex items-center justify-center mb-4" style="background: rgba(155, 81, 224, 0.1)">
+						<svg class="w-5 h-5" style="color: #9b51e0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+					</div>
+					<h3 class="font-semibold text-[15px]">SaaS Data</h3>
+					<p class="mt-2 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+						Jira, Salesforce, GitHub, Stripe. Continuous backup to Iceberg. Restore complex API objects from flat snapshots.
+					</p>
+				</div>
+				<!-- File Data -->
+				<div class="rounded-xl p-6 border transition-colors" style="border-color: var(--border-light); background: var(--bg-secondary)">
+					<div class="w-10 h-10 rounded-lg flex items-center justify-center mb-4" style="background: rgba(39, 174, 96, 0.1)">
+						<svg class="w-5 h-5" style="color: #27ae60" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+					</div>
+					<h3 class="font-semibold text-[15px]">File Data</h3>
+					<p class="mt-2 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+						S3, R2, Iceberg, Parquet. Immutable lakehouse storage with zero egress fees. Query backups directly with DuckDB.
+					</p>
+				</div>
+				<!-- AI Data -->
+				<div class="rounded-xl p-6 border transition-colors" style="border-color: var(--border-light); background: var(--bg-secondary)">
+					<div class="w-10 h-10 rounded-lg flex items-center justify-center mb-4" style="background: rgba(242, 153, 74, 0.1)">
+						<svg class="w-5 h-5" style="color: #f2994a" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.57-3.25 3.92L12 22"/><path d="M12 2a4 4 0 0 0-4 4c0 1.95 1.4 3.57 3.25 3.92"/><path d="M5 10c0 2.76 3.13 5 7 5s7-2.24 7-5"/></svg>
+					</div>
+					<h3 class="font-semibold text-[15px]">AI Data</h3>
+					<p class="mt-2 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+						Keep vector databases in sync with production. Feed agents filtered subsets of live data. Embeddings always current.
+					</p>
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<!-- Use Cases -->
+	<section id="use-cases" class="py-20" style="background: var(--bg-secondary)">
+		<div class="max-w-5xl mx-auto px-6">
+			<h2 class="text-3xl sm:text-4xl font-bold text-center tracking-tight">
+				Use cases
+			</h2>
+			<p class="mt-4 text-center text-lg max-w-xl mx-auto" style="color: var(--fg-secondary)">
+				Features usually locked behind expensive enterprise tools. Yours out of the box.
+			</p>
+			<div class="mt-14 space-y-4">
+				<!-- Resilience -->
+				<div class="rounded-xl border overflow-hidden" style="border-color: var(--border-light); background: var(--bg)">
+					<div class="px-6 py-4 flex items-center gap-3 border-b" style="border-color: var(--border-light)">
+						<span class="text-xs font-semibold uppercase tracking-wider px-2.5 py-1 rounded-md" style="background: rgba(35, 131, 226, 0.1); color: #2383e2;">Resilience</span>
+					</div>
+					<div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x" style="border-color: var(--border-light)">
+						<div class="px-6 py-5">
+							<h4 class="font-semibold text-sm">Continuous Backup</h4>
+							<p class="mt-1.5 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+								RDS, Cloud SQL, SaaS tools &rarr; immutable Iceberg snapshots on R2. Time-machine recovery at a fraction of cloud backup cost.
+							</p>
+						</div>
+						<div class="px-6 py-5">
+							<h4 class="font-semibold text-sm">SaaS Restore</h4>
+							<p class="mt-1.5 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+								Translate flat Parquet rows back into complex SaaS API objects. Restore Jira issues, GitHub repos, or Salesforce records from your lake.
+							</p>
+						</div>
+					</div>
+				</div>
+
+				<!-- Analytics -->
+				<div class="rounded-xl border overflow-hidden" style="border-color: var(--border-light); background: var(--bg)">
+					<div class="px-6 py-4 flex items-center gap-3 border-b" style="border-color: var(--border-light)">
+						<span class="text-xs font-semibold uppercase tracking-wider px-2.5 py-1 rounded-md" style="background: rgba(39, 174, 96, 0.1); color: #27ae60;">Analytics</span>
+					</div>
+					<div class="px-6 py-5">
+						<h4 class="font-semibold text-sm">Cold Analytics</h4>
+						<p class="mt-1.5 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+							Query your backups directly with SQL via DuckDB or BigQuery. No warehouse needed — your lake is already queryable.
+						</p>
+					</div>
+				</div>
+
+				<!-- AI / ML -->
+				<div class="rounded-xl border overflow-hidden" style="border-color: var(--border-light); background: var(--bg)">
+					<div class="px-6 py-4 flex items-center gap-3 border-b" style="border-color: var(--border-light)">
+						<span class="text-xs font-semibold uppercase tracking-wider px-2.5 py-1 rounded-md" style="background: rgba(242, 153, 74, 0.1); color: #f2994a;">AI / ML</span>
+					</div>
+					<div class="px-6 py-5">
+						<h4 class="font-semibold text-sm">Real-time Vector Sync</h4>
+						<p class="mt-1.5 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+							Keep Pinecone, Qdrant, or any vector DB perfectly in sync with production data. Embeddings update as your data changes — no batch jobs.
+						</p>
+					</div>
+				</div>
+
+				<!-- Migration -->
+				<div class="rounded-xl border overflow-hidden" style="border-color: var(--border-light); background: var(--bg)">
+					<div class="px-6 py-4 flex items-center gap-3 border-b" style="border-color: var(--border-light)">
+						<span class="text-xs font-semibold uppercase tracking-wider px-2.5 py-1 rounded-md" style="background: rgba(155, 81, 224, 0.1); color: #9b51e0;">Migration</span>
+					</div>
+					<div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x" style="border-color: var(--border-light)">
+						<div class="px-6 py-5">
+							<h4 class="font-semibold text-sm">Zero-Downtime Migration</h4>
+							<p class="mt-1.5 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+								Stream data in parallel from legacy or on-prem to modern cloud databases. Cutover in seconds, not hours.
+							</p>
+						</div>
+						<div class="px-6 py-5">
+							<h4 class="font-semibold text-sm">NoSQL to SQL</h4>
+							<p class="mt-1.5 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+								Automatically flatten DynamoDB or MongoDB documents into clean relational tables in Postgres or MySQL.
+							</p>
+						</div>
+					</div>
+				</div>
+
+				<!-- Compliance -->
+				<div class="rounded-xl border overflow-hidden" style="border-color: var(--border-light); background: var(--bg)">
+					<div class="px-6 py-4 flex items-center gap-3 border-b" style="border-color: var(--border-light)">
+						<span class="text-xs font-semibold uppercase tracking-wider px-2.5 py-1 rounded-md" style="background: rgba(235, 87, 87, 0.1); color: #eb5757;">Compliance</span>
+					</div>
+					<div class="px-6 py-5">
+						<h4 class="font-semibold text-sm">Audit Offloading</h4>
+						<p class="mt-1.5 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+							Meet 7-10 year retention laws by streaming application logs and audit trails to cheap, queryable R2 archive storage.
+						</p>
+					</div>
+				</div>
+
+				<!-- Development -->
+				<div class="rounded-xl border overflow-hidden" style="border-color: var(--border-light); background: var(--bg)">
+					<div class="px-6 py-4 flex items-center gap-3 border-b" style="border-color: var(--border-light)">
+						<span class="text-xs font-semibold uppercase tracking-wider px-2.5 py-1 rounded-md" style="background: rgba(55, 53, 47, 0.08); color: var(--fg-secondary);">Development</span>
+					</div>
+					<div class="px-6 py-5">
+						<h4 class="font-semibold text-sm">Sandbox Seeding</h4>
+						<p class="mt-1.5 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+							Populate staging and test environments with real (but sanitised) production data in seconds.
+						</p>
+					</div>
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<!-- Key Advantages -->
+	<section class="py-20">
+		<div class="max-w-5xl mx-auto px-6">
+			<h2 class="text-3xl sm:text-4xl font-bold text-center tracking-tight">
+				Why LakeSync
+			</h2>
+			<div class="mt-14 grid md:grid-cols-3 gap-8">
+				<div class="text-center">
+					<div class="w-12 h-12 rounded-full flex items-center justify-center mx-auto" style="background: rgba(35, 131, 226, 0.1)">
+						<svg class="w-5 h-5" style="color: #2383e2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+					</div>
+					<h3 class="mt-5 font-semibold text-[15px]">Read-Only Utility</h3>
+					<p class="mt-2 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+						Your backup isn't just a backup. It's a live, queryable dataset for AI, analytics, and development.
+					</p>
+				</div>
+				<div class="text-center">
+					<div class="w-12 h-12 rounded-full flex items-center justify-center mx-auto" style="background: rgba(39, 174, 96, 0.1)">
+						<svg class="w-5 h-5" style="color: #27ae60" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+					</div>
+					<h3 class="mt-5 font-semibold text-[15px]">Private by Default</h3>
+					<p class="mt-2 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+						Data never leaves your network unnecessarily. LakeSync manages the encrypted flow — you control where it lands.
+					</p>
+				</div>
+				<div class="text-center">
+					<div class="w-12 h-12 rounded-full flex items-center justify-center mx-auto" style="background: rgba(242, 153, 74, 0.1)">
+						<svg class="w-5 h-5" style="color: #f2994a" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+					</div>
+					<h3 class="mt-5 font-semibold text-[15px]">Zero Egress Fees</h3>
+					<p class="mt-2 text-sm leading-relaxed" style="color: var(--fg-secondary)">
+						Built on Cloudflare R2. No egress costs for reads or migrations. Enterprise-grade data movement without the enterprise bill.
+					</p>
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<!-- Adapters -->
+	<section class="py-16" style="background: var(--bg-secondary)">
+		<div class="max-w-5xl mx-auto px-6 text-center">
+			<h3 class="text-sm font-semibold uppercase tracking-wider" style="color: var(--fg-tertiary)">Connect anything — every adapter is a source and destination</h3>
+			<div class="mt-6 flex flex-wrap items-center justify-center gap-3">
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">PostgreSQL</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">MySQL</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">BigQuery</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">S3 / R2</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">Iceberg</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">Jira</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">Salesforce</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">DynamoDB</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">MongoDB</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">SQLite</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">Pinecone</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">CloudWatch</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border" style="border-color: var(--border); color: var(--fg-secondary)">Stripe</span>
+				<span class="h-9 px-4 inline-flex items-center rounded-full text-sm border border-dashed" style="border-color: var(--border); color: var(--fg-tertiary)">Your adapter</span>
+			</div>
+		</div>
+	</section>
+
+	<!-- CTA / Waitlist -->
+	<section id="waitlist" class="py-20" style="background: var(--bg-secondary)">
+		<div class="max-w-xl mx-auto px-6 text-center">
+			<h2 class="text-3xl sm:text-4xl font-bold tracking-tight">
+				Start syncing today
+			</h2>
+			<p class="mt-4 text-lg" style="color: var(--fg-secondary)">
+				LakeSync Cloud is in early access. Join the waitlist to get your API key.
+			</p>
+			<form id="waitlist-form" class="mt-8 flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
+				<input
+					type="email"
+					name="email"
+					required
+					placeholder="you@company.com"
+					class="flex-1 h-11 px-4 rounded-md border text-sm outline-none transition-colors"
+					style="border-color: var(--border); background: var(--bg); color: var(--fg)"
+				/>
+				<button type="submit" class="h-11 px-6 rounded-md bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 font-medium text-sm hover:bg-neutral-800 dark:hover:bg-neutral-100 transition-colors whitespace-nowrap">
+					Join Waitlist
+				</button>
+			</form>
+			<p id="waitlist-success" class="mt-4 text-sm hidden" style="color: var(--accent)">
+				You're on the list. We'll be in touch.
+			</p>
+			<p class="mt-4 text-sm" style="color: var(--fg-tertiary)">
+				Or self-host with <code class="font-mono text-xs px-1.5 py-0.5 rounded" style="background: var(--border-light)">npm install lakesync</code>
+			</p>
+		</div>
+	</section>
+
+	<!-- Footer -->
+	<footer class="py-10 border-t" style="border-color: var(--border-light)">
+		<div class="max-w-5xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+			<div class="flex items-center gap-2.5">
+				<div class="w-6 h-6 rounded bg-neutral-900 dark:bg-white flex items-center justify-center">
+					<span class="text-white dark:text-neutral-900 text-[10px] font-bold">LS</span>
+				</div>
+				<span class="text-sm font-medium">LakeSync</span>
+			</div>
+			<div class="flex items-center gap-6 text-sm" style="color: var(--fg-secondary)">
+				<a href="/docs" class="hover:text-[--fg] transition-colors">Docs</a>
+				<a href="https://github.com/radekdymacz/lakesync" class="hover:text-[--fg] transition-colors">GitHub</a>
+			</div>
+			<p class="text-sm" style="color: var(--fg-tertiary)">&copy; 2026 LakeSync</p>
+		</div>
+	</footer>
+
+	<script>
+		// Dark mode toggle
+		const toggle = document.getElementById('theme-toggle');
+		const html = document.documentElement;
+
+		if (localStorage.getItem('theme') === 'dark' || (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+			html.classList.add('dark');
+		}
+
+		toggle.addEventListener('click', () => {
+			html.classList.toggle('dark');
+			localStorage.setItem('theme', html.classList.contains('dark') ? 'dark' : 'light');
+		});
+
+		// Nav blur on scroll
+		const nav = document.getElementById('nav');
+		window.addEventListener('scroll', () => {
+			if (window.scrollY > 10) {
+				nav.style.background = 'var(--bg)';
+				nav.style.backdropFilter = 'blur(12px)';
+				nav.style.borderBottom = '1px solid var(--border-light)';
+				nav.style.background = html.classList.contains('dark') ? 'rgba(25,25,25,0.85)' : 'rgba(255,255,255,0.85)';
+			} else {
+				nav.style.background = 'transparent';
+				nav.style.backdropFilter = 'none';
+				nav.style.borderBottom = 'none';
+			}
+		});
+
+		// Waitlist form
+		document.getElementById('waitlist-form').addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const form = e.target;
+			const btn = form.querySelector('button');
+			const email = form.email.value;
+
+			btn.disabled = true;
+			btn.textContent = 'Joining...';
+
+			try {
+				const res = await fetch('/api/waitlist', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ email }),
+				});
+				if (!res.ok) throw new Error('Failed');
+				form.style.display = 'none';
+				document.getElementById('waitlist-success').classList.remove('hidden');
+			} catch {
+				btn.disabled = false;
+				btn.textContent = 'Join Waitlist';
+				alert('Something went wrong. Please try again.');
+			}
+		});
+	</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 import { Err, Ok, type Result } from "../result/result";
 import { validateFlowConfig } from "./dsl";
-import type { FlowConfig, FlowEngineDeps, FlowEngine, FlowState, FlowStatus } from "./types";
+import type { FlowConfig, FlowEngine, FlowEngineDeps, FlowState, FlowStatus } from "./types";
 import { FlowError } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -72,7 +72,9 @@ export function createFlowEngine(deps: FlowEngineDeps = {}): FlowEngine {
 				const message = err instanceof Error ? err.message : String(err);
 				entry.lastError = message;
 				transitionState(entry, "error");
-				return Err(new FlowError(`Failed to start flow "${name}": ${message}`, "FLOW_START_FAILED"));
+				return Err(
+					new FlowError(`Failed to start flow "${name}": ${message}`, "FLOW_START_FAILED"),
+				);
 			}
 		},
 
@@ -102,7 +104,9 @@ export function createFlowEngine(deps: FlowEngineDeps = {}): FlowEngine {
 			}
 
 			if (errors.length > 0) {
-				return Err(new FlowError(`Failed to start some flows: ${errors.join("; ")}`, "FLOW_START_FAILED"));
+				return Err(
+					new FlowError(`Failed to start some flows: ${errors.join("; ")}`, "FLOW_START_FAILED"),
+				);
 			}
 
 			return Ok(undefined);

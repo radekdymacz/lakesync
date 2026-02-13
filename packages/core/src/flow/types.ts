@@ -43,11 +43,7 @@ export interface FlowSourceWatch {
 }
 
 /** Source configuration — where changes originate. */
-export type FlowSourceConfig =
-	| FlowSourceCdc
-	| FlowSourcePoll
-	| FlowSourcePush
-	| FlowSourceWatch;
+export type FlowSourceConfig = FlowSourceCdc | FlowSourcePoll | FlowSourcePush | FlowSourceWatch;
 
 /** Valid source type discriminators. */
 export const FLOW_SOURCE_TYPES = ["cdc", "poll", "push", "watch"] as const;
@@ -81,10 +77,7 @@ export interface FlowStoreMemory {
 }
 
 /** Store configuration — where the delta changelog is persisted. */
-export type FlowStoreConfig =
-	| FlowStoreDatabase
-	| FlowStoreLake
-	| FlowStoreMemory;
+export type FlowStoreConfig = FlowStoreDatabase | FlowStoreLake | FlowStoreMemory;
 
 /** Valid store type discriminators. */
 export const FLOW_STORE_TYPES = ["database", "lake", "memory"] as const;

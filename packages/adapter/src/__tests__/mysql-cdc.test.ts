@@ -111,7 +111,10 @@ describe("parseChangelogRows", () => {
 					table_name: "users",
 					row_id: "1",
 					op: "insert",
-					columns: JSON.stringify([{ column: "id", value: 1 }, { column: "name", value: "Alice" }]),
+					columns: JSON.stringify([
+						{ column: "id", value: 1 },
+						{ column: "name", value: "Alice" },
+					]),
 					captured_at: 1700000000000,
 				},
 				{
@@ -119,7 +122,10 @@ describe("parseChangelogRows", () => {
 					table_name: "users",
 					row_id: "2",
 					op: "update",
-					columns: JSON.stringify([{ column: "id", value: 2 }, { column: "name", value: "Bob Updated" }]),
+					columns: JSON.stringify([
+						{ column: "id", value: 2 },
+						{ column: "name", value: "Bob Updated" },
+					]),
 					captured_at: 1700000001000,
 				},
 				{

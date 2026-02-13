@@ -30,6 +30,8 @@ import {
 import { ActionDispatcher } from "./action-dispatcher";
 import { DeltaBuffer } from "./buffer";
 import { FlushCoordinator } from "./flush-coordinator";
+import { type FlushQueue, MemoryFlushQueue } from "./flush-queue";
+import { collectMaterialisers } from "./materialisation-processor";
 import { SourceRegistry } from "./source-registry";
 import type { GatewayConfig, HandlePushResult } from "./types";
 
@@ -49,6 +51,7 @@ export class SyncGateway implements IngestTarget {
 	private adapter: LakeAdapter | DatabaseAdapter | null;
 	private readonly sources: SourceRegistry;
 	private readonly flushCoordinator: FlushCoordinator;
+	private readonly flushQueue: FlushQueue | undefined;
 
 	constructor(config: GatewayConfig, adapter?: LakeAdapter | DatabaseAdapter) {
 		this.config = { sourceAdapters: {}, ...config };
@@ -58,6 +61,17 @@ export class SyncGateway implements IngestTarget {
 		this.actions = new ActionDispatcher(config.actionHandlers);
 		this.sources = new SourceRegistry(this.config.sourceAdapters);
 		this.flushCoordinator = new FlushCoordinator();
+
+		// Build flush queue — explicit config takes precedence, otherwise
+		// build a MemoryFlushQueue from the adapter + materialisers
+		if (config.flushQueue) {
+			this.flushQueue = config.flushQueue;
+		} else {
+			const targets = collectMaterialisers(this.adapter, config.materialisers);
+			if (targets.length > 0) {
+				this.flushQueue = new MemoryFlushQueue(targets, config.onMaterialisationFailure);
+			}
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -273,7 +287,7 @@ export class SyncGateway implements IngestTarget {
 				catalogue: this.config.catalogue,
 			},
 			schemas: this.config.schemas,
-			materialisers: this.config.materialisers,
+			flushQueue: this.flushQueue,
 		});
 	}
 
@@ -292,7 +306,7 @@ export class SyncGateway implements IngestTarget {
 				catalogue: this.config.catalogue,
 			},
 			schemas: this.config.schemas,
-			materialisers: this.config.materialisers,
+			flushQueue: this.flushQueue,
 		});
 	}
 

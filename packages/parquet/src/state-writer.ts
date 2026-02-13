@@ -91,9 +91,7 @@ export async function writeStateToParquet(
 			if (col.type === "boolean") {
 				boolColumnNames.push(col.name);
 				// Convert Bool -> Int8 to avoid Arrow JS IPC boolean buffer bug
-				const int8Values = values.map((v) =>
-					v === null || v === undefined ? null : v ? 1 : 0,
-				);
+				const int8Values = values.map((v) => (v === null || v === undefined ? null : v ? 1 : 0));
 				columnData[col.name] = arrow.vectorFromArray(int8Values, new arrow.Int8());
 			} else {
 				const arrowType = lakeSyncTypeToArrow(col.type);

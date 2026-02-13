@@ -5,19 +5,19 @@ export { CdcSource, convertChangesToDeltas } from "./cdc/cdc-source";
 export type { CdcChangeBatch, CdcCursor, CdcDialect, CdcRawChange } from "./cdc/dialect";
 export type { MsSqlCdcDialectConfig, MsSqlCdcRow } from "./cdc/mssql-dialect";
 export {
-	MsSqlCdcDialect,
 	bufferToHex,
 	compareLsn,
 	deriveCaptureInstanceName,
 	hexToBuffer,
+	MsSqlCdcDialect,
 	mapOperationToKind,
 	parseMsSqlCdcRows,
 } from "./cdc/mssql-dialect";
 export type { ChangelogRow, MySqlCdcDialectConfig } from "./cdc/mysql-dialect";
 export {
-	MySqlCdcDialect,
 	buildTriggerSql,
 	extractColumnsFromJson,
+	MySqlCdcDialect,
 	mysqlTypeToColumnType,
 	parseChangelogRows,
 } from "./cdc/mysql-dialect";

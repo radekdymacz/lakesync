@@ -5,6 +5,7 @@ export {
 	ClockDriftError,
 	ConflictError,
 	FlushError,
+	FlushQueueError,
 	LakeSyncError,
 	SchemaError,
 	toError,

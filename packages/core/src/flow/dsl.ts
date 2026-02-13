@@ -3,8 +3,8 @@ import {
 	FLOW_MATERIALISE_TYPES,
 	FLOW_SOURCE_TYPES,
 	FLOW_STORE_TYPES,
-	FlowError,
 	type FlowConfig,
+	FlowError,
 	type FlowMaterialiseConfig,
 	type FlowSourceConfig,
 	type FlowStoreConfig,
@@ -102,7 +102,12 @@ export function parseFlowConfig(input: unknown): Result<FlowConfig, FlowError> {
 	let direction: "one-way" | "bidirectional" | undefined;
 	if (obj.direction !== undefined) {
 		if (obj.direction !== "one-way" && obj.direction !== "bidirectional") {
-			return Err(new FlowError("Flow config 'direction' must be \"one-way\" or \"bidirectional\"", "INVALID_CONFIG"));
+			return Err(
+				new FlowError(
+					'Flow config \'direction\' must be "one-way" or "bidirectional"',
+					"INVALID_CONFIG",
+				),
+			);
 		}
 		direction = obj.direction;
 	}
@@ -118,7 +123,7 @@ export function parseFlowConfig(input: unknown): Result<FlowConfig, FlowError> {
 
 	return validateFlowConfig(config).ok
 		? Ok(config)
-		: validateFlowConfig(config) as Result<never, FlowError>;
+		: (validateFlowConfig(config) as Result<never, FlowError>);
 }
 
 // ---------------------------------------------------------------------------
@@ -156,12 +161,12 @@ export function validateFlowConfig(config: FlowConfig): Result<void, FlowError> 
 	}
 
 	// At least one of store or materialise must be present
-	if (config.store === undefined && (config.materialise === undefined || config.materialise.length === 0)) {
+	if (
+		config.store === undefined &&
+		(config.materialise === undefined || config.materialise.length === 0)
+	) {
 		return Err(
-			new FlowError(
-				"Flow must have at least one of 'store' or 'materialise'",
-				"INVALID_CONFIG",
-			),
+			new FlowError("Flow must have at least one of 'store' or 'materialise'", "INVALID_CONFIG"),
 		);
 	}
 
@@ -185,17 +190,23 @@ function parseSource(obj: Record<string, unknown>): Result<FlowSourceConfig, Flo
 		case "cdc":
 		case "poll":
 			if (typeof obj.adapter !== "string") {
-				return Err(new FlowError(`Source type "${obj.type}" requires 'adapter' string`, "INVALID_CONFIG"));
+				return Err(
+					new FlowError(`Source type "${obj.type}" requires 'adapter' string`, "INVALID_CONFIG"),
+				);
 			}
 			return Ok(obj as unknown as FlowSourceConfig);
 		case "push":
 			if (typeof obj.gatewayId !== "string") {
-				return Err(new FlowError("Source type \"push\" requires 'gatewayId' string", "INVALID_CONFIG"));
+				return Err(
+					new FlowError("Source type \"push\" requires 'gatewayId' string", "INVALID_CONFIG"),
+				);
 			}
 			return Ok(obj as unknown as FlowSourceConfig);
 		case "watch":
 			if (typeof obj.adapter !== "string") {
-				return Err(new FlowError("Source type \"watch\" requires 'adapter' string", "INVALID_CONFIG"));
+				return Err(
+					new FlowError("Source type \"watch\" requires 'adapter' string", "INVALID_CONFIG"),
+				);
 			}
 			return Ok(obj as unknown as FlowSourceConfig);
 		default:
@@ -216,7 +227,9 @@ function parseStore(obj: Record<string, unknown>): Result<FlowStoreConfig, FlowE
 		case "database":
 		case "lake":
 			if (typeof obj.adapter !== "string") {
-				return Err(new FlowError(`Store type "${obj.type}" requires 'adapter' string`, "INVALID_CONFIG"));
+				return Err(
+					new FlowError(`Store type "${obj.type}" requires 'adapter' string`, "INVALID_CONFIG"),
+				);
 			}
 			return Ok(obj as unknown as FlowStoreConfig);
 		case "memory":
@@ -238,20 +251,31 @@ function parseMaterialise(obj: Record<string, unknown>): Result<FlowMaterialiseC
 	switch (obj.type) {
 		case "sql":
 			if (typeof obj.adapter !== "string") {
-				return Err(new FlowError("Materialise type \"sql\" requires 'adapter' string", "INVALID_CONFIG"));
+				return Err(
+					new FlowError("Materialise type \"sql\" requires 'adapter' string", "INVALID_CONFIG"),
+				);
 			}
 			if (typeof obj.schemas !== "string") {
-				return Err(new FlowError("Materialise type \"sql\" requires 'schemas' string", "INVALID_CONFIG"));
+				return Err(
+					new FlowError("Materialise type \"sql\" requires 'schemas' string", "INVALID_CONFIG"),
+				);
 			}
 			return Ok(obj as unknown as FlowMaterialiseConfig);
 		case "parquet":
 			if (typeof obj.adapter !== "string") {
-				return Err(new FlowError("Materialise type \"parquet\" requires 'adapter' string", "INVALID_CONFIG"));
+				return Err(
+					new FlowError("Materialise type \"parquet\" requires 'adapter' string", "INVALID_CONFIG"),
+				);
 			}
 			return Ok(obj as unknown as FlowMaterialiseConfig);
 		case "client":
 			if (typeof obj.gatewayId !== "string") {
-				return Err(new FlowError("Materialise type \"client\" requires 'gatewayId' string", "INVALID_CONFIG"));
+				return Err(
+					new FlowError(
+						"Materialise type \"client\" requires 'gatewayId' string",
+						"INVALID_CONFIG",
+					),
+				);
 			}
 			return Ok(obj as unknown as FlowMaterialiseConfig);
 		default:

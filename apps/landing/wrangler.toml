@@ -1,0 +1,7 @@
+name = "lakesync-cloud"
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lakesync-waitlist"
+database_id = "cc0a9a4d-5f5c-44ca-8a9f-644df98295e5"

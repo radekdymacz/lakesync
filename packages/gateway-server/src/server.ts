@@ -11,7 +11,7 @@ import type {
 	SyncResponse,
 } from "@lakesync/core";
 import { bigintReplacer, createPollerRegistry, isDatabaseAdapter } from "@lakesync/core";
-import type { ConfigStore, HandlerResult } from "@lakesync/gateway";
+import type { ConfigStore, FlushQueue, HandlerResult } from "@lakesync/gateway";
 import {
 	DEFAULT_MAX_BUFFER_AGE_MS,
 	DEFAULT_MAX_BUFFER_BYTES,
@@ -91,6 +91,8 @@ export interface GatewayServerConfig {
 	flushTimeoutMs?: number;
 	/** Per-client rate limiter configuration. When provided, rate limiting is enabled. */
 	rateLimiter?: RateLimiterConfig;
+	/** Optional flush queue for post-flush materialisation (e.g. R2FlushQueue). */
+	flushQueue?: FlushQueue;
 	/** WebSocket connection and message rate limits. */
 	wsLimits?: WebSocketLimitsConfig;
 	/** Minimum log level for the structured logger (default "info"). */
@@ -219,6 +221,7 @@ export class GatewayServer {
 				gatewayId: config.gatewayId,
 				maxBufferBytes: config.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
 				maxBufferAgeMs: config.maxBufferAgeMs ?? DEFAULT_MAX_BUFFER_AGE_MS,
+				flushQueue: config.flushQueue,
 			},
 			config.adapter,
 		);

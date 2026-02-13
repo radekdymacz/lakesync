@@ -36,6 +36,7 @@ import {
 	encodeBroadcastFrame,
 	encodeSyncResponse,
 } from "@lakesync/proto";
+import { CloudflareFlushQueue } from "./cf-flush-queue";
 import type { Env } from "./env";
 import { logger } from "./logger";
 import { R2Adapter } from "./r2-adapter";
@@ -155,6 +156,11 @@ export class SyncGatewayDO extends DurableObject<Env> {
 		const adapter = new R2Adapter(this.env.LAKE_BUCKET);
 		const tableSchema = await this.configStore.getSchema(this.ctx.id.toString());
 
+		// Build optional CloudflareFlushQueue when the MATERIALISE_QUEUE binding exists
+		const flushQueue = this.env.MATERIALISE_QUEUE
+			? new CloudflareFlushQueue(adapter, this.env.MATERIALISE_QUEUE)
+			: undefined;
+
 		this.gateway = new SyncGateway(
 			{
 				gatewayId: this.ctx.id.toString(),
@@ -164,6 +170,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 				maxBufferAgeMs: DEFAULT_MAX_BUFFER_AGE_MS,
 				flushFormat: tableSchema ? "parquet" : "json",
 				tableSchema,
+				flushQueue,
 			},
 			adapter,
 		);

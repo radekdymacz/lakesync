@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createFlowEngine } from "../flow/engine";
 import type { FlowConfig, FlowState } from "../flow/types";
 
@@ -10,27 +10,21 @@ const CDC_FLOW: FlowConfig = {
 	name: "postgres-to-r2",
 	source: { type: "cdc", adapter: "postgres-prod" },
 	store: { type: "lake", adapter: "r2-backup", format: "parquet" },
-	materialise: [
-		{ type: "parquet", adapter: "r2-backup", path: "current/" },
-	],
+	materialise: [{ type: "parquet", adapter: "r2-backup", path: "current/" }],
 };
 
 const PUSH_FLOW: FlowConfig = {
 	name: "offline-app",
 	source: { type: "push", gatewayId: "company-os" },
 	store: { type: "database", adapter: "postgres-prod" },
-	materialise: [
-		{ type: "sql", adapter: "postgres-prod", schemas: "default" },
-	],
+	materialise: [{ type: "sql", adapter: "postgres-prod", schemas: "default" }],
 	direction: "bidirectional",
 };
 
 const ANALYTICS_FLOW: FlowConfig = {
 	name: "analytics",
 	source: { type: "cdc", adapter: "postgres-prod", tables: ["events"] },
-	materialise: [
-		{ type: "sql", adapter: "bigquery-analytics", schemas: "events" },
-	],
+	materialise: [{ type: "sql", adapter: "bigquery-analytics", schemas: "events" }],
 };
 
 // ---------------------------------------------------------------------------

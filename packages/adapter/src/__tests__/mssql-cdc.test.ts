@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-	type MsSqlCdcRow,
-	MsSqlCdcDialect,
 	bufferToHex,
 	compareLsn,
 	deriveCaptureInstanceName,
 	hexToBuffer,
+	MsSqlCdcDialect,
+	type MsSqlCdcRow,
 	mapOperationToKind,
 	parseMsSqlCdcRows,
 } from "../cdc/mssql-dialect";
@@ -321,9 +321,7 @@ describe("LSN utilities", () => {
 		});
 
 		it("compares the zero LSN correctly", () => {
-			expect(
-				compareLsn("0x00000000000000000000", "0x00000000000000000001"),
-			).toBeLessThan(0);
+			expect(compareLsn("0x00000000000000000000", "0x00000000000000000001")).toBeLessThan(0);
 		});
 	});
 });

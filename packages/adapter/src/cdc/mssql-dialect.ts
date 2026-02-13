@@ -208,9 +208,7 @@ export class MsSqlCdcDialect implements CdcDialect {
 					.request()
 					.input("from_lsn", this.mssqlModule.Binary, fromLsnIncremented)
 					.input("to_lsn", this.mssqlModule.Binary, maxLsnBuf)
-					.query<MsSqlCdcRow>(
-						`SELECT * FROM ${fnName}(@from_lsn, @to_lsn, N'all')`,
-					);
+					.query<MsSqlCdcRow>(`SELECT * FROM ${fnName}(@from_lsn, @to_lsn, N'all')`);
 
 				const changes = parseMsSqlCdcRows(result.recordset, capture.source_table, this.schema);
 				allChanges.push(...changes);
@@ -234,21 +232,19 @@ export class MsSqlCdcDialect implements CdcDialect {
 
 		try {
 			const tablesSet = tables ? new Set(tables) : null;
-			const result = await this.pool
-				.request()
-				.query<{
-					TABLE_NAME: string;
-					COLUMN_NAME: string;
-					DATA_TYPE: string;
-				}>(
-					`SELECT c.TABLE_NAME, c.COLUMN_NAME, c.DATA_TYPE
+			const result = await this.pool.request().query<{
+				TABLE_NAME: string;
+				COLUMN_NAME: string;
+				DATA_TYPE: string;
+			}>(
+				`SELECT c.TABLE_NAME, c.COLUMN_NAME, c.DATA_TYPE
 					 FROM INFORMATION_SCHEMA.COLUMNS c
 					 JOIN INFORMATION_SCHEMA.TABLES t
 					   ON c.TABLE_NAME = t.TABLE_NAME AND c.TABLE_SCHEMA = t.TABLE_SCHEMA
 					 WHERE t.TABLE_SCHEMA = '${escapeIdentifier(this.schema)}'
 					   AND t.TABLE_TYPE = 'BASE TABLE'
 					 ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION`,
-				);
+			);
 
 			const tableMap = new Map<string, TableSchema>();
 			for (const row of result.recordset) {

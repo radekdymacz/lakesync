@@ -60,6 +60,13 @@ export class BackpressureError extends LakeSyncError {
 	}
 }
 
+/** Flush queue publish failure */
+export class FlushQueueError extends LakeSyncError {
+	constructor(message: string, cause?: Error) {
+		super(message, "FLUSH_QUEUE_ERROR", cause);
+	}
+}
+
 /** Coerce an unknown thrown value into an Error instance. */
 export function toError(err: unknown): Error {
 	return err instanceof Error ? err : new Error(String(err));

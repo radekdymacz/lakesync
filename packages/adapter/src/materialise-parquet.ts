@@ -113,10 +113,7 @@ export class ParquetMaterialiser implements Materialisable {
  * and excludes tombstoned rows (last op = DELETE).
  */
 function mergeToCurrentState(deltas: RowDelta[]): StateRow[] {
-	const byRowId = new Map<
-		string,
-		Array<{ columns: ColumnDelta[]; op: string }>
-	>();
+	const byRowId = new Map<string, Array<{ columns: ColumnDelta[]; op: string }>>();
 
 	for (const delta of deltas) {
 		let arr = byRowId.get(delta.rowId);

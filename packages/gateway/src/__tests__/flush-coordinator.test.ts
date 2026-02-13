@@ -12,6 +12,8 @@ import { Err, HLC, Ok } from "@lakesync/core";
 import { describe, expect, it, vi } from "vitest";
 import { DeltaBuffer } from "../buffer";
 import { FlushCoordinator } from "../flush-coordinator";
+import { MemoryFlushQueue } from "../flush-queue";
+import { collectMaterialisers } from "../materialisation-processor";
 
 /** Helper to build a RowDelta with sensible defaults. */
 function makeDelta(opts: Partial<RowDelta> & { hlc: HLCTimestamp }): RowDelta {
@@ -67,13 +69,24 @@ function createFailingDbAdapter(): DatabaseAdapter {
 	};
 }
 
+/** Build a MemoryFlushQueue from an adapter and optional extras. */
+function buildFlushQueue(
+	adapter: unknown,
+	extras?: ReadonlyArray<Materialisable>,
+	onFailure?: (table: string, deltaCount: number, error: Error) => void,
+): MemoryFlushQueue | undefined {
+	const targets = collectMaterialisers(adapter, extras);
+	if (targets.length === 0) return undefined;
+	return new MemoryFlushQueue(targets, onFailure);
+}
+
 const hlcLow = HLC.encode(1_000_000, 0);
 
 const todoSchemas: TableSchema[] = [
 	{ table: "todos", columns: [{ name: "title", type: "string" }] },
 ];
 
-describe("FlushCoordinator — materialisation post-step", () => {
+describe("FlushCoordinator — materialisation via FlushQueue", () => {
 	it("calls materialise on the adapter when it is materialisable and flush succeeds", async () => {
 		const materialiseCalls: Array<{ deltas: RowDelta[]; schemas: TableSchema[] }> = [];
 		const dbAdapter: DatabaseAdapter & Materialisable = {
@@ -91,6 +104,7 @@ describe("FlushCoordinator — materialisation post-step", () => {
 		const result = await coordinator.flush(buffer, dbAdapter, {
 			config: { gatewayId: "gw-mat" },
 			schemas: todoSchemas,
+			flushQueue: buildFlushQueue(dbAdapter),
 		});
 
 		expect(result.ok).toBe(true);
@@ -124,7 +138,7 @@ describe("FlushCoordinator — materialisation post-step", () => {
 		const result = await coordinator.flush(buffer, dbAdapter, {
 			config: { gatewayId: "gw-multi-mat" },
 			schemas: todoSchemas,
-			materialisers: [extraMaterialiser],
+			flushQueue: buildFlushQueue(dbAdapter, [extraMaterialiser]),
 		});
 
 		expect(result.ok).toBe(true);
@@ -142,6 +156,7 @@ describe("FlushCoordinator — materialisation post-step", () => {
 		const coordinator = new FlushCoordinator();
 		const result = await coordinator.flush(buffer, dbAdapter, {
 			config: { gatewayId: "gw-no-schemas" },
+			flushQueue: buildFlushQueue(dbAdapter),
 		});
 
 		expect(result.ok).toBe(true);
@@ -158,6 +173,7 @@ describe("FlushCoordinator — materialisation post-step", () => {
 		const result = await coordinator.flush(buffer, dbAdapter, {
 			config: { gatewayId: "gw-not-mat" },
 			schemas: todoSchemas,
+			flushQueue: buildFlushQueue(dbAdapter),
 		});
 
 		expect(result.ok).toBe(true);
@@ -179,6 +195,7 @@ describe("FlushCoordinator — materialisation post-step", () => {
 		const result = await coordinator.flush(buffer, dbAdapter, {
 			config: { gatewayId: "gw-mat-fail" },
 			schemas: todoSchemas,
+			flushQueue: buildFlushQueue(dbAdapter),
 		});
 
 		expect(result.ok).toBe(true);
@@ -202,6 +219,7 @@ describe("FlushCoordinator — materialisation post-step", () => {
 		const result = await coordinator.flush(buffer, dbAdapter, {
 			config: { gatewayId: "gw-mat-throw" },
 			schemas: todoSchemas,
+			flushQueue: buildFlushQueue(dbAdapter),
 		});
 
 		expect(result.ok).toBe(true);
@@ -223,13 +241,14 @@ describe("FlushCoordinator — materialisation post-step", () => {
 		const result = await coordinator.flush(buffer, dbAdapter, {
 			config: { gatewayId: "gw-flush-fail" },
 			schemas: todoSchemas,
+			flushQueue: buildFlushQueue(dbAdapter),
 		});
 
 		expect(result.ok).toBe(false);
 		expect(materialise).not.toHaveBeenCalled();
 	});
 
-	it("invokes onMaterialisationFailure callback when materialise fails", async () => {
+	it("invokes onFailure callback when materialise fails", async () => {
 		const dbAdapter: DatabaseAdapter & Materialisable = {
 			...createMockDbAdapter(),
 			materialise: async () => {
@@ -245,8 +264,9 @@ describe("FlushCoordinator — materialisation post-step", () => {
 
 		const coordinator = new FlushCoordinator();
 		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-mat-cb", onMaterialisationFailure: onFailure },
+			config: { gatewayId: "gw-mat-cb" },
 			schemas: todoSchemas,
+			flushQueue: buildFlushQueue(dbAdapter, undefined, onFailure),
 		});
 
 		expect(result.ok).toBe(true);
@@ -256,7 +276,7 @@ describe("FlushCoordinator — materialisation post-step", () => {
 		warnSpy.mockRestore();
 	});
 
-	it("does NOT invoke onMaterialisationFailure callback when materialise succeeds", async () => {
+	it("does NOT invoke onFailure callback when materialise succeeds", async () => {
 		const dbAdapter: DatabaseAdapter & Materialisable = {
 			...createMockDbAdapter(),
 			materialise: async () => {
@@ -270,15 +290,16 @@ describe("FlushCoordinator — materialisation post-step", () => {
 
 		const coordinator = new FlushCoordinator();
 		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-mat-ok", onMaterialisationFailure: onFailure },
+			config: { gatewayId: "gw-mat-ok" },
 			schemas: todoSchemas,
+			flushQueue: buildFlushQueue(dbAdapter, undefined, onFailure),
 		});
 
 		expect(result.ok).toBe(true);
 		expect(onFailure).not.toHaveBeenCalled();
 	});
 
-	it("invokes onMaterialisationFailure callback when materialise throws", async () => {
+	it("invokes onFailure callback when materialise throws", async () => {
 		const dbAdapter: DatabaseAdapter & Materialisable = {
 			...createMockDbAdapter(),
 			materialise: async () => {
@@ -294,8 +315,9 @@ describe("FlushCoordinator — materialisation post-step", () => {
 
 		const coordinator = new FlushCoordinator();
 		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-mat-throw-cb", onMaterialisationFailure: onFailure },
+			config: { gatewayId: "gw-mat-throw-cb" },
 			schemas: todoSchemas,
+			flushQueue: buildFlushQueue(dbAdapter, undefined, onFailure),
 		});
 
 		expect(result.ok).toBe(true);
@@ -322,6 +344,7 @@ describe("FlushCoordinator — materialisation post-step", () => {
 		const result = await coordinator.flushTable("todos", buffer, dbAdapter, {
 			config: { gatewayId: "gw-table-mat" },
 			schemas: todoSchemas,
+			flushQueue: buildFlushQueue(dbAdapter),
 		});
 
 		expect(result.ok).toBe(true);
