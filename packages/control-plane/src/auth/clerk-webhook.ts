@@ -1,6 +1,6 @@
 import { Err, Ok, type Result } from "@lakesync/core";
 import type { OrgRole } from "../entities";
-import { ControlPlaneError } from "../errors";
+import type { ControlPlaneError } from "../errors";
 import type { MemberRepository, OrgRepository } from "../repositories";
 
 /**
@@ -76,13 +76,9 @@ export async function verifyClerkWebhookSignature(
 	const encoder = new TextEncoder();
 
 	const subtle = crypto.subtle as unknown as HmacSubtle;
-	const key = await subtle.importKey(
-		"raw",
-		secretBytes,
-		{ name: "HMAC", hash: "SHA-256" },
-		false,
-		["sign"],
-	);
+	const key = await subtle.importKey("raw", secretBytes, { name: "HMAC", hash: "SHA-256" }, false, [
+		"sign",
+	]);
 
 	const signatureBytes = await subtle.sign("HMAC", key, encoder.encode(signedContent));
 	const expectedSignature = base64Encode(new Uint8Array(signatureBytes));

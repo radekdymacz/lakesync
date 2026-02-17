@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { bigintReplacer, bigintReviver } from "@lakesync/core";
 import type { HLCTimestamp, RowDelta, SyncPush } from "@lakesync/core";
+import { bigintReplacer, bigintReviver } from "@lakesync/core";
 import { loadConfig } from "../config";
 import { fatal, print } from "../output";
 
@@ -76,5 +76,7 @@ export async function push(flags: Record<string, string>, positional: string[]):
 		accepted: number;
 	};
 
-	print(`Pushed ${body.deltas.length} deltas (accepted: ${result.accepted}, serverHlc: ${result.serverHlc})`);
+	print(
+		`Pushed ${body.deltas.length} deltas (accepted: ${result.accepted}, serverHlc: ${result.serverHlc})`,
+	);
 }

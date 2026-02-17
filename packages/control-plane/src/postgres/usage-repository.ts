@@ -1,7 +1,7 @@
 import type { Result, UsageAggregate } from "@lakesync/core";
 import type { Pool } from "pg";
-import { wrapControlPlane } from "../errors";
 import type { ControlPlaneError } from "../errors";
+import { wrapControlPlane } from "../errors";
 import type { UsageQuery, UsageRepository, UsageRow } from "../repositories";
 
 /**
@@ -13,9 +13,7 @@ import type { UsageQuery, UsageRepository, UsageRow } from "../repositories";
 export class PgUsageRepository implements UsageRepository {
 	constructor(private readonly pool: Pool) {}
 
-	async recordAggregates(
-		aggregates: UsageAggregate[],
-	): Promise<Result<void, ControlPlaneError>> {
+	async recordAggregates(aggregates: UsageAggregate[]): Promise<Result<void, ControlPlaneError>> {
 		if (aggregates.length === 0) {
 			return { ok: true, value: undefined };
 		}
@@ -27,16 +25,8 @@ export class PgUsageRepository implements UsageRepository {
 			let idx = 1;
 
 			for (const agg of aggregates) {
-				placeholders.push(
-					`($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`,
-				);
-				values.push(
-					agg.gatewayId,
-					agg.orgId ?? null,
-					agg.eventType,
-					agg.count,
-					agg.windowStart,
-				);
+				placeholders.push(`($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`);
+				values.push(agg.gatewayId, agg.orgId ?? null, agg.eventType, agg.count, agg.windowStart);
 			}
 
 			await this.pool.query(
@@ -49,9 +39,7 @@ export class PgUsageRepository implements UsageRepository {
 		}, "Failed to record usage aggregates");
 	}
 
-	async queryUsage(
-		query: UsageQuery,
-	): Promise<Result<UsageRow[], ControlPlaneError>> {
+	async queryUsage(query: UsageQuery): Promise<Result<UsageRow[], ControlPlaneError>> {
 		return wrapControlPlane(async () => {
 			const params: unknown[] = [query.orgId, query.from, query.to];
 			let where = "org_id = $1 AND window_start >= $2 AND window_start < $3";
@@ -73,9 +61,7 @@ export class PgUsageRepository implements UsageRepository {
 		}, "Failed to query usage");
 	}
 
-	async queryGatewayUsage(
-		query: UsageQuery,
-	): Promise<Result<UsageRow[], ControlPlaneError>> {
+	async queryGatewayUsage(query: UsageQuery): Promise<Result<UsageRow[], ControlPlaneError>> {
 		return wrapControlPlane(async () => {
 			const params: unknown[] = [query.orgId, query.from, query.to];
 			let where = "org_id = $1 AND window_start >= $2 AND window_start < $3";

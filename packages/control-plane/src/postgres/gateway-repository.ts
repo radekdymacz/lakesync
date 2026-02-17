@@ -56,10 +56,7 @@ export class PgGatewayRepository implements GatewayRepository {
 		}, "Failed to list gateways");
 	}
 
-	async update(
-		id: string,
-		input: UpdateGatewayInput,
-	): Promise<Result<Gateway, ControlPlaneError>> {
+	async update(id: string, input: UpdateGatewayInput): Promise<Result<Gateway, ControlPlaneError>> {
 		const setClauses: string[] = [];
 		const values: unknown[] = [];
 		let paramIdx = 1;

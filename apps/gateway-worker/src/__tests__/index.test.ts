@@ -170,10 +170,13 @@ describe("Worker fetch handler", () => {
 		const env = createMockEnv();
 		mockAuthSuccess("client-1", "gw1");
 
-		const request = new Request("https://api.example.com/v1/sync/gw1/pull?since=0&clientId=client-1", {
-			method: "GET",
-			headers: { Authorization: "Bearer valid-token" },
-		});
+		const request = new Request(
+			"https://api.example.com/v1/sync/gw1/pull?since=0&clientId=client-1",
+			{
+				method: "GET",
+				headers: { Authorization: "Bearer valid-token" },
+			},
+		);
 
 		const response = await handler.fetch(request, env);
 

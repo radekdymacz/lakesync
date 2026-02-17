@@ -64,10 +64,7 @@ export class PgMemberRepository implements MemberRepository {
 		}, "Failed to list members");
 	}
 
-	async getRole(
-		orgId: string,
-		userId: string,
-	): Promise<Result<OrgRole | null, ControlPlaneError>> {
+	async getRole(orgId: string, userId: string): Promise<Result<OrgRole | null, ControlPlaneError>> {
 		return wrapControlPlane(async () => {
 			const result = await this.pool.query(
 				"SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2",

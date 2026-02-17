@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { gatewaysList, gatewaysCreate, gatewaysDelete } from "../commands/gateways";
+import { gatewaysCreate, gatewaysDelete, gatewaysList } from "../commands/gateways";
 
 // Mock config to avoid touching real ~/.lakesync
 vi.mock("../config", () => ({

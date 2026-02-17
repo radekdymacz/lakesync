@@ -1,5 +1,5 @@
-import { bigintReplacer, bigintReviver } from "@lakesync/core";
 import type { SyncResponse } from "@lakesync/core";
+import { bigintReplacer, bigintReviver } from "@lakesync/core";
 import { loadConfig } from "../config";
 import { fatal, print } from "../output";
 

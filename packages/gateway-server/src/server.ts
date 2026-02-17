@@ -401,7 +401,9 @@ export class GatewayServer {
 		const origin = req.headers.origin ?? null;
 		// Accept incoming X-Request-Id (pass-through from load balancer) or generate a new one
 		const incomingRequestId = req.headers["x-request-id"];
-		const requestId = (typeof incomingRequestId === "string" ? incomingRequestId : undefined) ?? crypto.randomUUID();
+		const requestId =
+			(typeof incomingRequestId === "string" ? incomingRequestId : undefined) ??
+			crypto.randomUUID();
 		const reqLogger = this.logger.child({ requestId, method, path: pathname });
 
 		// Track active requests metric

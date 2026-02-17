@@ -16,9 +16,14 @@ describe("parseArgs", () => {
 
 	it("parses --flag value pairs", () => {
 		const result = parseArgs([
-			"node", "lakesync", "token", "create",
-			"--secret", "my-secret",
-			"--gateway", "gw-1",
+			"node",
+			"lakesync",
+			"token",
+			"create",
+			"--secret",
+			"my-secret",
+			"--gateway",
+			"gw-1",
 		]);
 		expect(result.command).toEqual(["token", "create"]);
 		expect(result.flags).toEqual({ secret: "my-secret", gateway: "gw-1" });
@@ -26,7 +31,10 @@ describe("parseArgs", () => {
 
 	it("parses --flag=value syntax", () => {
 		const result = parseArgs([
-			"node", "lakesync", "token", "create",
+			"node",
+			"lakesync",
+			"token",
+			"create",
 			"--secret=my-secret",
 			"--role=admin",
 		]);
@@ -41,9 +49,12 @@ describe("parseArgs", () => {
 
 	it("parses positional arguments after single-word command", () => {
 		const result = parseArgs([
-			"node", "lakesync", "push",
+			"node",
+			"lakesync",
+			"push",
 			"data.json",
-			"--url", "http://localhost:3000",
+			"--url",
+			"http://localhost:3000",
 		]);
 		expect(result.command).toEqual(["push"]);
 		expect(result.positional).toEqual(["data.json"]);
@@ -64,10 +75,14 @@ describe("parseArgs", () => {
 
 	it("parses mixed command, flags, and positional args", () => {
 		const result = parseArgs([
-			"node", "lakesync", "push",
-			"--url", "http://localhost:3000",
+			"node",
+			"lakesync",
+			"push",
+			"--url",
+			"http://localhost:3000",
 			"deltas.json",
-			"--gateway", "gw-1",
+			"--gateway",
+			"gw-1",
 		]);
 		expect(result.command).toEqual(["push"]);
 		expect(result.flags).toEqual({

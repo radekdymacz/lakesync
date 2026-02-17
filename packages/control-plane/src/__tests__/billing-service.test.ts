@@ -103,10 +103,34 @@ describe("Billing Service", () => {
 		it("returns billing info with usage summary", async () => {
 			(deps.usageRepo.queryUsage as ReturnType<typeof vi.fn>).mockResolvedValue(
 				Ok([
-					{ gatewayId: "gw_1", orgId: "org_abc", eventType: "push_deltas", count: 500, windowStart: new Date() },
-					{ gatewayId: "gw_1", orgId: "org_abc", eventType: "pull_deltas", count: 300, windowStart: new Date() },
-					{ gatewayId: "gw_1", orgId: "org_abc", eventType: "api_call", count: 150, windowStart: new Date() },
-					{ gatewayId: "gw_1", orgId: "org_abc", eventType: "storage_bytes", count: 1024, windowStart: new Date() },
+					{
+						gatewayId: "gw_1",
+						orgId: "org_abc",
+						eventType: "push_deltas",
+						count: 500,
+						windowStart: new Date(),
+					},
+					{
+						gatewayId: "gw_1",
+						orgId: "org_abc",
+						eventType: "pull_deltas",
+						count: 300,
+						windowStart: new Date(),
+					},
+					{
+						gatewayId: "gw_1",
+						orgId: "org_abc",
+						eventType: "api_call",
+						count: 150,
+						windowStart: new Date(),
+					},
+					{
+						gatewayId: "gw_1",
+						orgId: "org_abc",
+						eventType: "storage_bytes",
+						count: 1024,
+						windowStart: new Date(),
+					},
 				]),
 			);
 

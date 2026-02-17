@@ -1,17 +1,17 @@
-export { authenticateApiKey, type ApiKeyAuthContext } from "./api-key-auth";
+export { type ApiKeyAuthContext, authenticateApiKey } from "./api-key-auth";
 export {
-	processClerkWebhook,
-	verifyClerkWebhookSignature,
 	type ClerkEventType,
 	type ClerkSessionPayload,
 	type ClerkUserPayload,
 	type ClerkWebhookDeps,
 	type ClerkWebhookEvent,
+	processClerkWebhook,
+	verifyClerkWebhookSignature,
 	type WebhookResult,
 } from "./clerk-webhook";
 export {
-	authenticateRequest,
 	type AuthContext,
+	authenticateRequest,
 	type DualAuthDeps,
 } from "./dual-auth";
 export {

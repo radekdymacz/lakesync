@@ -106,7 +106,9 @@ export class CachedQuotaChecker implements QuotaChecker {
 
 			return { allowed: true, remaining: remaining - 1 };
 		} catch {
-			console.warn(`[lakesync] Connection quota check failed for org ${orgId}, allowing (fail-open)`);
+			console.warn(
+				`[lakesync] Connection quota check failed for org ${orgId}, allowing (fail-open)`,
+			);
 			return { allowed: true, remaining: Number.MAX_SAFE_INTEGER };
 		}
 	}

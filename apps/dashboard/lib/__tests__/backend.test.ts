@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createBackend, resolveOrgId } from "@/lib/backend";
 import { DEV_ORG_ID } from "@/lib/auth-config";
+import { createBackend, resolveOrgId } from "@/lib/backend";
 
 // Clear the global dev store between tests
 const g = globalThis as unknown as { __devGateways?: Map<string, unknown> };

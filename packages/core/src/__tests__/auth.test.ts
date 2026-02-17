@@ -409,10 +409,7 @@ describe("verifyToken", () => {
 
 describe("signToken", () => {
 	it("produces a token that verifyToken accepts (roundtrip)", async () => {
-		const token = await signToken(
-			{ sub: "client-1", gw: "gateway-1" },
-			TEST_SECRET,
-		);
+		const token = await signToken({ sub: "client-1", gw: "gateway-1" }, TEST_SECRET);
 		const result = await verifyToken(token, TEST_SECRET);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
@@ -422,10 +419,7 @@ describe("signToken", () => {
 
 	it("sets default expiry when omitted", async () => {
 		const before = Math.floor(Date.now() / 1000) + 3600;
-		const token = await signToken(
-			{ sub: "client-1", gw: "gateway-1" },
-			TEST_SECRET,
-		);
+		const token = await signToken({ sub: "client-1", gw: "gateway-1" }, TEST_SECRET);
 		const after = Math.floor(Date.now() / 1000) + 3600;
 
 		// Decode the payload to check exp
@@ -437,10 +431,7 @@ describe("signToken", () => {
 	});
 
 	it("defaults role to 'client' when omitted", async () => {
-		const token = await signToken(
-			{ sub: "client-1", gw: "gateway-1" },
-			TEST_SECRET,
-		);
+		const token = await signToken({ sub: "client-1", gw: "gateway-1" }, TEST_SECRET);
 		const result = await verifyToken(token, TEST_SECRET);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
@@ -460,10 +451,7 @@ describe("signToken", () => {
 	});
 
 	it("supports admin role", async () => {
-		const token = await signToken(
-			{ sub: "admin-1", gw: "gateway-1", role: "admin" },
-			TEST_SECRET,
-		);
+		const token = await signToken({ sub: "admin-1", gw: "gateway-1", role: "admin" }, TEST_SECRET);
 		const result = await verifyToken(token, TEST_SECRET);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
@@ -483,10 +471,7 @@ describe("signToken", () => {
 	});
 
 	it("rejects when verified with wrong secret", async () => {
-		const token = await signToken(
-			{ sub: "client-1", gw: "gateway-1" },
-			TEST_SECRET,
-		);
+		const token = await signToken({ sub: "client-1", gw: "gateway-1" }, TEST_SECRET);
 		const result = await verifyToken(token, "wrong-secret");
 		expect(result.ok).toBe(false);
 	});
@@ -501,10 +486,7 @@ describe("secret rotation", () => {
 	const PREVIOUS_SECRET = "old-previous-secret";
 
 	it("accepts token signed with primary secret", async () => {
-		const token = await signToken(
-			{ sub: "client-1", gw: "gateway-1" },
-			PRIMARY_SECRET,
-		);
+		const token = await signToken({ sub: "client-1", gw: "gateway-1" }, PRIMARY_SECRET);
 		const result = await verifyToken(token, [PRIMARY_SECRET, PREVIOUS_SECRET]);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
@@ -512,10 +494,7 @@ describe("secret rotation", () => {
 	});
 
 	it("accepts token signed with previous secret during rotation", async () => {
-		const token = await signToken(
-			{ sub: "client-1", gw: "gateway-1" },
-			PREVIOUS_SECRET,
-		);
+		const token = await signToken({ sub: "client-1", gw: "gateway-1" }, PREVIOUS_SECRET);
 		const result = await verifyToken(token, [PRIMARY_SECRET, PREVIOUS_SECRET]);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
@@ -532,20 +511,14 @@ describe("secret rotation", () => {
 	});
 
 	it("single string secret still works (backward compat)", async () => {
-		const token = await signToken(
-			{ sub: "client-1", gw: "gateway-1" },
-			TEST_SECRET,
-		);
+		const token = await signToken({ sub: "client-1", gw: "gateway-1" }, TEST_SECRET);
 		const result = await verifyToken(token, TEST_SECRET);
 		expect(result.ok).toBe(true);
 	});
 
 	it("signToken always uses the provided secret (not an array)", async () => {
 		// signToken accepts a single secret, so sign with primary
-		const token = await signToken(
-			{ sub: "client-1", gw: "gateway-1" },
-			PRIMARY_SECRET,
-		);
+		const token = await signToken({ sub: "client-1", gw: "gateway-1" }, PRIMARY_SECRET);
 		// Should pass with primary alone
 		const primaryOnly = await verifyToken(token, PRIMARY_SECRET);
 		expect(primaryOnly.ok).toBe(true);

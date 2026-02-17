@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { keysList, keysCreate, keysRevoke } from "../commands/keys";
+import { keysCreate, keysList, keysRevoke } from "../commands/keys";
 
 // Mock config to avoid touching real ~/.lakesync
 vi.mock("../config", () => ({
@@ -168,9 +168,7 @@ describe("keys commands", () => {
 				throw new Error("process.exit");
 			});
 
-			await expect(keysCreate({ name: "test", role: "superuser" })).rejects.toThrow(
-				"process.exit",
-			);
+			await expect(keysCreate({ name: "test", role: "superuser" })).rejects.toThrow("process.exit");
 
 			const stderr = mockStderr.join("");
 			expect(stderr).toContain("--role must be");

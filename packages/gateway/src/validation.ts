@@ -42,7 +42,11 @@ export function parseJson<T>(
 	try {
 		return Ok(JSON.parse(raw, reviver) as T);
 	} catch {
-		return Err({ status: 400, message: "Invalid JSON body", code: API_ERROR_CODES.VALIDATION_ERROR });
+		return Err({
+			status: 400,
+			message: "Invalid JSON body",
+			code: API_ERROR_CODES.VALIDATION_ERROR,
+		});
 	}
 }
 
@@ -59,7 +63,11 @@ export function validatePushBody(
 	const body = parsed.value;
 
 	if (!body.clientId || !Array.isArray(body.deltas)) {
-		return Err({ status: 400, message: "Missing required fields: clientId, deltas", code: API_ERROR_CODES.VALIDATION_ERROR });
+		return Err({
+			status: 400,
+			message: "Missing required fields: clientId, deltas",
+			code: API_ERROR_CODES.VALIDATION_ERROR,
+		});
 	}
 
 	if (headerClientId && body.clientId !== headerClientId) {
@@ -71,7 +79,11 @@ export function validatePushBody(
 	}
 
 	if (body.deltas.length > MAX_DELTAS_PER_PUSH) {
-		return Err({ status: 400, message: "Too many deltas in a single push (max 10,000)", code: API_ERROR_CODES.VALIDATION_ERROR });
+		return Err({
+			status: 400,
+			message: "Too many deltas in a single push (max 10,000)",
+			code: API_ERROR_CODES.VALIDATION_ERROR,
+		});
 	}
 
 	return Ok(body);
@@ -87,7 +99,11 @@ export function parsePullParams(params: {
 	source: string | null;
 }): Result<SyncPull, RequestError> {
 	if (!params.since || !params.clientId) {
-		return Err({ status: 400, message: "Missing required query params: since, clientId", code: API_ERROR_CODES.VALIDATION_ERROR });
+		return Err({
+			status: 400,
+			message: "Missing required query params: since, clientId",
+			code: API_ERROR_CODES.VALIDATION_ERROR,
+		});
 	}
 
 	let sinceHlc: HLCTimestamp;
@@ -133,7 +149,11 @@ export function validateActionBody(
 	const body = parsed.value;
 
 	if (!body.clientId || !Array.isArray(body.actions)) {
-		return Err({ status: 400, message: "Missing required fields: clientId, actions", code: API_ERROR_CODES.VALIDATION_ERROR });
+		return Err({
+			status: 400,
+			message: "Missing required fields: clientId, actions",
+			code: API_ERROR_CODES.VALIDATION_ERROR,
+		});
 	}
 
 	if (headerClientId && body.clientId !== headerClientId) {
@@ -156,7 +176,11 @@ export function validateSchemaBody(raw: string): Result<TableSchema, RequestErro
 	const schema = parsed.value;
 
 	if (!schema.table || !Array.isArray(schema.columns)) {
-		return Err({ status: 400, message: "Missing required fields: table, columns", code: API_ERROR_CODES.SCHEMA_ERROR });
+		return Err({
+			status: 400,
+			message: "Missing required fields: table, columns",
+			code: API_ERROR_CODES.SCHEMA_ERROR,
+		});
 	}
 
 	// Validate table name is a safe SQL identifier
@@ -170,7 +194,11 @@ export function validateSchemaBody(raw: string): Result<TableSchema, RequestErro
 
 	for (const col of schema.columns) {
 		if (typeof col.name !== "string" || col.name.length === 0) {
-			return Err({ status: 400, message: "Each column must have a non-empty 'name' string", code: API_ERROR_CODES.SCHEMA_ERROR });
+			return Err({
+				status: 400,
+				message: "Each column must have a non-empty 'name' string",
+				code: API_ERROR_CODES.SCHEMA_ERROR,
+			});
 		}
 		// Validate column name is a safe SQL identifier
 		if (!isValidIdentifier(col.name)) {
@@ -194,11 +222,19 @@ export function validateSchemaBody(raw: string): Result<TableSchema, RequestErro
 	// Validate primaryKey
 	if (schema.primaryKey !== undefined) {
 		if (!Array.isArray(schema.primaryKey) || schema.primaryKey.length === 0) {
-			return Err({ status: 400, message: "primaryKey must be a non-empty array of strings", code: API_ERROR_CODES.SCHEMA_ERROR });
+			return Err({
+				status: 400,
+				message: "primaryKey must be a non-empty array of strings",
+				code: API_ERROR_CODES.SCHEMA_ERROR,
+			});
 		}
 		for (const pk of schema.primaryKey) {
 			if (typeof pk !== "string") {
-				return Err({ status: 400, message: "primaryKey must be a non-empty array of strings", code: API_ERROR_CODES.SCHEMA_ERROR });
+				return Err({
+					status: 400,
+					message: "primaryKey must be a non-empty array of strings",
+					code: API_ERROR_CODES.SCHEMA_ERROR,
+				});
 			}
 			if (pk !== "row_id" && !columnNames.has(pk)) {
 				return Err({
@@ -212,13 +248,21 @@ export function validateSchemaBody(raw: string): Result<TableSchema, RequestErro
 
 	// Validate softDelete
 	if (schema.softDelete !== undefined && typeof schema.softDelete !== "boolean") {
-		return Err({ status: 400, message: "softDelete must be a boolean", code: API_ERROR_CODES.SCHEMA_ERROR });
+		return Err({
+			status: 400,
+			message: "softDelete must be a boolean",
+			code: API_ERROR_CODES.SCHEMA_ERROR,
+		});
 	}
 
 	// Validate externalIdColumn
 	if (schema.externalIdColumn !== undefined) {
 		if (typeof schema.externalIdColumn !== "string" || schema.externalIdColumn.length === 0) {
-			return Err({ status: 400, message: "externalIdColumn must be a non-empty string", code: API_ERROR_CODES.SCHEMA_ERROR });
+			return Err({
+				status: 400,
+				message: "externalIdColumn must be a non-empty string",
+				code: API_ERROR_CODES.SCHEMA_ERROR,
+			});
 		}
 		if (!columnNames.has(schema.externalIdColumn)) {
 			return Err({
@@ -239,9 +283,7 @@ export function validateSchemaBody(raw: string): Result<TableSchema, RequestErro
  * {@link ValidationPipeline} — defence in depth against SQL injection
  * via crafted table names.
  */
-export function validateDeltaTableName(
-	delta: RowDelta,
-): Result<void, SchemaError> {
+export function validateDeltaTableName(delta: RowDelta): Result<void, SchemaError> {
 	return assertValidIdentifier(delta.table);
 }
 

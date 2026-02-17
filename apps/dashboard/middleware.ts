@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 
 const clerkEnabled = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
@@ -13,9 +13,7 @@ async function handleRequest(request: NextRequest): Promise<NextResponse> {
 	}
 
 	// Production — delegate to Clerk middleware
-	const { clerkMiddleware, createRouteMatcher } = await import(
-		"@clerk/nextjs/server"
-	);
+	const { clerkMiddleware, createRouteMatcher } = await import("@clerk/nextjs/server");
 
 	const isPublicRoute = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)"]);
 

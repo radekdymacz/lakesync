@@ -34,7 +34,13 @@ export {
 	isFlushQueue,
 	MemoryFlushQueue,
 } from "./flush-queue";
-export { SyncGateway, type PurgeFilter, type SyncPull, type SyncPush, type SyncResponse } from "./gateway";
+export {
+	type PurgeFilter,
+	SyncGateway,
+	type SyncPull,
+	type SyncPush,
+	type SyncResponse,
+} from "./gateway";
 export {
 	type CachedActionResult,
 	type IdempotencyCache,
@@ -47,6 +53,7 @@ export {
 	type MaterialisationProcessorConfig,
 	processMaterialisation,
 } from "./materialisation-processor";
+export { generateOpenApiJson, openApiSpec } from "./openapi";
 export { R2FlushQueue } from "./r2-flush-queue";
 export {
 	type HandlerResult,
@@ -84,4 +91,3 @@ export {
 	validateSchemaBody,
 } from "./validation";
 export { type DeltaValidator, ValidationPipeline } from "./validation-pipeline";
-export { generateOpenApiJson, openApiSpec } from "./openapi";

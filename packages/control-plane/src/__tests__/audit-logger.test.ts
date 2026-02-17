@@ -154,9 +154,7 @@ describe("PgAuditLogger", () => {
 	it("detects hasMore when extra row is returned", async () => {
 		const { pool, queueResult } = createMockPool();
 		// Default limit is 50, so return 51 rows to trigger hasMore
-		const rows = Array.from({ length: 51 }, (_, i) =>
-			mockAuditRow({ id: `aud_${i}` }),
-		);
+		const rows = Array.from({ length: 51 }, (_, i) => mockAuditRow({ id: `aud_${i}` }));
 		queueResult(rows);
 
 		const logger = new PgAuditLogger(pool as never);

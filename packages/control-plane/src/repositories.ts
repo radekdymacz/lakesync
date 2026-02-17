@@ -6,9 +6,9 @@ import type {
 	CreateMemberInput,
 	CreateOrgInput,
 	Gateway,
+	Organisation,
 	OrgMember,
 	OrgRole,
-	Organisation,
 	UpdateGatewayInput,
 	UpdateOrgInput,
 } from "./entities";
@@ -49,7 +49,11 @@ export interface MemberRepository {
 	remove(orgId: string, userId: string): Promise<Result<void, ControlPlaneError>>;
 	listByOrg(orgId: string): Promise<Result<OrgMember[], ControlPlaneError>>;
 	getRole(orgId: string, userId: string): Promise<Result<OrgRole | null, ControlPlaneError>>;
-	updateRole(orgId: string, userId: string, role: OrgRole): Promise<Result<void, ControlPlaneError>>;
+	updateRole(
+		orgId: string,
+		userId: string,
+		role: OrgRole,
+	): Promise<Result<void, ControlPlaneError>>;
 }
 
 /** Time-range query input for usage data. */
@@ -85,7 +89,5 @@ export interface UsageRepository {
 	/** Query usage for an organisation within a time range. */
 	queryUsage(query: UsageQuery): Promise<Result<UsageRow[], ControlPlaneError>>;
 	/** Query usage per gateway for an organisation within a time range. */
-	queryGatewayUsage(
-		query: UsageQuery,
-	): Promise<Result<UsageRow[], ControlPlaneError>>;
+	queryGatewayUsage(query: UsageQuery): Promise<Result<UsageRow[], ControlPlaneError>>;
 }

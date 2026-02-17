@@ -45,9 +45,7 @@ export async function authenticateRequest(
 		return Err(new ControlPlaneError("Missing Authorization header", "INVALID_INPUT"));
 	}
 
-	const token = authHeader.startsWith("Bearer ")
-		? authHeader.slice(7)
-		: authHeader;
+	const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
 
 	// API key authentication
 	if (token.startsWith("lk_")) {
@@ -58,7 +56,9 @@ export async function authenticateRequest(
 
 		// Verify the API key belongs to the requested org
 		if (ctx.orgId !== orgId) {
-			return Err(new ControlPlaneError("API key does not belong to this organisation", "NOT_FOUND"));
+			return Err(
+				new ControlPlaneError("API key does not belong to this organisation", "NOT_FOUND"),
+			);
 		}
 
 		return Ok({
@@ -72,9 +72,7 @@ export async function authenticateRequest(
 
 	// Clerk session authentication
 	if (!deps.verifyClerkSession) {
-		return Err(
-			new ControlPlaneError("Clerk session verification not configured", "INTERNAL"),
-		);
+		return Err(new ControlPlaneError("Clerk session verification not configured", "INTERNAL"));
 	}
 
 	const userIdResult = await deps.verifyClerkSession(token);
@@ -89,10 +87,7 @@ export async function authenticateRequest(
 	const role = roleResult.value;
 	if (role === null) {
 		return Err(
-			new ControlPlaneError(
-				`User is not a member of organisation "${orgId}"`,
-				"NOT_FOUND",
-			),
+			new ControlPlaneError(`User is not a member of organisation "${orgId}"`, "NOT_FOUND"),
 		);
 	}
 

@@ -8,8 +8,8 @@ import { ControlPlaneError } from "../errors";
 import { PLANS } from "../plans";
 import type { OrgRepository, UsageRepository } from "../repositories";
 import type {
-	StripeCheckoutSession,
 	StripeBillingPortalSession,
+	StripeCheckoutSession,
 	StripeClient,
 } from "./stripe-types";
 
@@ -127,10 +127,7 @@ export async function createCheckoutSession(
 	const plan = PLANS[planId];
 	if (!plan.stripePriceId) {
 		return Err(
-			new ControlPlaneError(
-				`Plan "${planId}" does not support Stripe checkout`,
-				"INVALID_INPUT",
-			),
+			new ControlPlaneError(`Plan "${planId}" does not support Stripe checkout`, "INVALID_INPUT"),
 		);
 	}
 

@@ -29,10 +29,13 @@ function extractBearerToken(request: Request): string | null {
  * Return a 401 Unauthorized JSON response with the given error message.
  */
 function unauthorised(message: string, requestId: string): Response {
-	return new Response(JSON.stringify({ error: message, code: API_ERROR_CODES.AUTH_ERROR, requestId }), {
-		status: 401,
-		headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
-	});
+	return new Response(
+		JSON.stringify({ error: message, code: API_ERROR_CODES.AUTH_ERROR, requestId }),
+		{
+			status: 401,
+			headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
+		},
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +189,11 @@ async function handleRequest(request: Request, env: Env, requestId: string): Pro
 		const { generateOpenApiJson } = await import("@lakesync/gateway");
 		return new Response(generateOpenApiJson(), {
 			status: 200,
-			headers: { "Content-Type": "application/json", "API-Version": "v1", "X-Request-Id": requestId },
+			headers: {
+				"Content-Type": "application/json",
+				"API-Version": "v1",
+				"X-Request-Id": requestId,
+			},
 		});
 	}
 
@@ -196,7 +203,11 @@ async function handleRequest(request: Request, env: Env, requestId: string): Pro
 		const result = handleListConnectorTypes();
 		return new Response(JSON.stringify(result.body), {
 			status: result.status,
-			headers: { "Content-Type": "application/json", "API-Version": "v1", "X-Request-Id": requestId },
+			headers: {
+				"Content-Type": "application/json",
+				"API-Version": "v1",
+				"X-Request-Id": requestId,
+			},
 		});
 	}
 
@@ -239,10 +250,13 @@ async function handleRequest(request: Request, env: Env, requestId: string): Pro
 	// ── Admin route protection ───────────────────────────────────────
 	if (path.startsWith("/v1/admin/") && role !== "admin") {
 		logger.warn("admin_denied", { clientId, path, requestId });
-		return new Response(JSON.stringify({ error: "Admin role required", code: API_ERROR_CODES.FORBIDDEN, requestId }), {
-			status: 403,
-			headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
-		});
+		return new Response(
+			JSON.stringify({ error: "Admin role required", code: API_ERROR_CODES.FORBIDDEN, requestId }),
+			{
+				status: 403,
+				headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
+			},
+		);
 	}
 
 	// ── Routing ─────────────────────────────────────────────────────
@@ -250,16 +264,23 @@ async function handleRequest(request: Request, env: Env, requestId: string): Pro
 	const route = matchRoute(path, method);
 	if (!route) {
 		logger.warn("route_not_found", { path, requestId });
-		return new Response(JSON.stringify({ error: "Not found", code: API_ERROR_CODES.NOT_FOUND, requestId }), {
-			status: 404,
-			headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
-		});
+		return new Response(
+			JSON.stringify({ error: "Not found", code: API_ERROR_CODES.NOT_FOUND, requestId }),
+			{
+				status: 404,
+				headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
+			},
+		);
 	}
 
 	// ── Gateway ID enforcement ──────────────────────────────────────
 	if (route.gatewayId !== jwtGatewayId) {
 		return new Response(
-			JSON.stringify({ error: "Gateway ID mismatch: JWT authorises a different gateway", code: API_ERROR_CODES.FORBIDDEN, requestId }),
+			JSON.stringify({
+				error: "Gateway ID mismatch: JWT authorises a different gateway",
+				code: API_ERROR_CODES.FORBIDDEN,
+				requestId,
+			}),
 			{ status: 403, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } },
 		);
 	}

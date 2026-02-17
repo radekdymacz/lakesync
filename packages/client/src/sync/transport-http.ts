@@ -36,7 +36,9 @@ interface GatewayErrorResponse {
 }
 
 /** Try to parse a gateway error response, falling back to raw text. */
-async function parseErrorResponse(response: Response): Promise<{ message: string; code?: ApiErrorCode; requestId?: string }> {
+async function parseErrorResponse(
+	response: Response,
+): Promise<{ message: string; code?: ApiErrorCode; requestId?: string }> {
 	const text = await response.text().catch(() => "Unknown error");
 	try {
 		const parsed = JSON.parse(text) as GatewayErrorResponse;
@@ -50,7 +52,11 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
 }
 
 /** Format an error message with optional code and request ID for debugging. */
-function formatTransportError(prefix: string, status: number, info: { message: string; code?: string; requestId?: string }): string {
+function formatTransportError(
+	prefix: string,
+	status: number,
+	info: { message: string; code?: string; requestId?: string },
+): string {
 	let msg = `${prefix} (${status}): ${info.message}`;
 	if (info.code) msg += ` [${info.code}]`;
 	if (info.requestId) msg += ` (requestId: ${info.requestId})`;
@@ -148,7 +154,12 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 
 			if (!response.ok) {
 				const info = await parseErrorResponse(response);
-				return Err(new LSError(formatTransportError("Push failed", response.status, info), "TRANSPORT_ERROR"));
+				return Err(
+					new LSError(
+						formatTransportError("Push failed", response.status, info),
+						"TRANSPORT_ERROR",
+					),
+				);
 			}
 
 			const raw = await response.text();
@@ -201,7 +212,12 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 
 			if (!response.ok) {
 				const info = await parseErrorResponse(response);
-				return Err(new LSError(formatTransportError("Pull failed", response.status, info), "TRANSPORT_ERROR"));
+				return Err(
+					new LSError(
+						formatTransportError("Pull failed", response.status, info),
+						"TRANSPORT_ERROR",
+					),
+				);
 			}
 
 			const raw = await response.text();
@@ -235,7 +251,12 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 
 			if (!response.ok) {
 				const info = await parseErrorResponse(response);
-				return Err(new LSError(formatTransportError("Action failed", response.status, info), "TRANSPORT_ERROR"));
+				return Err(
+					new LSError(
+						formatTransportError("Action failed", response.status, info),
+						"TRANSPORT_ERROR",
+					),
+				);
 			}
 
 			const raw = await response.text();
@@ -267,7 +288,10 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 			if (!response.ok) {
 				const info = await parseErrorResponse(response);
 				return Err(
-					new LSError(formatTransportError("Describe actions failed", response.status, info), "TRANSPORT_ERROR"),
+					new LSError(
+						formatTransportError("Describe actions failed", response.status, info),
+						"TRANSPORT_ERROR",
+					),
 				);
 			}
 
@@ -344,7 +368,10 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 			if (!response.ok) {
 				const info = await parseErrorResponse(response);
 				return Err(
-					new LSError(formatTransportError("Checkpoint failed", response.status, info), "TRANSPORT_ERROR"),
+					new LSError(
+						formatTransportError("Checkpoint failed", response.status, info),
+						"TRANSPORT_ERROR",
+					),
 				);
 			}
 

@@ -42,9 +42,7 @@ function createMockDeps(): GatewayServiceDeps {
 			create: vi.fn().mockResolvedValue(Ok(mockGw())),
 			getById: vi.fn().mockResolvedValue(Ok(mockGw())),
 			listByOrg: vi.fn().mockResolvedValue(Ok([])),
-			update: vi.fn().mockImplementation((_id, input) =>
-				Promise.resolve(Ok(mockGw(input))),
-			),
+			update: vi.fn().mockImplementation((_id, input) => Promise.resolve(Ok(mockGw(input)))),
 			delete: vi.fn().mockResolvedValue(Ok(undefined)),
 		},
 		orgRepo: {
@@ -66,19 +64,13 @@ describe("Gateway Service", () => {
 
 	describe("createGateway", () => {
 		it("creates a gateway when under quota", async () => {
-			const result = await createGateway(
-				"org_abc",
-				{ name: "My GW", region: "us" },
-				deps,
-			);
+			const result = await createGateway("org_abc", { name: "My GW", region: "us" }, deps);
 			expect(result.ok).toBe(true);
 			expect(deps.gatewayRepo.create).toHaveBeenCalledOnce();
 		});
 
 		it("returns QUOTA_EXCEEDED when at gateway limit (free plan = 1)", async () => {
-			(deps.gatewayRepo.listByOrg as ReturnType<typeof vi.fn>).mockResolvedValue(
-				Ok([mockGw()]),
-			);
+			(deps.gatewayRepo.listByOrg as ReturnType<typeof vi.fn>).mockResolvedValue(Ok([mockGw()]));
 
 			const result = await createGateway("org_abc", { name: "Second GW" }, deps);
 			expect(result.ok).toBe(false);
@@ -101,9 +93,7 @@ describe("Gateway Service", () => {
 		});
 
 		it("allows pro plan up to 10 gateways", async () => {
-			(deps.orgRepo.getById as ReturnType<typeof vi.fn>).mockResolvedValue(
-				Ok(mockOrg("pro")),
-			);
+			(deps.orgRepo.getById as ReturnType<typeof vi.fn>).mockResolvedValue(Ok(mockOrg("pro")));
 			(deps.gatewayRepo.listByOrg as ReturnType<typeof vi.fn>).mockResolvedValue(
 				Ok(Array(9).fill(mockGw())),
 			);
@@ -135,9 +125,7 @@ describe("Gateway Service", () => {
 	describe("listGateways", () => {
 		it("delegates to repository", async () => {
 			const gateways = [mockGw({ id: "gw_1" }), mockGw({ id: "gw_2" })];
-			(deps.gatewayRepo.listByOrg as ReturnType<typeof vi.fn>).mockResolvedValue(
-				Ok(gateways),
-			);
+			(deps.gatewayRepo.listByOrg as ReturnType<typeof vi.fn>).mockResolvedValue(Ok(gateways));
 
 			const result = await listGateways("org_abc", deps);
 			expect(result.ok).toBe(true);
@@ -195,10 +183,7 @@ describe("Gateway Service", () => {
 	describe("reactivateOrgGateways", () => {
 		it("reactivates all suspended gateways", async () => {
 			(deps.gatewayRepo.listByOrg as ReturnType<typeof vi.fn>).mockResolvedValue(
-				Ok([
-					mockGw({ id: "gw_1", status: "suspended" }),
-					mockGw({ id: "gw_2", status: "active" }),
-				]),
+				Ok([mockGw({ id: "gw_1", status: "suspended" }), mockGw({ id: "gw_2", status: "active" })]),
 			);
 
 			const result = await reactivateOrgGateways("org_abc", deps);

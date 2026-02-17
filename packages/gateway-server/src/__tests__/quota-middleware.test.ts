@@ -4,10 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestContext } from "../middleware";
 import { runPipeline } from "../middleware";
 import {
-	quotaMiddleware,
+	type OrgIdResolver,
 	type QuotaEnforcer,
 	type QuotaEnforcerResult,
-	type OrgIdResolver,
+	quotaMiddleware,
 } from "../quota-middleware";
 
 // ---------------------------------------------------------------------------
@@ -33,19 +33,27 @@ function createMockContext(overrides: Partial<RequestContext> = {}): RequestCont
 		url: new URL("http://localhost:3000/v1/sync/gw-1/push"),
 		pathname: "/v1/sync/gw-1/push",
 		requestId: "req-123",
-		logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() } as never,
+		logger: {
+			info: vi.fn(),
+			warn: vi.fn(),
+			error: vi.fn(),
+			debug: vi.fn(),
+			child: vi.fn(),
+		} as never,
 		corsHeaders: {},
 		route: { gatewayId: "gw-1", action: "push" },
 		...overrides,
 	};
 }
 
-function createMockEnforcer(overrides: {
-	pushResult?: QuotaEnforcerResult;
-	connectionResult?: QuotaEnforcerResult;
-	pushError?: boolean;
-	connectionError?: boolean;
-} = {}): QuotaEnforcer {
+function createMockEnforcer(
+	overrides: {
+		pushResult?: QuotaEnforcerResult;
+		connectionResult?: QuotaEnforcerResult;
+		pushError?: boolean;
+		connectionError?: boolean;
+	} = {},
+): QuotaEnforcer {
 	return {
 		checkPush: vi.fn().mockImplementation(async () => {
 			if (overrides.pushError) throw new Error("quota service down");
@@ -226,9 +234,7 @@ describe("quotaMiddleware", () => {
 			await middleware(ctx, next);
 
 			expect(next).toHaveBeenCalled();
-			expect(warnSpy).toHaveBeenCalledWith(
-				expect.stringContaining("fail-open"),
-			);
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("fail-open"));
 			warnSpy.mockRestore();
 		});
 
@@ -242,9 +248,7 @@ describe("quotaMiddleware", () => {
 			await middleware(ctx, next);
 
 			expect(next).toHaveBeenCalled();
-			expect(warnSpy).toHaveBeenCalledWith(
-				expect.stringContaining("fail-open"),
-			);
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("fail-open"));
 			warnSpy.mockRestore();
 		});
 

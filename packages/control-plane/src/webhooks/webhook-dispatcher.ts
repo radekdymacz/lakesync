@@ -1,5 +1,5 @@
 import { Ok, type Result } from "@lakesync/core";
-import { ControlPlaneError } from "../errors";
+import type { ControlPlaneError } from "../errors";
 import type {
 	DeliveryStatus,
 	WebhookDelivery,

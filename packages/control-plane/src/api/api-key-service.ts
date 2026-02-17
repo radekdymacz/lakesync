@@ -25,9 +25,7 @@ export async function createApiKey(
 		if (!gwResult.ok) return gwResult;
 
 		if (gwResult.value === null) {
-			return Err(
-				new ControlPlaneError(`Gateway "${input.gatewayId}" not found`, "NOT_FOUND"),
-			);
+			return Err(new ControlPlaneError(`Gateway "${input.gatewayId}" not found`, "NOT_FOUND"));
 		}
 
 		if (gwResult.value.orgId !== input.orgId) {

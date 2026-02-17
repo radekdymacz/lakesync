@@ -13,7 +13,10 @@ export interface WebhookStore {
 	listByOrg(orgId: string): Promise<Result<WebhookEndpoint[], ControlPlaneError>>;
 	deleteEndpoint(id: string): Promise<Result<void, ControlPlaneError>>;
 	recordDelivery(delivery: WebhookDelivery): Promise<Result<void, ControlPlaneError>>;
-	listDeliveries(webhookId: string, limit?: number): Promise<Result<WebhookDelivery[], ControlPlaneError>>;
+	listDeliveries(
+		webhookId: string,
+		limit?: number,
+	): Promise<Result<WebhookDelivery[], ControlPlaneError>>;
 }
 
 /** In-memory webhook store for development and testing */

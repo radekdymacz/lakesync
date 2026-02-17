@@ -39,10 +39,10 @@ export {
 	sendJson,
 } from "./pipeline";
 export {
-	quotaMiddleware,
 	type OrgIdResolver,
 	type QuotaEnforcer,
 	type QuotaEnforcerResult,
+	quotaMiddleware,
 } from "./quota-middleware";
 export { RateLimiter, type RateLimiterConfig } from "./rate-limiter";
 export {

@@ -1,4 +1,4 @@
-import { type Result, signToken, type TokenPayload, Ok, Err } from "@lakesync/core";
+import { Err, Ok, type Result, signToken, type TokenPayload } from "@lakesync/core";
 import { ControlPlaneError } from "../errors";
 import type { MemberRepository } from "../repositories";
 

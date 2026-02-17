@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 /** CLI configuration stored at ~/.lakesync/config.json */
 export interface CliConfig {
@@ -33,7 +33,11 @@ export function saveConfig(config: CliConfig): void {
 	if (!existsSync(CONFIG_DIR)) {
 		mkdirSync(CONFIG_DIR, { recursive: true });
 	}
-	writeFileSync(CONFIG_FILE, JSON.stringify(config, null, "\t") + "\n", "utf-8");
+	writeFileSync(
+		CONFIG_FILE,
+		`${JSON.stringify(config, null, "\t")}\n`,
+		"utf-8",
+	);
 }
 
 /** Get the config directory path. */

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebhookEventType } from "../webhooks/types";
+import { WEBHOOK_EVENT_TYPES } from "../webhooks/types";
 import {
 	signPayload,
 	verifyPayloadSignature,
 	WebhookDispatcher,
 } from "../webhooks/webhook-dispatcher";
 import { MemoryWebhookStore } from "../webhooks/webhook-store";
-import type { WebhookEventType } from "../webhooks/types";
-import { WEBHOOK_EVENT_TYPES } from "../webhooks/types";
 
 describe("MemoryWebhookStore", () => {
 	let store: MemoryWebhookStore;

@@ -38,9 +38,18 @@ describe("SyncGateway usage recording", () => {
 		gw.handlePush({ clientId: "client-a", deltas: [delta], lastSeenHlc: hlcLow });
 
 		// Clear push recording
-		recorder.record({ gatewayId: "clear", eventType: "push_deltas", count: 0, timestamp: new Date() });
+		recorder.record({
+			gatewayId: "clear",
+			eventType: "push_deltas",
+			count: 0,
+			timestamp: new Date(),
+		});
 
-		gw.handlePull({ clientId: "client-a", sinceHlc: 0n as import("@lakesync/core").HLCTimestamp, maxDeltas: 100 });
+		gw.handlePull({
+			clientId: "client-a",
+			sinceHlc: 0n as import("@lakesync/core").HLCTimestamp,
+			maxDeltas: 100,
+		});
 
 		const pullEntries = recorder.entries.filter((e) => e.eventType === "pull_deltas");
 		expect(pullEntries.length).toBe(1);
@@ -51,7 +60,11 @@ describe("SyncGateway usage recording", () => {
 		const recorder = new MemoryUsageRecorder();
 		const gw = new SyncGateway(makeConfig(recorder));
 
-		gw.handlePull({ clientId: "client-a", sinceHlc: 0n as import("@lakesync/core").HLCTimestamp, maxDeltas: 100 });
+		gw.handlePull({
+			clientId: "client-a",
+			sinceHlc: 0n as import("@lakesync/core").HLCTimestamp,
+			maxDeltas: 100,
+		});
 
 		const pullEntries = recorder.entries.filter((e) => e.eventType === "pull_deltas");
 		expect(pullEntries.length).toBe(0);

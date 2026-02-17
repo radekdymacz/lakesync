@@ -1,8 +1,8 @@
 import { Err, Ok } from "@lakesync/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { StripeClient } from "../billing/stripe-types";
 import type { UsageReportingDeps } from "../billing/usage-reporting";
 import { reportOrgUsage, runDailyUsageReport } from "../billing/usage-reporting";
-import type { StripeClient } from "../billing/stripe-types";
 import type { Organisation } from "../entities";
 import { ControlPlaneError } from "../errors";
 
@@ -66,10 +66,24 @@ function createMockDeps(overrides: Partial<UsageReportingDeps> = {}): UsageRepor
 		},
 		usageRepo: {
 			recordAggregates: vi.fn().mockResolvedValue(Ok(undefined)),
-			queryUsage: vi.fn().mockResolvedValue(Ok([
-				{ gatewayId: "gw_1", orgId: "org_abc", eventType: "push_deltas", count: 500, windowStart: new Date() },
-				{ gatewayId: "gw_1", orgId: "org_abc", eventType: "push_deltas", count: 300, windowStart: new Date() },
-			])),
+			queryUsage: vi.fn().mockResolvedValue(
+				Ok([
+					{
+						gatewayId: "gw_1",
+						orgId: "org_abc",
+						eventType: "push_deltas",
+						count: 500,
+						windowStart: new Date(),
+					},
+					{
+						gatewayId: "gw_1",
+						orgId: "org_abc",
+						eventType: "push_deltas",
+						count: 300,
+						windowStart: new Date(),
+					},
+				]),
+			),
 			queryGatewayUsage: vi.fn().mockResolvedValue(Ok([])),
 		},
 		...overrides,
@@ -100,14 +114,11 @@ describe("Usage Reporting", () => {
 				expect(result.value.subscriptionItemId).toBe("si_item1");
 			}
 
-			expect(deps.stripe.subscriptionItems.createUsageRecord).toHaveBeenCalledWith(
-				"si_item1",
-				{
-					quantity: 800,
-					timestamp: Math.floor(to.getTime() / 1000),
-					action: "set",
-				},
-			);
+			expect(deps.stripe.subscriptionItems.createUsageRecord).toHaveBeenCalledWith("si_item1", {
+				quantity: 800,
+				timestamp: Math.floor(to.getTime() / 1000),
+				action: "set",
+			});
 		});
 
 		it("skips orgs without a subscription (free plan)", async () => {
@@ -155,8 +166,9 @@ describe("Usage Reporting", () => {
 		});
 
 		it("returns error when Stripe usage record creation fails", async () => {
-			(deps.stripe.subscriptionItems.createUsageRecord as ReturnType<typeof vi.fn>)
-				.mockRejectedValue(new Error("Stripe error"));
+			(
+				deps.stripe.subscriptionItems.createUsageRecord as ReturnType<typeof vi.fn>
+			).mockRejectedValue(new Error("Stripe error"));
 
 			const org = mockOrg();
 			const result = await reportOrgUsage(org, new Date(), new Date(), deps);
@@ -187,10 +199,7 @@ describe("Usage Reporting", () => {
 
 	describe("runDailyUsageReport", () => {
 		it("reports usage for all subscribed orgs", async () => {
-			const orgs = [
-				mockOrg({ id: "org_1" }),
-				mockOrg({ id: "org_2" }),
-			];
+			const orgs = [mockOrg({ id: "org_1" }), mockOrg({ id: "org_2" })];
 
 			const result = await runDailyUsageReport(orgs, deps);
 			expect(result.ok).toBe(true);
@@ -233,10 +242,7 @@ describe("Usage Reporting", () => {
 				});
 			});
 
-			const orgs = [
-				mockOrg({ id: "org_1" }),
-				mockOrg({ id: "org_2" }),
-			];
+			const orgs = [mockOrg({ id: "org_1" }), mockOrg({ id: "org_2" })];
 
 			const result = await runDailyUsageReport(orgs, deps);
 			expect(result.ok).toBe(true);

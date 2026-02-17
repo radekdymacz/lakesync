@@ -1,8 +1,8 @@
 import { Ok } from "@lakesync/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { StripeClient, StripeWebhookEvent } from "../billing/stripe-types";
 import type { StripeWebhookDeps } from "../billing/stripe-webhook";
 import { processWebhookEvent, verifyWebhookSignature } from "../billing/stripe-webhook";
-import type { StripeClient, StripeWebhookEvent } from "../billing/stripe-types";
 import type { Gateway, Organisation } from "../entities";
 
 // ---------------------------------------------------------------------------
@@ -76,18 +76,14 @@ function createMockDeps(overrides: Partial<StripeWebhookDeps> = {}): StripeWebho
 			create: vi.fn(),
 			getById: vi.fn().mockResolvedValue(Ok(mockOrg())),
 			getBySlug: vi.fn(),
-			update: vi.fn().mockImplementation((_id, input) =>
-				Promise.resolve(Ok(mockOrg(input))),
-			),
+			update: vi.fn().mockImplementation((_id, input) => Promise.resolve(Ok(mockOrg(input)))),
 			delete: vi.fn(),
 		},
 		gatewayRepo: {
 			create: vi.fn(),
 			getById: vi.fn().mockResolvedValue(Ok(mockGw())),
 			listByOrg: vi.fn().mockResolvedValue(Ok([])),
-			update: vi.fn().mockImplementation((_id, input) =>
-				Promise.resolve(Ok(mockGw(input))),
-			),
+			update: vi.fn().mockImplementation((_id, input) => Promise.resolve(Ok(mockGw(input)))),
 			delete: vi.fn(),
 		},
 		...overrides,
@@ -118,11 +114,9 @@ describe("Stripe Webhook", () => {
 		});
 
 		it("returns Err when signature is invalid", () => {
-			(deps.stripe.webhooks.constructEvent as ReturnType<typeof vi.fn>).mockImplementation(
-				() => {
-					throw new Error("Invalid signature");
-				},
-			);
+			(deps.stripe.webhooks.constructEvent as ReturnType<typeof vi.fn>).mockImplementation(() => {
+				throw new Error("Invalid signature");
+			});
 
 			const result = verifyWebhookSignature("payload", "bad_sig", "whsec_test", deps.stripe);
 			expect(result.ok).toBe(false);
@@ -235,10 +229,7 @@ describe("Stripe Webhook", () => {
 		describe("invoice.payment_failed", () => {
 			it("suspends all active gateways when no scheduler is provided", async () => {
 				(deps.gatewayRepo.listByOrg as ReturnType<typeof vi.fn>).mockResolvedValue(
-					Ok([
-						mockGw({ id: "gw_1", status: "active" }),
-						mockGw({ id: "gw_2", status: "active" }),
-					]),
+					Ok([mockGw({ id: "gw_1", status: "active" }), mockGw({ id: "gw_2", status: "active" })]),
 				);
 
 				const event = mockEvent("invoice.payment_failed");

@@ -15,7 +15,9 @@ export function warn(message: string): void {
 }
 
 /** Print a key-value table to stdout. */
-export function printTable(rows: Array<Record<string, string | number | boolean | undefined>>): void {
+export function printTable(
+	rows: Array<Record<string, string | number | boolean | undefined>>,
+): void {
 	if (rows.length === 0) {
 		print("(none)");
 		return;

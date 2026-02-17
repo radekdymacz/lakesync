@@ -3,7 +3,13 @@
 // ---------------------------------------------------------------------------
 
 import type { IncomingMessage, Server } from "node:http";
-import type { HLCTimestamp, ResolvedClaims, RowDelta, SyncRulesContext, UsageRecorder } from "@lakesync/core";
+import type {
+	HLCTimestamp,
+	ResolvedClaims,
+	RowDelta,
+	SyncRulesContext,
+	UsageRecorder,
+} from "@lakesync/core";
 import { filterDeltas } from "@lakesync/core";
 import type { ConfigStore, SyncGateway } from "@lakesync/gateway";
 import {

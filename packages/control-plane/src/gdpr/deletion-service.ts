@@ -151,10 +151,7 @@ async function processUserDeletion(
  *
  * - Delete gateway record (cascades to API keys via FK)
  */
-async function processGatewayDeletion(
-	gatewayId: string,
-	deps: DeletionServiceDeps,
-): Promise<void> {
+async function processGatewayDeletion(gatewayId: string, deps: DeletionServiceDeps): Promise<void> {
 	const deleteResult = await deps.gatewayRepo.delete(gatewayId);
 	if (!deleteResult.ok && deleteResult.error.code !== "NOT_FOUND") {
 		throw deleteResult.error;
@@ -166,10 +163,7 @@ async function processGatewayDeletion(
  *
  * - Delete the org record (cascades to members, gateways, API keys via FK)
  */
-async function processOrgDeletion(
-	orgId: string,
-	deps: DeletionServiceDeps,
-): Promise<void> {
+async function processOrgDeletion(orgId: string, deps: DeletionServiceDeps): Promise<void> {
 	const deleteResult = await deps.orgRepo.delete(orgId);
 	if (!deleteResult.ok && deleteResult.error.code !== "NOT_FOUND") {
 		throw deleteResult.error;

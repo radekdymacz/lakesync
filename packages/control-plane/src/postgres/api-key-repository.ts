@@ -86,9 +86,7 @@ export class PgApiKeyRepository implements ApiKeyRepository {
 
 	async getByHash(keyHash: string): Promise<Result<ApiKey | null, ControlPlaneError>> {
 		return wrapControlPlane(async () => {
-			const result = await this.pool.query("SELECT * FROM api_keys WHERE key_hash = $1", [
-				keyHash,
-			]);
+			const result = await this.pool.query("SELECT * FROM api_keys WHERE key_hash = $1", [keyHash]);
 			if (result.rows.length === 0) return null;
 			return rowToApiKey(result.rows[0] as Record<string, unknown>);
 		}, "Failed to get API key by hash");

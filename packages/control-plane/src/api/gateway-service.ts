@@ -1,10 +1,5 @@
 import { Err, Ok, type Result } from "@lakesync/core";
-import type {
-	CreateGatewayInput,
-	Gateway,
-	GatewayStatus,
-	UpdateGatewayInput,
-} from "../entities";
+import type { CreateGatewayInput, Gateway, GatewayStatus, UpdateGatewayInput } from "../entities";
 import { ControlPlaneError } from "../errors";
 import { getPlan } from "../plans";
 import type { GatewayRepository, OrgRepository } from "../repositories";

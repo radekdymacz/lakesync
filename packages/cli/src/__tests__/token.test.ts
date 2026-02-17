@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { verifyToken } from "@lakesync/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("token create command", () => {
 	const originalEnv = process.env;

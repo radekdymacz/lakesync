@@ -19,7 +19,6 @@ import {
 	Ok,
 	type Result,
 	type RowDelta,
-	type UsageRecorder,
 	resolveLWW,
 	rowKey,
 	type SchemaError,
@@ -27,6 +26,7 @@ import {
 	type SyncPush,
 	type SyncResponse,
 	type SyncRulesContext,
+	type UsageRecorder,
 } from "@lakesync/core";
 import { ActionDispatcher } from "./action-dispatcher";
 import { DeltaBuffer } from "./buffer";
@@ -206,9 +206,7 @@ export class SyncGateway implements IngestTarget {
 	}
 
 	/** Record pull_deltas usage for a successful pull result. */
-	private recordPullUsage(
-		result: Result<SyncResponse, AdapterNotFoundError | AdapterError>,
-	): void {
+	private recordPullUsage(result: Result<SyncResponse, AdapterNotFoundError | AdapterError>): void {
 		if (this.usageRecorder && result.ok && result.value.deltas.length > 0) {
 			this.usageRecorder.record({
 				gatewayId: this.config.gatewayId,

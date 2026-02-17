@@ -23,7 +23,10 @@ export type QuotaEnforcerResult =
 	| { readonly allowed: false; readonly reason: string; readonly resetAt?: Date };
 
 /** Resolve the orgId from the request context (JWT claims or a lookup). */
-export type OrgIdResolver = (gatewayId: string, claims?: Record<string, unknown>) => Promise<string | null> | string | null;
+export type OrgIdResolver = (
+	gatewayId: string,
+	claims?: Record<string, unknown>,
+) => Promise<string | null> | string | null;
 
 /**
  * Quota enforcement middleware.
@@ -35,10 +38,7 @@ export type OrgIdResolver = (gatewayId: string, claims?: Record<string, unknown>
  * When `orgIdResolver` returns null (org not found), the request is
  * allowed through (fail-open) — the control plane may not be configured.
  */
-export function quotaMiddleware(
-	enforcer: QuotaEnforcer,
-	resolveOrgId: OrgIdResolver,
-): Middleware {
+export function quotaMiddleware(enforcer: QuotaEnforcer, resolveOrgId: OrgIdResolver): Middleware {
 	return async (ctx, next) => {
 		const route = ctx.route;
 		if (!route) {
@@ -59,7 +59,9 @@ export function quotaMiddleware(
 			orgId = await resolveOrgId(gatewayId, ctx.auth as Record<string, unknown> | undefined);
 		} catch {
 			// Fail-open if org resolution fails
-			console.warn(`[lakesync] Org ID resolution failed for gateway ${gatewayId}, allowing request (fail-open)`);
+			console.warn(
+				`[lakesync] Org ID resolution failed for gateway ${gatewayId}, allowing request (fail-open)`,
+			);
 			await next();
 			return;
 		}
@@ -92,7 +94,10 @@ export function quotaMiddleware(
 				"X-Quota-Remaining": "0",
 			};
 			if (result.resetAt) {
-				const retryAfterSec = Math.max(1, Math.ceil((result.resetAt.getTime() - Date.now()) / 1000));
+				const retryAfterSec = Math.max(
+					1,
+					Math.ceil((result.resetAt.getTime() - Date.now()) / 1000),
+				);
 				headers["Retry-After"] = String(retryAfterSec);
 			}
 			sendError(ctx.res, result.reason, 429, headers, {

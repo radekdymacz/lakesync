@@ -51,7 +51,10 @@ export function handlePushRequest(
 ): HandlerResult {
 	const validation = validatePushBody(raw, headerClientId);
 	if (!validation.ok) {
-		return { status: validation.error.status, body: { error: validation.error.message, code: validation.error.code } };
+		return {
+			status: validation.error.status,
+			body: { error: validation.error.message, code: validation.error.code },
+		};
 	}
 
 	const body = validation.value;
@@ -94,7 +97,10 @@ export async function handlePullRequest(
 ): Promise<HandlerResult> {
 	const validation = parsePullParams(params);
 	if (!validation.ok) {
-		return { status: validation.error.status, body: { error: validation.error.message, code: validation.error.code } };
+		return {
+			status: validation.error.status,
+			body: { error: validation.error.message, code: validation.error.code },
+		};
 	}
 
 	const msg = validation.value;
@@ -129,14 +135,20 @@ export async function handleActionRequest(
 ): Promise<HandlerResult> {
 	const validation = validateActionBody(raw, headerClientId);
 	if (!validation.ok) {
-		return { status: validation.error.status, body: { error: validation.error.message, code: validation.error.code } };
+		return {
+			status: validation.error.status,
+			body: { error: validation.error.message, code: validation.error.code },
+		};
 	}
 
 	const context = claims ? { claims } : undefined;
 	const result = await gateway.handleAction(validation.value, context);
 
 	if (!result.ok) {
-		return { status: 400, body: { error: result.error.message, code: API_ERROR_CODES.VALIDATION_ERROR } };
+		return {
+			status: 400,
+			body: { error: result.error.message, code: API_ERROR_CODES.VALIDATION_ERROR },
+		};
 	}
 
 	return { status: 200, body: result.value };
@@ -151,7 +163,10 @@ export async function handleFlushRequest(
 ): Promise<HandlerResult> {
 	const result = await gateway.flush();
 	if (!result.ok) {
-		return { status: 500, body: { error: result.error.message, code: API_ERROR_CODES.FLUSH_ERROR } };
+		return {
+			status: 500,
+			body: { error: result.error.message, code: API_ERROR_CODES.FLUSH_ERROR },
+		};
 	}
 
 	opts?.clearPersistence?.();
@@ -168,7 +183,10 @@ export async function handleSaveSchema(
 ): Promise<HandlerResult> {
 	const validation = validateSchemaBody(raw);
 	if (!validation.ok) {
-		return { status: validation.error.status, body: { error: validation.error.message, code: validation.error.code } };
+		return {
+			status: validation.error.status,
+			body: { error: validation.error.message, code: validation.error.code },
+		};
 	}
 
 	await store.setSchema(gatewayId, validation.value);
@@ -185,13 +203,19 @@ export async function handleSaveSyncRules(
 ): Promise<HandlerResult> {
 	const parsed = parseJson<unknown>(raw);
 	if (!parsed.ok) {
-		return { status: parsed.error.status, body: { error: parsed.error.message, code: parsed.error.code } };
+		return {
+			status: parsed.error.status,
+			body: { error: parsed.error.message, code: parsed.error.code },
+		};
 	}
 	const config = parsed.value;
 
 	const validation = validateSyncRules(config);
 	if (!validation.ok) {
-		return { status: 400, body: { error: validation.error.message, code: API_ERROR_CODES.VALIDATION_ERROR } };
+		return {
+			status: 400,
+			body: { error: validation.error.message, code: API_ERROR_CODES.VALIDATION_ERROR },
+		};
 	}
 
 	await store.setSyncRules(gatewayId, config as SyncRulesConfig);
@@ -207,20 +231,32 @@ export async function handleRegisterConnector(
 ): Promise<HandlerResult> {
 	const parsed = parseJson<unknown>(raw);
 	if (!parsed.ok) {
-		return { status: parsed.error.status, body: { error: parsed.error.message, code: parsed.error.code } };
+		return {
+			status: parsed.error.status,
+			body: { error: parsed.error.message, code: parsed.error.code },
+		};
 	}
 	const body = parsed.value;
 
 	const validation = validateConnectorConfig(body);
 	if (!validation.ok) {
-		return { status: 400, body: { error: validation.error.message, code: API_ERROR_CODES.VALIDATION_ERROR } };
+		return {
+			status: 400,
+			body: { error: validation.error.message, code: API_ERROR_CODES.VALIDATION_ERROR },
+		};
 	}
 
 	const config = validation.value;
 	const connectors = await store.getConnectors();
 
 	if (connectors[config.name]) {
-		return { status: 409, body: { error: `Connector "${config.name}" already exists`, code: API_ERROR_CODES.VALIDATION_ERROR } };
+		return {
+			status: 409,
+			body: {
+				error: `Connector "${config.name}" already exists`,
+				code: API_ERROR_CODES.VALIDATION_ERROR,
+			},
+		};
 	}
 
 	connectors[config.name] = config;
@@ -239,7 +275,10 @@ export async function handleUnregisterConnector(
 	const connectors = await store.getConnectors();
 
 	if (!connectors[name]) {
-		return { status: 404, body: { error: `Connector "${name}" not found`, code: API_ERROR_CODES.NOT_FOUND } };
+		return {
+			status: 404,
+			body: { error: `Connector "${name}" not found`, code: API_ERROR_CODES.NOT_FOUND },
+		};
 	}
 
 	delete connectors[name];

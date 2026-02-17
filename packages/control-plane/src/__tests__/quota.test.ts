@@ -44,14 +44,16 @@ function makeUsageRow(overrides: Partial<UsageRow> = {}): UsageRow {
 	};
 }
 
-function createMockDeps(overrides: {
-	org?: Organisation | null;
-	gateways?: Gateway[];
-	usageRows?: UsageRow[];
-	orgError?: boolean;
-	gatewayError?: boolean;
-	usageError?: boolean;
-} = {}): QuotaCheckerDeps {
+function createMockDeps(
+	overrides: {
+		org?: Organisation | null;
+		gateways?: Gateway[];
+		usageRows?: UsageRow[];
+		orgError?: boolean;
+		gatewayError?: boolean;
+		usageError?: boolean;
+	} = {},
+): QuotaCheckerDeps {
 	const orgRepo: OrgRepository = {
 		create: vi.fn(),
 		getById: vi.fn().mockImplementation(async () => {
@@ -176,9 +178,7 @@ describe("CachedQuotaChecker", () => {
 
 			const result = await checker.checkPush("org-1", 100);
 			expect(result.allowed).toBe(true);
-			expect(warnSpy).toHaveBeenCalledWith(
-				expect.stringContaining("fail-open"),
-			);
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("fail-open"));
 			warnSpy.mockRestore();
 		});
 
@@ -186,7 +186,9 @@ describe("CachedQuotaChecker", () => {
 			const deps = createMockDeps({
 				org: makeOrg({ plan: "free" }),
 			});
-			(deps.usageRepo.queryUsage as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("timeout"));
+			(deps.usageRepo.queryUsage as ReturnType<typeof vi.fn>).mockRejectedValue(
+				new Error("timeout"),
+			);
 			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			const checker = new CachedQuotaChecker(deps);
 
@@ -337,9 +339,7 @@ describe("CachedQuotaChecker", () => {
 		it("allows pro plan with multiple gateways", async () => {
 			const deps = createMockDeps({
 				org: makeOrg({ plan: "pro" }),
-				gateways: Array.from({ length: 9 }, (_, i) =>
-					makeGateway({ id: `gw-${i}` }),
-				),
+				gateways: Array.from({ length: 9 }, (_, i) => makeGateway({ id: `gw-${i}` })),
 			});
 			const checker = new CachedQuotaChecker(deps);
 

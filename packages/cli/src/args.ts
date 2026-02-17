@@ -28,7 +28,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
 	let i = 0;
 
 	// Known two-word commands
-	const TWO_WORD_COMMANDS = new Set(["token create", "gateways list", "gateways create", "gateways delete", "keys create", "keys list", "keys revoke"]);
+	const TWO_WORD_COMMANDS = new Set([
+		"token create",
+		"gateways list",
+		"gateways create",
+		"gateways delete",
+		"keys create",
+		"keys list",
+		"keys revoke",
+	]);
 
 	// Consume the first non-flag word as the command
 	if (i < args.length && !args[i]!.startsWith("-")) {

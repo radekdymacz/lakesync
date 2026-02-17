@@ -6,9 +6,7 @@ import {
 	type UsageStore,
 } from "../usage";
 
-function makeEvent(
-	overrides: Partial<UsageEvent> = {},
-): UsageEvent {
+function makeEvent(overrides: Partial<UsageEvent> = {}): UsageEvent {
 	return {
 		gatewayId: "gw-1",
 		eventType: "push_deltas",
@@ -89,7 +87,9 @@ describe("MemoryUsageRecorder", () => {
 		});
 
 		it("calls store.recordAggregates with aggregated data", async () => {
-			const recordAggregates = vi.fn<(aggs: UsageAggregate[]) => Promise<void>>().mockResolvedValue(undefined);
+			const recordAggregates = vi
+				.fn<(aggs: UsageAggregate[]) => Promise<void>>()
+				.mockResolvedValue(undefined);
 			const store: UsageStore = { recordAggregates };
 
 			const recorder = new MemoryUsageRecorder(store);
@@ -110,7 +110,9 @@ describe("MemoryUsageRecorder", () => {
 		});
 
 		it("does not call store when buffer is empty", async () => {
-			const recordAggregates = vi.fn<(aggs: UsageAggregate[]) => Promise<void>>().mockResolvedValue(undefined);
+			const recordAggregates = vi
+				.fn<(aggs: UsageAggregate[]) => Promise<void>>()
+				.mockResolvedValue(undefined);
 			const store: UsageStore = { recordAggregates };
 
 			const recorder = new MemoryUsageRecorder(store);
@@ -125,9 +127,11 @@ describe("MemoryUsageRecorder", () => {
 				resolveFlush = resolve;
 			});
 
-			const recordAggregates = vi.fn<(aggs: UsageAggregate[]) => Promise<void>>().mockImplementation(async () => {
-				await flushPromise;
-			});
+			const recordAggregates = vi
+				.fn<(aggs: UsageAggregate[]) => Promise<void>>()
+				.mockImplementation(async () => {
+					await flushPromise;
+				});
 			const store: UsageStore = { recordAggregates };
 
 			const recorder = new MemoryUsageRecorder(store);
@@ -181,7 +185,9 @@ describe("MemoryUsageRecorder", () => {
 
 	describe("windowStart", () => {
 		it("sets windowStart to the start of the minute", async () => {
-			const recordAggregates = vi.fn<(aggs: UsageAggregate[]) => Promise<void>>().mockResolvedValue(undefined);
+			const recordAggregates = vi
+				.fn<(aggs: UsageAggregate[]) => Promise<void>>()
+				.mockResolvedValue(undefined);
 			const store: UsageStore = { recordAggregates };
 
 			const recorder = new MemoryUsageRecorder(store);

@@ -102,11 +102,7 @@ describe("authenticateRequest", () => {
 			verifyClerkSession: undefined,
 		};
 
-		const result = await authenticateRequest(
-			"Bearer clerk_session_token",
-			"org_abc",
-			depsNoClerk,
-		);
+		const result = await authenticateRequest("Bearer clerk_session_token", "org_abc", depsNoClerk);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.error.code).toBe("INTERNAL");

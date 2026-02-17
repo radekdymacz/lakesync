@@ -121,10 +121,7 @@ export interface StripeClient {
 
 	billingPortal: {
 		sessions: {
-			create(params: {
-				customer: string;
-				return_url: string;
-			}): Promise<StripeBillingPortalSession>;
+			create(params: { customer: string; return_url: string }): Promise<StripeBillingPortalSession>;
 		};
 	};
 
@@ -140,11 +137,7 @@ export interface StripeClient {
 	};
 
 	webhooks: {
-		constructEvent(
-			payload: string,
-			signature: string,
-			secret: string,
-		): StripeWebhookEvent;
+		constructEvent(payload: string, signature: string, secret: string): StripeWebhookEvent;
 	};
 }
 

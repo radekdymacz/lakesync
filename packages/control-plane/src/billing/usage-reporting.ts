@@ -119,7 +119,9 @@ export async function runDailyUsageReport(
 	const now = new Date();
 	const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 	// Align to day boundaries (UTC)
-	const from = new Date(Date.UTC(yesterday.getUTCFullYear(), yesterday.getUTCMonth(), yesterday.getUTCDate()));
+	const from = new Date(
+		Date.UTC(yesterday.getUTCFullYear(), yesterday.getUTCMonth(), yesterday.getUTCDate()),
+	);
 	const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
 	let reported = 0;

@@ -1,7 +1,12 @@
 import { Err, Ok } from "@lakesync/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiKeyServiceDeps } from "../api/api-key-service";
-import { createApiKey, listApiKeys, revokeApiKey, rotateApiKeyWithInput } from "../api/api-key-service";
+import {
+	createApiKey,
+	listApiKeys,
+	revokeApiKey,
+	rotateApiKeyWithInput,
+} from "../api/api-key-service";
 import type { ApiKey, Gateway } from "../entities";
 import { ControlPlaneError } from "../errors";
 
@@ -32,9 +37,7 @@ function mockGw(orgId = "org_abc"): Gateway {
 function createMockDeps(): ApiKeyServiceDeps {
 	return {
 		apiKeyRepo: {
-			create: vi.fn().mockResolvedValue(
-				Ok({ apiKey: mockApiKey(), rawKey: "lk_test_raw_key" }),
-			),
+			create: vi.fn().mockResolvedValue(Ok({ apiKey: mockApiKey(), rawKey: "lk_test_raw_key" })),
 			getByHash: vi.fn().mockResolvedValue(Ok(null)),
 			listByOrg: vi.fn().mockResolvedValue(Ok([])),
 			revoke: vi.fn().mockResolvedValue(Ok(undefined)),
@@ -59,10 +62,7 @@ describe("API Key Service", () => {
 
 	describe("createApiKey", () => {
 		it("creates an org-wide API key", async () => {
-			const result = await createApiKey(
-				{ orgId: "org_abc", name: "My Key", role: "client" },
-				deps,
-			);
+			const result = await createApiKey({ orgId: "org_abc", name: "My Key", role: "client" }, deps);
 			expect(result.ok).toBe(true);
 			if (result.ok) {
 				expect(result.value.rawKey).toContain("lk_");

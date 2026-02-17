@@ -144,10 +144,7 @@ export async function updateSubscription(
 	const org = orgResult.value;
 	if (!org.stripeSubscriptionId) {
 		return Err(
-			new ControlPlaneError(
-				`Organisation "${orgId}" has no active subscription`,
-				"INVALID_INPUT",
-			),
+			new ControlPlaneError(`Organisation "${orgId}" has no active subscription`, "INVALID_INPUT"),
 		);
 	}
 
@@ -156,10 +153,7 @@ export async function updateSubscription(
 		const itemId = currentSub.items.data[0]?.id;
 		if (!itemId) {
 			return Err(
-				new ControlPlaneError(
-					"Current subscription has no items — cannot update",
-					"INTERNAL",
-				),
+				new ControlPlaneError("Current subscription has no items — cannot update", "INTERNAL"),
 			);
 		}
 

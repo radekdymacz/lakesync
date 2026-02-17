@@ -1,10 +1,10 @@
 export {
 	clearDeletionRequests,
 	createDeletionRequest,
+	type DeletionServiceDeps,
 	exportOrgData,
 	getDeletionRequest,
 	processDeletionRequest,
-	type DeletionServiceDeps,
 } from "./deletion-service";
 export type {
 	CreateDeletionRequestInput,

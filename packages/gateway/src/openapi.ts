@@ -23,7 +23,11 @@ const RowDeltaSchema = {
 	type: "object",
 	required: ["op", "table", "rowId", "clientId", "columns", "hlc", "deltaId"],
 	properties: {
-		op: { type: "string", enum: ["INSERT", "UPDATE", "DELETE"], description: "Delta operation type" },
+		op: {
+			type: "string",
+			enum: ["INSERT", "UPDATE", "DELETE"],
+			description: "Delta operation type",
+		},
 		table: { type: "string", description: "Table name" },
 		rowId: { type: "string", description: "Row identifier" },
 		clientId: { type: "string", description: "Client identifier for LWW tiebreak" },
@@ -68,7 +72,10 @@ const TableSchemaSchema = {
 	required: ["table", "columns"],
 	properties: {
 		table: { type: "string", description: "Destination table name" },
-		sourceTable: { type: "string", description: "Delta table name to match against (defaults to table)" },
+		sourceTable: {
+			type: "string",
+			description: "Delta table name to match against (defaults to table)",
+		},
 		columns: {
 			type: "array",
 			items: {
@@ -76,7 +83,11 @@ const TableSchemaSchema = {
 				required: ["name", "type"],
 				properties: {
 					name: { type: "string", description: "Column name" },
-					type: { type: "string", enum: ["string", "number", "boolean", "json", "null"], description: "Column type" },
+					type: {
+						type: "string",
+						enum: ["string", "number", "boolean", "json", "null"],
+						description: "Column type",
+					},
 					references: {
 						type: "object",
 						properties: {
@@ -88,9 +99,19 @@ const TableSchemaSchema = {
 				},
 			},
 		},
-		primaryKey: { type: "array", items: { type: "string" }, description: "Composite primary key columns" },
-		softDelete: { type: "boolean", description: "Whether to soft-delete tombstoned rows (default: true)" },
-		externalIdColumn: { type: "string", description: "Column for upsert resolution instead of primary key" },
+		primaryKey: {
+			type: "array",
+			items: { type: "string" },
+			description: "Composite primary key columns",
+		},
+		softDelete: {
+			type: "boolean",
+			description: "Whether to soft-delete tombstoned rows (default: true)",
+		},
+		externalIdColumn: {
+			type: "string",
+			description: "Column for upsert resolution instead of primary key",
+		},
 	},
 } as const;
 
@@ -103,7 +124,11 @@ const ActionSchema = {
 		hlc: { type: "string", description: "HLC timestamp" },
 		connector: { type: "string", description: "Target connector name" },
 		actionType: { type: "string", description: "Action type within the connector" },
-		params: { type: "object", additionalProperties: true, description: "Connector-specific parameters" },
+		params: {
+			type: "object",
+			additionalProperties: true,
+			description: "Connector-specific parameters",
+		},
 		idempotencyKey: { type: "string", description: "Optional idempotency key" },
 	},
 } as const;
@@ -264,7 +289,8 @@ const paths = {
 	"/v1/connectors/types": {
 		get: {
 			summary: "List available connector types",
-			description: "Returns static metadata about all supported connector types. Does not require authentication.",
+			description:
+				"Returns static metadata about all supported connector types. Does not require authentication.",
 			operationId: "listConnectorTypes",
 			tags: ["Connectors"],
 			security: [],
@@ -552,7 +578,8 @@ const paths = {
 					in: "query",
 					required: false,
 					schema: { type: "string" },
-					description: "Alternative JWT token for WebSocket auth (when Authorization header is not supported)",
+					description:
+						"Alternative JWT token for WebSocket auth (when Authorization header is not supported)",
 				},
 			],
 			responses: {
@@ -668,7 +695,8 @@ const paths = {
 	"/v1/admin/connectors/{gatewayId}": {
 		post: {
 			summary: "Register connector",
-			description: "Register a new connector and optionally start its ingest poller. Requires admin role.",
+			description:
+				"Register a new connector and optionally start its ingest poller. Requires admin role.",
 			operationId: "registerConnector",
 			tags: ["Admin", "Connectors"],
 			security: [{ BearerAuth: [] }],

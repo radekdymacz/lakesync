@@ -297,9 +297,7 @@ describe("GatewayServer", () => {
 		expect(res.status).toBe(200);
 		expect(res.headers["x-content-type-options"]).toBe("nosniff");
 		expect(res.headers["x-frame-options"]).toBe("DENY");
-		expect(res.headers["strict-transport-security"]).toBe(
-			"max-age=31536000; includeSubDomains",
-		);
+		expect(res.headers["strict-transport-security"]).toBe("max-age=31536000; includeSubDomains");
 		// Health endpoint should NOT have Cache-Control: no-store
 		expect(res.headers["cache-control"]).toBeUndefined();
 	});
@@ -314,9 +312,7 @@ describe("GatewayServer", () => {
 		expect(res.status).toBe(200);
 		expect(res.headers["x-content-type-options"]).toBe("nosniff");
 		expect(res.headers["x-frame-options"]).toBe("DENY");
-		expect(res.headers["strict-transport-security"]).toBe(
-			"max-age=31536000; includeSubDomains",
-		);
+		expect(res.headers["strict-transport-security"]).toBe("max-age=31536000; includeSubDomains");
 		expect(res.headers["cache-control"]).toBe("no-store");
 	});
 

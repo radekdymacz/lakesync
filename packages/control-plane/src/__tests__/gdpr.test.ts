@@ -239,7 +239,9 @@ describe("GDPR Deletion Service", () => {
 				Ok([{ id: "gw_1", orgId: "org_abc123", name: "GW", status: "active" }]),
 			);
 			(deps.apiKeyRepo.listByOrg as ReturnType<typeof vi.fn>).mockResolvedValue(
-				Ok([{ id: "key_1", orgId: "org_abc123", name: "Key", keyHash: "SECRET", keyPrefix: "lk_" }]),
+				Ok([
+					{ id: "key_1", orgId: "org_abc123", name: "Key", keyHash: "SECRET", keyPrefix: "lk_" },
+				]),
 			);
 
 			const result = await exportOrgData("org_abc123", deps);

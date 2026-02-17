@@ -124,10 +124,9 @@ describe("PgApiKeyRepository", () => {
 
 			const result = await repo.updateLastUsed("key_abc123");
 			expect(result.ok).toBe(true);
-			expect(mock.mockQuery).toHaveBeenCalledWith(
-				expect.stringContaining("last_used_at"),
-				["key_abc123"],
-			);
+			expect(mock.mockQuery).toHaveBeenCalledWith(expect.stringContaining("last_used_at"), [
+				"key_abc123",
+			]);
 		});
 	});
 });

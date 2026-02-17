@@ -187,7 +187,10 @@ function staticRoutes(
 function drainGuard(state: PipelineState): Middleware {
 	return async (ctx, next) => {
 		if (state.draining) {
-			sendError(ctx.res, "Service is shutting down", 503, ctx.corsHeaders, { code: API_ERROR_CODES.INTERNAL_ERROR, requestId: ctx.requestId });
+			sendError(ctx.res, "Service is shutting down", 503, ctx.corsHeaders, {
+				code: API_ERROR_CODES.INTERNAL_ERROR,
+				requestId: ctx.requestId,
+			});
 			return;
 		}
 		await next();
@@ -200,7 +203,10 @@ function requestTimeout(config: PipelineConfig): Middleware {
 		const timeoutMs = config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 		ctx.res.setTimeout(timeoutMs, () => {
 			if (!ctx.res.writableEnded) {
-				sendError(ctx.res, "Request timeout", 504, ctx.corsHeaders, { code: API_ERROR_CODES.INTERNAL_ERROR, requestId: ctx.requestId });
+				sendError(ctx.res, "Request timeout", 504, ctx.corsHeaders, {
+					code: API_ERROR_CODES.INTERNAL_ERROR,
+					requestId: ctx.requestId,
+				});
 			}
 		});
 		await next();
@@ -224,12 +230,18 @@ function routeMatching(config: PipelineConfig): Middleware {
 	return async (ctx, next) => {
 		const route = matchRoute(ctx.pathname, ctx.method);
 		if (!route) {
-			sendError(ctx.res, "Not found", 404, ctx.corsHeaders, { code: API_ERROR_CODES.NOT_FOUND, requestId: ctx.requestId });
+			sendError(ctx.res, "Not found", 404, ctx.corsHeaders, {
+				code: API_ERROR_CODES.NOT_FOUND,
+				requestId: ctx.requestId,
+			});
 			return;
 		}
 
 		if (route.gatewayId !== config.gatewayId) {
-			sendError(ctx.res, "Gateway ID mismatch", 404, ctx.corsHeaders, { code: API_ERROR_CODES.NOT_FOUND, requestId: ctx.requestId });
+			sendError(ctx.res, "Gateway ID mismatch", 404, ctx.corsHeaders, {
+				code: API_ERROR_CODES.NOT_FOUND,
+				requestId: ctx.requestId,
+			});
 			return;
 		}
 
@@ -249,7 +261,10 @@ function authMiddleware(config: PipelineConfig): Middleware {
 			config.jwtSecret,
 		);
 		if (!authResult.authenticated) {
-			sendError(ctx.res, authResult.message, authResult.status, ctx.corsHeaders, { code: API_ERROR_CODES.AUTH_ERROR, requestId: ctx.requestId });
+			sendError(ctx.res, authResult.message, authResult.status, ctx.corsHeaders, {
+				code: API_ERROR_CODES.AUTH_ERROR,
+				requestId: ctx.requestId,
+			});
 			return;
 		}
 		ctx.auth = config.jwtSecret ? authResult.claims : undefined;
@@ -264,10 +279,16 @@ function rateLimitMiddleware(config: PipelineConfig): Middleware {
 			const clientKey = ctx.auth?.clientId ?? ctx.req.socket.remoteAddress ?? "unknown";
 			if (!config.rateLimiter.tryConsume(clientKey)) {
 				const retryAfter = config.rateLimiter.retryAfterSeconds(clientKey);
-				sendError(ctx.res, "Too many requests", 429, {
-					...ctx.corsHeaders,
-					"Retry-After": String(retryAfter),
-				}, { code: API_ERROR_CODES.RATE_LIMITED, requestId: ctx.requestId });
+				sendError(
+					ctx.res,
+					"Too many requests",
+					429,
+					{
+						...ctx.corsHeaders,
+						"Retry-After": String(retryAfter),
+					},
+					{ code: API_ERROR_CODES.RATE_LIMITED, requestId: ctx.requestId },
+				);
 				return;
 			}
 		}
@@ -280,7 +301,10 @@ function routeDispatch(routeHandlers: Record<string, RouteHandler>): Middleware 
 	return async (ctx) => {
 		const handler = routeHandlers[ctx.route!.action];
 		if (!handler) {
-			sendError(ctx.res, "Not found", 404, ctx.corsHeaders, { code: API_ERROR_CODES.NOT_FOUND, requestId: ctx.requestId });
+			sendError(ctx.res, "Not found", 404, ctx.corsHeaders, {
+				code: API_ERROR_CODES.NOT_FOUND,
+				requestId: ctx.requestId,
+			});
 			return;
 		}
 		// Set API-Version header on all versioned route responses

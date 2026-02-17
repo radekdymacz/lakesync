@@ -37,7 +37,9 @@ export function createMockPool() {
 }
 
 /** Build a mock organisation row as it would come from Postgres */
-export function mockOrgRow(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+export function mockOrgRow(
+	overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
 	return {
 		id: "org_abc123",
 		name: "Test Org",
@@ -52,7 +54,9 @@ export function mockOrgRow(overrides: Partial<Record<string, unknown>> = {}): Re
 }
 
 /** Build a mock gateway row as it would come from Postgres */
-export function mockGatewayRow(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+export function mockGatewayRow(
+	overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
 	return {
 		id: "gw_abc123",
 		org_id: "org_abc123",
@@ -66,7 +70,9 @@ export function mockGatewayRow(overrides: Partial<Record<string, unknown>> = {})
 }
 
 /** Build a mock API key row as it would come from Postgres */
-export function mockApiKeyRow(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+export function mockApiKeyRow(
+	overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
 	return {
 		id: "key_abc123",
 		org_id: "org_abc123",
@@ -84,7 +90,9 @@ export function mockApiKeyRow(overrides: Partial<Record<string, unknown>> = {}):
 }
 
 /** Build a mock member row as it would come from Postgres */
-export function mockMemberRow(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+export function mockMemberRow(
+	overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
 	return {
 		org_id: "org_abc123",
 		user_id: "user_abc123",

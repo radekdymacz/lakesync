@@ -44,8 +44,12 @@ function mockSubscription(overrides: Partial<StripeSubscription> = {}): StripeSu
 function createMockStripe(): StripeClient {
 	return {
 		customers: {
-			create: vi.fn().mockResolvedValue({ id: "cus_new", email: null, name: "Test Org", metadata: {} }),
-			retrieve: vi.fn().mockResolvedValue({ id: "cus_abc", email: null, name: "Test Org", metadata: {} }),
+			create: vi
+				.fn()
+				.mockResolvedValue({ id: "cus_new", email: null, name: "Test Org", metadata: {} }),
+			retrieve: vi
+				.fn()
+				.mockResolvedValue({ id: "cus_abc", email: null, name: "Test Org", metadata: {} }),
 		},
 		subscriptions: {
 			create: vi.fn().mockResolvedValue(mockSubscription()),
@@ -55,16 +59,27 @@ function createMockStripe(): StripeClient {
 		},
 		checkout: {
 			sessions: {
-				create: vi.fn().mockResolvedValue({ id: "cs_123", url: "https://checkout.stripe.com/pay/cs_123" }),
+				create: vi
+					.fn()
+					.mockResolvedValue({ id: "cs_123", url: "https://checkout.stripe.com/pay/cs_123" }),
 			},
 		},
 		billingPortal: {
 			sessions: {
-				create: vi.fn().mockResolvedValue({ id: "bps_123", url: "https://billing.stripe.com/session/bps_123" }),
+				create: vi
+					.fn()
+					.mockResolvedValue({ id: "bps_123", url: "https://billing.stripe.com/session/bps_123" }),
 			},
 		},
 		subscriptionItems: {
-			createUsageRecord: vi.fn().mockResolvedValue({ id: "ur_123", quantity: 100, timestamp: 0, subscription_item: "si_item1" }),
+			createUsageRecord: vi
+				.fn()
+				.mockResolvedValue({
+					id: "ur_123",
+					quantity: 100,
+					timestamp: 0,
+					subscription_item: "si_item1",
+				}),
 		},
 		webhooks: {
 			constructEvent: vi.fn(),
@@ -79,9 +94,7 @@ function createMockDeps(overrides: Partial<StripeBillingDeps> = {}): StripeBilli
 			create: vi.fn().mockResolvedValue(Ok(mockOrg())),
 			getById: vi.fn().mockResolvedValue(Ok(mockOrg())),
 			getBySlug: vi.fn(),
-			update: vi.fn().mockImplementation((_id, input) =>
-				Promise.resolve(Ok(mockOrg(input))),
-			),
+			update: vi.fn().mockImplementation((_id, input) => Promise.resolve(Ok(mockOrg(input)))),
 			delete: vi.fn(),
 		},
 		...overrides,
@@ -205,11 +218,13 @@ describe("Stripe Billing", () => {
 	describe("updateSubscription", () => {
 		it("updates subscription to a new plan with proration", async () => {
 			(deps.orgRepo.getById as ReturnType<typeof vi.fn>).mockResolvedValue(
-				Ok(mockOrg({
-					stripeCustomerId: "cus_abc",
-					stripeSubscriptionId: "sub_123",
-					plan: "starter",
-				})),
+				Ok(
+					mockOrg({
+						stripeCustomerId: "cus_abc",
+						stripeSubscriptionId: "sub_123",
+						plan: "starter",
+					}),
+				),
 			);
 
 			const result = await updateSubscription("org_abc", "pro", deps);
@@ -246,10 +261,12 @@ describe("Stripe Billing", () => {
 
 		it("returns error when Stripe API fails", async () => {
 			(deps.orgRepo.getById as ReturnType<typeof vi.fn>).mockResolvedValue(
-				Ok(mockOrg({
-					stripeCustomerId: "cus_abc",
-					stripeSubscriptionId: "sub_123",
-				})),
+				Ok(
+					mockOrg({
+						stripeCustomerId: "cus_abc",
+						stripeSubscriptionId: "sub_123",
+					}),
+				),
 			);
 			(deps.stripe.subscriptions.update as ReturnType<typeof vi.fn>).mockRejectedValue(
 				new Error("Stripe error"),
@@ -266,10 +283,12 @@ describe("Stripe Billing", () => {
 	describe("cancelSubscription", () => {
 		it("cancels subscription at period end", async () => {
 			(deps.orgRepo.getById as ReturnType<typeof vi.fn>).mockResolvedValue(
-				Ok(mockOrg({
-					stripeCustomerId: "cus_abc",
-					stripeSubscriptionId: "sub_123",
-				})),
+				Ok(
+					mockOrg({
+						stripeCustomerId: "cus_abc",
+						stripeSubscriptionId: "sub_123",
+					}),
+				),
 			);
 
 			const result = await cancelSubscription("org_abc", deps);
@@ -303,10 +322,12 @@ describe("Stripe Billing", () => {
 
 		it("returns error when Stripe API fails", async () => {
 			(deps.orgRepo.getById as ReturnType<typeof vi.fn>).mockResolvedValue(
-				Ok(mockOrg({
-					stripeCustomerId: "cus_abc",
-					stripeSubscriptionId: "sub_123",
-				})),
+				Ok(
+					mockOrg({
+						stripeCustomerId: "cus_abc",
+						stripeSubscriptionId: "sub_123",
+					}),
+				),
 			);
 			(deps.stripe.subscriptions.update as ReturnType<typeof vi.fn>).mockRejectedValue(
 				new Error("Network error"),
