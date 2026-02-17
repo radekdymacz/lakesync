@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { IncomingMessage } from "node:http";
+import { API_ERROR_CODES } from "@lakesync/core";
 import type { HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
 import type { ConfigStore, HandlerResult } from "@lakesync/gateway";
 import {
@@ -75,7 +76,7 @@ function handlePush(deps: RouteHandlerDeps): RouteHandler {
 		const contentLength = Number(req.headers["content-length"] ?? "0");
 		if (contentLength > MAX_PUSH_PAYLOAD_BYTES) {
 			deps.metrics.pushTotal.inc({ status: "error" });
-			sendError(res, "Payload too large (max 1 MiB)", 413, corsH);
+			sendError(res, "Payload too large (max 1 MiB)", 413, corsH, { code: API_ERROR_CODES.VALIDATION_ERROR, requestId: ctx.requestId });
 			return;
 		}
 
@@ -94,7 +95,7 @@ function handlePush(deps: RouteHandlerDeps): RouteHandler {
 				const writeResult = await deps.sharedBuffer.writeThroughPush(pushResult.deltas);
 				if (!writeResult.ok) {
 					deps.metrics.pushTotal.inc({ status: "error" });
-					sendError(res, writeResult.error.message, 502, corsH);
+					sendError(res, writeResult.error.message, 502, corsH, { code: API_ERROR_CODES.ADAPTER_ERROR, requestId: ctx.requestId });
 					return;
 				}
 			}

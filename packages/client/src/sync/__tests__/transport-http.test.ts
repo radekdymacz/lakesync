@@ -72,7 +72,7 @@ describe("HttpTransport", () => {
 			const url = callArgs[0] as string;
 			const options = callArgs[1] as RequestInit;
 
-			expect(url).toBe("https://gateway.example.com/sync/gw-1/push");
+			expect(url).toBe("https://gateway.example.com/v1/sync/gw-1/push");
 			expect(options.method).toBe("POST");
 			expect(options.headers).toEqual(
 				expect.objectContaining({
@@ -188,7 +188,7 @@ describe("HttpTransport", () => {
 			const callArgs = mockFetch.mock.calls[0]!;
 			const url = new URL(callArgs[0] as string);
 
-			expect(url.pathname).toBe("/sync/gw-1/pull");
+			expect(url.pathname).toBe("/v1/sync/gw-1/pull");
 			expect(url.searchParams.get("since")).toBe(sinceHlc.toString());
 			expect(url.searchParams.get("clientId")).toBe("client-1");
 			expect(url.searchParams.get("limit")).toBe("50");

@@ -2,6 +2,7 @@
 	"pages": [
 		"getting-started",
 		"architecture",
+		"auth",
 		"real-time",
 		"source-polling",
 		"connectors",

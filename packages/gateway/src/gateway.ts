@@ -19,6 +19,7 @@ import {
 	Ok,
 	type Result,
 	type RowDelta,
+	type UsageRecorder,
 	resolveLWW,
 	rowKey,
 	type SchemaError,
@@ -33,6 +34,7 @@ import { FlushCoordinator } from "./flush-coordinator";
 import { buildFlushQueue, type FlushQueue } from "./flush-queue";
 import { SourceRegistry } from "./source-registry";
 import type { GatewayConfig, HandlePushResult } from "./types";
+import { validateDeltaTableName } from "./validation";
 import { ValidationPipeline } from "./validation-pipeline";
 
 export type { SyncPush, SyncPull, SyncResponse };
@@ -53,6 +55,7 @@ export class SyncGateway implements IngestTarget {
 	private readonly flushCoordinator: FlushCoordinator;
 	private readonly flushQueue: FlushQueue | undefined;
 	private readonly validationPipeline: ValidationPipeline;
+	private readonly usageRecorder: UsageRecorder | undefined;
 
 	constructor(config: GatewayConfig, adapter?: LakeAdapter | DatabaseAdapter) {
 		this.config = { sourceAdapters: {}, ...config };
@@ -65,12 +68,15 @@ export class SyncGateway implements IngestTarget {
 
 		// Build validation pipeline from config
 		this.validationPipeline = new ValidationPipeline();
+		// Defence in depth: validate table names in push deltas are safe SQL identifiers
+		this.validationPipeline.add(validateDeltaTableName);
 		if (this.config.schemaManager) {
 			const sm = this.config.schemaManager;
 			this.validationPipeline.add((delta) => sm.validateDelta(delta));
 		}
 
 		this.flushQueue = buildFlushQueue(config, this.adapter);
+		this.usageRecorder = config.usageRecorder;
 	}
 
 	// -----------------------------------------------------------------------
@@ -132,6 +138,16 @@ export class SyncGateway implements IngestTarget {
 		}
 
 		const serverHlc = this.hlc.now();
+
+		if (this.usageRecorder && accepted > 0) {
+			this.usageRecorder.record({
+				gatewayId: this.config.gatewayId,
+				eventType: "push_deltas",
+				count: accepted,
+				timestamp: new Date(),
+			});
+		}
+
 		return Ok({ serverHlc, accepted, deltas: ingested });
 	}
 
@@ -178,10 +194,29 @@ export class SyncGateway implements IngestTarget {
 		| Promise<Result<SyncResponse, AdapterNotFoundError | AdapterError>>
 		| Result<SyncResponse, never> {
 		if (msg.source) {
-			return this.handleAdapterPull(msg, context);
+			return this.handleAdapterPull(msg, context).then((result) => {
+				this.recordPullUsage(result);
+				return result;
+			});
 		}
 
-		return this.handleBufferPull(msg, context);
+		const result = this.handleBufferPull(msg, context);
+		this.recordPullUsage(result);
+		return result;
+	}
+
+	/** Record pull_deltas usage for a successful pull result. */
+	private recordPullUsage(
+		result: Result<SyncResponse, AdapterNotFoundError | AdapterError>,
+	): void {
+		if (this.usageRecorder && result.ok && result.value.deltas.length > 0) {
+			this.usageRecorder.record({
+				gatewayId: this.config.gatewayId,
+				eventType: "pull_deltas",
+				count: result.value.deltas.length,
+				timestamp: new Date(),
+			});
+		}
 	}
 
 	/** Pull from the in-memory buffer (original path). */
@@ -274,7 +309,9 @@ export class SyncGateway implements IngestTarget {
 	 * @returns A `Result` indicating success or a `FlushError`.
 	 */
 	async flush(): Promise<Result<void, FlushError>> {
-		return this.flushCoordinator.flush(this.buffer, this.adapter, {
+		const deltaCount = this.buffer.logSize;
+		const byteSize = this.buffer.byteSize;
+		const result = await this.flushCoordinator.flush(this.buffer, this.adapter, {
 			config: {
 				gatewayId: this.config.gatewayId,
 				flushFormat: this.config.flushFormat,
@@ -284,6 +321,21 @@ export class SyncGateway implements IngestTarget {
 			schemas: this.config.schemas,
 			flushQueue: this.flushQueue,
 		});
+		if (this.usageRecorder && result.ok && deltaCount > 0) {
+			this.usageRecorder.record({
+				gatewayId: this.config.gatewayId,
+				eventType: "flush_deltas",
+				count: deltaCount,
+				timestamp: new Date(),
+			});
+			this.usageRecorder.record({
+				gatewayId: this.config.gatewayId,
+				eventType: "flush_bytes",
+				count: byteSize,
+				timestamp: new Date(),
+			});
+		}
+		return result;
 	}
 
 	/**
@@ -314,7 +366,16 @@ export class SyncGateway implements IngestTarget {
 		msg: ActionPush,
 		context?: AuthContext,
 	): Promise<Result<ActionResponse, ActionValidationError>> {
-		return this.actions.dispatch(msg, () => this.hlc.now(), context);
+		const result = await this.actions.dispatch(msg, () => this.hlc.now(), context);
+		if (this.usageRecorder && result.ok) {
+			this.usageRecorder.record({
+				gatewayId: this.config.gatewayId,
+				eventType: "action_executed",
+				count: msg.actions.length,
+				timestamp: new Date(),
+			});
+		}
+		return result;
 	}
 
 	/** Register a named action handler. */
@@ -367,6 +428,21 @@ export class SyncGateway implements IngestTarget {
 	 */
 	listSources(): string[] {
 		return this.sources.list();
+	}
+
+	// -----------------------------------------------------------------------
+	// Purge — delete deltas matching a filter
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Purge deltas matching a filter from the in-memory buffer.
+	 *
+	 * @param filter - Criteria for which deltas to remove.
+	 * @returns The number of deltas removed.
+	 */
+	purgeDeltas(filter: PurgeFilter): number {
+		const predicate = buildPurgePredicate(filter);
+		return this.buffer.purge(predicate);
 	}
 
 	// -----------------------------------------------------------------------
@@ -429,4 +505,26 @@ export class SyncGateway implements IngestTarget {
 			byteSize: this.buffer.byteSize,
 		};
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Purge filter types
+// ---------------------------------------------------------------------------
+
+/** Filter criteria for purging deltas from the buffer. */
+export interface PurgeFilter {
+	/** Remove deltas from this client only. */
+	clientId?: string;
+	/** Remove deltas from this table only. */
+	table?: string;
+}
+
+/** Build a predicate function from a PurgeFilter. */
+function buildPurgePredicate(filter: PurgeFilter): (delta: RowDelta) => boolean {
+	return (delta) => {
+		if (filter.clientId && delta.clientId !== filter.clientId) return false;
+		if (filter.table && delta.table !== filter.table) return false;
+		// At least one filter must match — empty filter purges everything
+		return true;
+	};
 }

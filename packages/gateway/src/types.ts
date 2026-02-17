@@ -7,6 +7,7 @@ import type {
 	Materialisable,
 	RowDelta,
 	TableSchema,
+	UsageRecorder,
 } from "@lakesync/core";
 import type { FlushQueue } from "./flush-queue";
 import type { SchemaManager } from "./schema-manager";
@@ -71,6 +72,8 @@ export interface GatewayConfig extends BufferConfig {
 	flushQueue?: FlushQueue;
 	/** Optional callback invoked when materialisation fails. Useful for metrics/alerting. */
 	onMaterialisationFailure?: (table: string, deltaCount: number, error: Error) => void;
+	/** Optional usage recorder for metering billable events. Fire-and-forget — never blocks requests. */
+	usageRecorder?: UsageRecorder;
 }
 
 /** Gateway runtime state */

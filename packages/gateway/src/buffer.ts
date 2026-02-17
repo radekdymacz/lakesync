@@ -211,6 +211,62 @@ export class DeltaBuffer {
 		this.state = emptySnapshot();
 	}
 
+	/**
+	 * Purge deltas matching a filter predicate.
+	 *
+	 * Rebuilds the buffer snapshot without matching entries. Returns the
+	 * number of deltas removed.
+	 */
+	purge(predicate: (delta: RowDelta) => boolean): number {
+		const prev = this.state;
+		const kept: RowDelta[] = [];
+		let removedCount = 0;
+
+		for (const delta of prev.log) {
+			if (predicate(delta)) {
+				removedCount++;
+			} else {
+				kept.push(delta);
+			}
+		}
+
+		if (removedCount === 0) return 0;
+
+		// Rebuild snapshot from kept deltas
+		const newIndex = new Map<RowKey, RowDelta>();
+		const newDeltaIds = new Set<string>();
+		const newTableBytes = new Map<string, number>();
+		const newTableLog = new Map<string, RowDelta[]>();
+		let newBytes = 0;
+
+		for (const delta of kept) {
+			const key = rowKey(delta.table, delta.rowId);
+			newIndex.set(key, delta);
+			newDeltaIds.add(delta.deltaId);
+			const bytes = estimateDeltaBytes(delta);
+			newBytes += bytes;
+			newTableBytes.set(delta.table, (newTableBytes.get(delta.table) ?? 0) + bytes);
+			const tl = newTableLog.get(delta.table);
+			if (tl) {
+				tl.push(delta);
+			} else {
+				newTableLog.set(delta.table, [delta]);
+			}
+		}
+
+		this.state = {
+			log: kept,
+			index: newIndex,
+			deltaIds: newDeltaIds,
+			estimatedBytes: newBytes,
+			createdAt: prev.createdAt,
+			tableBytes: newTableBytes,
+			tableLog: newTableLog,
+		};
+
+		return removedCount;
+	}
+
 	/** Drain the log for flush. Returns log entries and clears both structures. */
 	drain(): RowDelta[] {
 		const { entries } = this.snapshot();

@@ -73,7 +73,7 @@ describe("GatewayServer connector management", () => {
 
 	it("POST /admin/connectors/:gw registers a connector (no auth)", async () => {
 		await createServer();
-		const res = await req(`${baseUrl}/admin/connectors/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/connectors/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -90,7 +90,7 @@ describe("GatewayServer connector management", () => {
 
 	it("POST with invalid body returns 400", async () => {
 		await createServer();
-		const res = await req(`${baseUrl}/admin/connectors/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/connectors/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ invalid: true }),
@@ -105,12 +105,12 @@ describe("GatewayServer connector management", () => {
 			type: "postgres",
 			postgres: { connectionString: "postgres://localhost/test" },
 		};
-		await req(`${baseUrl}/admin/connectors/${gatewayId}`, {
+		await req(`${baseUrl}/v1/admin/connectors/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(config),
 		});
-		const res = await req(`${baseUrl}/admin/connectors/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/connectors/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(config),
@@ -120,7 +120,7 @@ describe("GatewayServer connector management", () => {
 
 	it("GET /admin/connectors/:gw lists connectors", async () => {
 		await createServer();
-		await req(`${baseUrl}/admin/connectors/${gatewayId}`, {
+		await req(`${baseUrl}/v1/admin/connectors/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -129,7 +129,7 @@ describe("GatewayServer connector management", () => {
 				postgres: { connectionString: "postgres://localhost/test" },
 			}),
 		});
-		const res = await req(`${baseUrl}/admin/connectors/${gatewayId}`);
+		const res = await req(`${baseUrl}/v1/admin/connectors/${gatewayId}`);
 		expect(res.status).toBe(200);
 		const list = JSON.parse(res.body);
 		expect(list).toHaveLength(1);
@@ -143,7 +143,7 @@ describe("GatewayServer connector management", () => {
 
 	it("DELETE /admin/connectors/:gw/:name unregisters", async () => {
 		await createServer();
-		await req(`${baseUrl}/admin/connectors/${gatewayId}`, {
+		await req(`${baseUrl}/v1/admin/connectors/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -152,7 +152,7 @@ describe("GatewayServer connector management", () => {
 				postgres: { connectionString: "postgres://localhost/test" },
 			}),
 		});
-		const res = await req(`${baseUrl}/admin/connectors/${gatewayId}/to-delete`, {
+		const res = await req(`${baseUrl}/v1/admin/connectors/${gatewayId}/to-delete`, {
 			method: "DELETE",
 		});
 		expect(res.status).toBe(200);
@@ -160,14 +160,14 @@ describe("GatewayServer connector management", () => {
 		expect(data.unregistered).toBe(true);
 
 		// Verify it's gone
-		const listRes = await req(`${baseUrl}/admin/connectors/${gatewayId}`);
+		const listRes = await req(`${baseUrl}/v1/admin/connectors/${gatewayId}`);
 		const list = JSON.parse(listRes.body);
 		expect(list).toHaveLength(0);
 	});
 
 	it("DELETE non-existent connector returns 404", async () => {
 		await createServer();
-		const res = await req(`${baseUrl}/admin/connectors/${gatewayId}/missing`, {
+		const res = await req(`${baseUrl}/v1/admin/connectors/${gatewayId}/missing`, {
 			method: "DELETE",
 		});
 		expect(res.status).toBe(404);
@@ -175,7 +175,7 @@ describe("GatewayServer connector management", () => {
 
 	it("wrong gateway ID returns 404", async () => {
 		await createServer();
-		const res = await req(`${baseUrl}/admin/connectors/wrong-gw`);
+		const res = await req(`${baseUrl}/v1/admin/connectors/wrong-gw`);
 		expect(res.status).toBe(404);
 	});
 });

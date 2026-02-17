@@ -212,7 +212,7 @@ describe("GET /metrics endpoint", () => {
 
 	it("increments push counter on successful push", async () => {
 		const delta = makeDelta();
-		await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([delta]),
@@ -223,14 +223,14 @@ describe("GET /metrics endpoint", () => {
 	});
 
 	it("increments pull counter on successful pull", async () => {
-		await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=c1`);
+		await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=c1`);
 
 		const metricsRes = await req(`${baseUrl}/metrics`);
 		expect(metricsRes.body).toContain('lakesync_pull_total{status="ok"} 1');
 	});
 
 	it("increments flush counter on admin flush", async () => {
-		await req(`${baseUrl}/admin/flush/${gatewayId}`, { method: "POST" });
+		await req(`${baseUrl}/v1/admin/flush/${gatewayId}`, { method: "POST" });
 
 		const metricsRes = await req(`${baseUrl}/metrics`);
 		expect(metricsRes.body).toContain('lakesync_flush_total{status="ok"} 1');
@@ -238,7 +238,7 @@ describe("GET /metrics endpoint", () => {
 
 	it("updates buffer gauges after push", async () => {
 		const delta = makeDelta();
-		await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([delta]),
@@ -253,7 +253,7 @@ describe("GET /metrics endpoint", () => {
 
 	it("records push latency histogram", async () => {
 		const delta = makeDelta();
-		await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([delta]),

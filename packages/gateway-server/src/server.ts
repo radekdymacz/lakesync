@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AdapterFactoryRegistry } from "@lakesync/adapter";
 import { jiraPollerFactory } from "@lakesync/connector-jira";
 import { salesforcePollerFactory } from "@lakesync/connector-salesforce";
-import type { DatabaseAdapter, LakeAdapter, PollerRegistry } from "@lakesync/core";
+import type { DatabaseAdapter, LakeAdapter, PollerRegistry, UsageRecorder } from "@lakesync/core";
 import { createPollerRegistry } from "@lakesync/core";
 import type { ConfigStore, FlushQueue } from "@lakesync/gateway";
 import {
@@ -45,6 +45,8 @@ export interface GatewayServerConfig {
 	maxBufferAgeMs?: number;
 	/** HMAC-SHA256 secret for JWT verification. When omitted, auth is disabled. */
 	jwtSecret?: string;
+	/** Previous JWT secret for zero-downtime rotation. When set alongside `jwtSecret`, tokens signed with either secret are accepted. */
+	jwtSecretPrevious?: string;
 	/** Interval in milliseconds between periodic flushes (default 30s). */
 	flushIntervalMs?: number;
 	/** CORS allowed origins. When omitted, all origins are reflected. */
@@ -84,6 +86,8 @@ export interface GatewayServerConfig {
 	logLevel?: LogLevel;
 	/** Whether to enable the Prometheus metrics endpoint at GET /metrics (default true). */
 	enableMetrics?: boolean;
+	/** Optional usage recorder for metering billable events. Passed to the gateway and WebSocket manager. */
+	usageRecorder?: UsageRecorder;
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +165,7 @@ export class GatewayServer {
 				maxBufferBytes: config.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
 				maxBufferAgeMs: config.maxBufferAgeMs ?? DEFAULT_MAX_BUFFER_AGE_MS,
 				flushQueue: config.flushQueue,
+				usageRecorder: config.usageRecorder,
 			},
 			config.adapter,
 		);
@@ -228,10 +233,16 @@ export class GatewayServer {
 			updateBufferGauges,
 		});
 
+		// Build the resolved JWT secret — tuple when previous secret is configured
+		const resolvedJwtSecret: string | [string, string] | undefined =
+			config.jwtSecret && config.jwtSecretPrevious
+				? [config.jwtSecret, config.jwtSecretPrevious]
+				: config.jwtSecret;
+
 		this.pipeline = buildServerPipeline(
 			{
 				allowedOrigins: config.allowedOrigins,
-				jwtSecret: config.jwtSecret,
+				jwtSecret: resolvedJwtSecret,
 				requestTimeoutMs: config.requestTimeoutMs,
 				gatewayId: this.config.gatewayId,
 				rateLimiter: this.rateLimiter,
@@ -273,13 +284,18 @@ export class GatewayServer {
 			});
 		});
 
-		// WebSocket manager
+		// WebSocket manager — use resolved secret for dual-key rotation support
+		const wsJwtSecret: string | [string, string] | undefined =
+			this.config.jwtSecret && this.config.jwtSecretPrevious
+				? [this.config.jwtSecret, this.config.jwtSecretPrevious]
+				: this.config.jwtSecret;
 		this.wsManager = new WebSocketManager(
 			this.gateway,
 			this.configStore,
 			this.config.gatewayId,
-			this.config.jwtSecret,
+			wsJwtSecret,
 			this.config.wsLimits,
+			this.config.usageRecorder,
 		);
 		this.wsManager.attach(this.httpServer);
 
@@ -383,7 +399,9 @@ export class GatewayServer {
 		const url = new URL(rawUrl, `http://${req.headers.host ?? "localhost"}`);
 		const pathname = url.pathname;
 		const origin = req.headers.origin ?? null;
-		const requestId = crypto.randomUUID();
+		// Accept incoming X-Request-Id (pass-through from load balancer) or generate a new one
+		const incomingRequestId = req.headers["x-request-id"];
+		const requestId = (typeof incomingRequestId === "string" ? incomingRequestId : undefined) ?? crypto.randomUUID();
 		const reqLogger = this.logger.child({ requestId, method, path: pathname });
 
 		// Track active requests metric
@@ -400,7 +418,10 @@ export class GatewayServer {
 			pathname,
 			requestId,
 			logger: reqLogger,
-			corsHeaders: corsHeaders(origin, { allowedOrigins: this.config.allowedOrigins }),
+			corsHeaders: {
+				...corsHeaders(origin, { allowedOrigins: this.config.allowedOrigins }),
+				"X-Request-Id": requestId,
+			},
 		};
 
 		await runPipeline(this.pipeline, ctx);

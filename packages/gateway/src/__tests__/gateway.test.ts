@@ -991,6 +991,50 @@ describe("SyncGateway", () => {
 		expect(adapter.stored.size).toBe(0);
 	});
 
+	it("handlePush rejects deltas with invalid table names (SQL injection defence)", () => {
+		const gw = new SyncGateway(defaultConfig);
+		const delta = makeDelta({
+			hlc: hlcLow,
+			table: '"; DROP TABLE users--',
+			deltaId: "delta-injection",
+		});
+
+		const result = gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta],
+			lastSeenHlc: hlcLow,
+		});
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.code).toBe("SCHEMA_MISMATCH");
+			expect(result.error.message).toContain("Invalid SQL identifier");
+		}
+
+		// Buffer must be empty — nothing applied
+		expect(gw.bufferStats.logSize).toBe(0);
+	});
+
+	it("handlePush accepts deltas with valid table names", () => {
+		const gw = new SyncGateway(defaultConfig);
+		const delta = makeDelta({
+			hlc: hlcLow,
+			table: "valid_table_name",
+			deltaId: "delta-valid-table",
+		});
+
+		const result = gw.handlePush({
+			clientId: "client-a",
+			deltas: [delta],
+			lastSeenHlc: hlcLow,
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.accepted).toBe(1);
+		}
+	});
+
 	it("handleAction delegates to ActionDispatcher", async () => {
 		const gw = new SyncGateway({
 			...defaultConfig,

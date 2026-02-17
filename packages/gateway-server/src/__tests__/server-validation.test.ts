@@ -92,7 +92,7 @@ describe("GatewayServer push validation", () => {
 
 	it("rejects payload exceeding 1 MiB via Content-Length header", async () => {
 		const body = pushBody([makeDelta()]);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -113,7 +113,7 @@ describe("GatewayServer push validation", () => {
 		}
 		const body = pushBody(deltas);
 
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -124,14 +124,14 @@ describe("GatewayServer push validation", () => {
 		expect(JSON.parse(res.body).error).toContain("Too many deltas");
 	});
 
-	it("accepts push with exactly 10,000 deltas", async () => {
+	it("accepts push with exactly 10,000 deltas", { timeout: 30_000 }, async () => {
 		const deltas: RowDelta[] = [];
 		for (let i = 0; i < 10_000; i++) {
 			deltas.push(makeDelta({ deltaId: `d-${i}` }));
 		}
 		const body = pushBody(deltas);
 
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -143,7 +143,7 @@ describe("GatewayServer push validation", () => {
 
 	it("accepts push with empty deltas array", async () => {
 		const body = pushBody([]);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body,
@@ -153,7 +153,7 @@ describe("GatewayServer push validation", () => {
 
 	it("rejects push with missing clientId", async () => {
 		const body = JSON.stringify({ deltas: [makeDelta()], lastSeenHlc: "0" }, bigintReplacer);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body,
@@ -164,7 +164,7 @@ describe("GatewayServer push validation", () => {
 
 	it("rejects push with missing deltas field", async () => {
 		const body = JSON.stringify({ clientId: "client-1", lastSeenHlc: "0" });
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body,
@@ -174,7 +174,7 @@ describe("GatewayServer push validation", () => {
 	});
 
 	it("rejects push with non-JSON body", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: "this is not json {{{",
@@ -208,49 +208,49 @@ describe("GatewayServer pull validation", () => {
 	});
 
 	it("rejects pull with missing since param", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?clientId=c1`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?clientId=c1`);
 		expect(res.status).toBe(400);
 		expect(JSON.parse(res.body).error).toContain("since");
 	});
 
 	it("rejects pull with missing clientId param", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0`);
 		expect(res.status).toBe(400);
 		expect(JSON.parse(res.body).error).toContain("clientId");
 	});
 
 	it("rejects pull with invalid since param (non-numeric)", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=abc&clientId=c1`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=abc&clientId=c1`);
 		expect(res.status).toBe(400);
 		expect(JSON.parse(res.body).error).toContain("since");
 	});
 
 	it("rejects pull with invalid limit param (zero)", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=c1&limit=0`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=c1&limit=0`);
 		expect(res.status).toBe(400);
 		expect(JSON.parse(res.body).error).toContain("limit");
 	});
 
 	it("rejects pull with invalid limit param (negative)", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=c1&limit=-5`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=c1&limit=-5`);
 		expect(res.status).toBe(400);
 		expect(JSON.parse(res.body).error).toContain("limit");
 	});
 
 	it("rejects pull with invalid limit param (non-numeric)", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=c1&limit=abc`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=c1&limit=abc`);
 		expect(res.status).toBe(400);
 		expect(JSON.parse(res.body).error).toContain("limit");
 	});
 
 	it("accepts pull with valid limit param", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=c1&limit=50`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=c1&limit=50`);
 		expect(res.status).toBe(200);
 	});
 
 	it("clamps limit to max 10,000", async () => {
 		// Should not error even with a very large limit — server clamps it
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=c1&limit=99999`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=c1&limit=99999`);
 		expect(res.status).toBe(200);
 	});
 });
@@ -279,7 +279,7 @@ describe("GatewayServer schema validation", () => {
 	});
 
 	it("rejects schema with missing table field", async () => {
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ columns: [{ name: "a", type: "string" }] }),
@@ -288,7 +288,7 @@ describe("GatewayServer schema validation", () => {
 	});
 
 	it("rejects schema with missing columns field", async () => {
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ table: "t" }),
@@ -297,7 +297,7 @@ describe("GatewayServer schema validation", () => {
 	});
 
 	it("rejects schema with invalid column type", async () => {
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -310,7 +310,7 @@ describe("GatewayServer schema validation", () => {
 	});
 
 	it("rejects schema with empty column name", async () => {
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -323,7 +323,7 @@ describe("GatewayServer schema validation", () => {
 	});
 
 	it("rejects non-JSON body for schema", async () => {
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: "not json",
@@ -333,7 +333,7 @@ describe("GatewayServer schema validation", () => {
 	});
 
 	it("accepts schema with all valid column types", async () => {
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({

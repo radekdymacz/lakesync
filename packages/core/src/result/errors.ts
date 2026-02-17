@@ -67,6 +67,24 @@ export class FlushQueueError extends LakeSyncError {
 	}
 }
 
+/** Structured error codes for API responses. */
+export const API_ERROR_CODES = {
+	VALIDATION_ERROR: "VALIDATION_ERROR",
+	SCHEMA_ERROR: "SCHEMA_ERROR",
+	BACKPRESSURE_ERROR: "BACKPRESSURE_ERROR",
+	CLOCK_DRIFT: "CLOCK_DRIFT",
+	AUTH_ERROR: "AUTH_ERROR",
+	FORBIDDEN: "FORBIDDEN",
+	NOT_FOUND: "NOT_FOUND",
+	RATE_LIMITED: "RATE_LIMITED",
+	ADAPTER_ERROR: "ADAPTER_ERROR",
+	FLUSH_ERROR: "FLUSH_ERROR",
+	INTERNAL_ERROR: "INTERNAL_ERROR",
+} as const;
+
+/** A single error code value from {@link API_ERROR_CODES}. */
+export type ApiErrorCode = (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];
+
 /** Coerce an unknown thrown value into an Error instance. */
 export function toError(err: unknown): Error {
 	return err instanceof Error ? err : new Error(String(err));

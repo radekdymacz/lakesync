@@ -98,7 +98,7 @@ describe("GatewayServer graceful shutdown", () => {
 		(server as unknown as { draining: boolean }).draining = true;
 
 		// Push should get 503
-		const pushRes = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const pushRes = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([makeDelta()]),
@@ -108,7 +108,7 @@ describe("GatewayServer graceful shutdown", () => {
 		expect(pushBody2.error).toBe("Service is shutting down");
 
 		// Pull should get 503
-		const pullRes = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=c1`);
+		const pullRes = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=c1`);
 		expect(pullRes.status).toBe(503);
 
 		// Health should still work during drain
@@ -166,7 +166,7 @@ describe("GatewayServer graceful shutdown", () => {
 		const baseUrl = `http://localhost:${server.port}`;
 
 		// Push a delta
-		const pushRes = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const pushRes = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([makeDelta()]),
@@ -330,7 +330,7 @@ describe("GatewayServer request timeouts", () => {
 		const baseUrl = `http://localhost:${server.port}`;
 
 		// Verify normal requests still work with the timeout set
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=c1`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=c1`);
 		expect(res.status).toBe(200);
 
 		await server.stop();
@@ -348,7 +348,7 @@ describe("GatewayServer request timeouts", () => {
 		const baseUrl = `http://localhost:${server.port}`;
 
 		// Push a delta
-		const pushRes = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const pushRes = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([makeDelta()]),
@@ -385,7 +385,7 @@ describe("GatewayServer request timeouts", () => {
 		const baseUrl = `http://localhost:${server.port}`;
 
 		// Push a delta to put something in the buffer
-		await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([makeDelta()]),

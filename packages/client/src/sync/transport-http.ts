@@ -2,6 +2,7 @@ import type {
 	ActionDiscovery,
 	ActionPush,
 	ActionResponse,
+	ApiErrorCode,
 	ConnectorDescriptor,
 	HLCTimestamp,
 	LakeSyncError,
@@ -27,6 +28,35 @@ import type {
 	SyncTransport,
 } from "./transport";
 
+/** Parsed error response from the gateway. */
+interface GatewayErrorResponse {
+	error: string;
+	code?: ApiErrorCode;
+	requestId?: string;
+}
+
+/** Try to parse a gateway error response, falling back to raw text. */
+async function parseErrorResponse(response: Response): Promise<{ message: string; code?: ApiErrorCode; requestId?: string }> {
+	const text = await response.text().catch(() => "Unknown error");
+	try {
+		const parsed = JSON.parse(text) as GatewayErrorResponse;
+		if (parsed.error) {
+			return { message: parsed.error, code: parsed.code, requestId: parsed.requestId };
+		}
+	} catch {
+		// Not JSON — fall through
+	}
+	return { message: text };
+}
+
+/** Format an error message with optional code and request ID for debugging. */
+function formatTransportError(prefix: string, status: number, info: { message: string; code?: string; requestId?: string }): string {
+	let msg = `${prefix} (${status}): ${info.message}`;
+	if (info.code) msg += ` [${info.code}]`;
+	if (info.requestId) msg += ` (requestId: ${info.requestId})`;
+	return msg;
+}
+
 /** Configuration for the HTTP sync transport */
 export interface HttpTransportConfig {
 	/** Base URL of the gateway (e.g. "https://gateway.example.com") */
@@ -43,6 +73,11 @@ export interface HttpTransportConfig {
 	getToken?: () => string | Promise<string>;
 	/** Optional custom fetch implementation (useful for testing) */
 	fetch?: typeof globalThis.fetch;
+	/**
+	 * API version path prefix prepended to all route paths.
+	 * Defaults to `"/v1"`. Set to `""` to use unversioned paths.
+	 */
+	apiVersion?: string;
 }
 
 /**
@@ -57,6 +92,7 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 	private readonly token: string;
 	private readonly getToken: (() => string | Promise<string>) | undefined;
 	private readonly _fetch: typeof globalThis.fetch;
+	private readonly apiVersion: string;
 
 	constructor(config: HttpTransportConfig) {
 		this.baseUrl = config.baseUrl.replace(/\/+$/, "");
@@ -64,6 +100,7 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 		this.token = config.token;
 		this.getToken = config.getToken;
 		this._fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
+		this.apiVersion = config.apiVersion ?? "/v1";
 	}
 
 	/** Resolve the current bearer token, preferring getToken callback over static token. */
@@ -83,7 +120,7 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 	async push(
 		msg: SyncPush,
 	): Promise<Result<{ serverHlc: HLCTimestamp; accepted: number }, LakeSyncError>> {
-		const url = `${this.baseUrl}/sync/${this.gatewayId}/push`;
+		const url = `${this.baseUrl}${this.apiVersion}/sync/${this.gatewayId}/push`;
 		const body = JSON.stringify(msg, bigintReplacer);
 
 		try {
@@ -110,8 +147,8 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 			}
 
 			if (!response.ok) {
-				const text = await response.text().catch(() => "Unknown error");
-				return Err(new LSError(`Push failed (${response.status}): ${text}`, "TRANSPORT_ERROR"));
+				const info = await parseErrorResponse(response);
+				return Err(new LSError(formatTransportError("Push failed", response.status, info), "TRANSPORT_ERROR"));
 			}
 
 			const raw = await response.text();
@@ -141,7 +178,7 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 		if (msg.source) {
 			params.set("source", msg.source);
 		}
-		const url = `${this.baseUrl}/sync/${this.gatewayId}/pull?${params}`;
+		const url = `${this.baseUrl}${this.apiVersion}/sync/${this.gatewayId}/pull?${params}`;
 
 		try {
 			let token = await this.resolveToken();
@@ -163,8 +200,8 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 			}
 
 			if (!response.ok) {
-				const text = await response.text().catch(() => "Unknown error");
-				return Err(new LSError(`Pull failed (${response.status}): ${text}`, "TRANSPORT_ERROR"));
+				const info = await parseErrorResponse(response);
+				return Err(new LSError(formatTransportError("Pull failed", response.status, info), "TRANSPORT_ERROR"));
 			}
 
 			const raw = await response.text();
@@ -182,7 +219,7 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 	 * Sends a POST request with the action payload as BigInt-safe JSON.
 	 */
 	async executeAction(msg: ActionPush): Promise<Result<ActionResponse, LakeSyncError>> {
-		const url = `${this.baseUrl}/sync/${this.gatewayId}/action`;
+		const url = `${this.baseUrl}${this.apiVersion}/sync/${this.gatewayId}/action`;
 		const body = JSON.stringify(msg, bigintReplacer);
 
 		try {
@@ -197,8 +234,8 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 			});
 
 			if (!response.ok) {
-				const text = await response.text().catch(() => "Unknown error");
-				return Err(new LSError(`Action failed (${response.status}): ${text}`, "TRANSPORT_ERROR"));
+				const info = await parseErrorResponse(response);
+				return Err(new LSError(formatTransportError("Action failed", response.status, info), "TRANSPORT_ERROR"));
 			}
 
 			const raw = await response.text();
@@ -216,7 +253,7 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 	 * Sends a GET request to the actions discovery endpoint.
 	 */
 	async describeActions(): Promise<Result<ActionDiscovery, LakeSyncError>> {
-		const url = `${this.baseUrl}/sync/${this.gatewayId}/actions`;
+		const url = `${this.baseUrl}${this.apiVersion}/sync/${this.gatewayId}/actions`;
 
 		try {
 			const token = await this.resolveToken();
@@ -228,9 +265,9 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 			});
 
 			if (!response.ok) {
-				const text = await response.text().catch(() => "Unknown error");
+				const info = await parseErrorResponse(response);
 				return Err(
-					new LSError(`Describe actions failed (${response.status}): ${text}`, "TRANSPORT_ERROR"),
+					new LSError(formatTransportError("Describe actions failed", response.status, info), "TRANSPORT_ERROR"),
 				);
 			}
 
@@ -250,7 +287,7 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 	 * Sends a GET request to the unauthenticated `/connectors/types` endpoint.
 	 */
 	async listConnectorTypes(): Promise<Result<ConnectorDescriptor[], LakeSyncError>> {
-		const url = `${this.baseUrl}/connectors/types`;
+		const url = `${this.baseUrl}${this.apiVersion}/connectors/types`;
 
 		try {
 			const response = await this._fetch(url, {
@@ -258,10 +295,10 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 			});
 
 			if (!response.ok) {
-				const text = await response.text().catch(() => "Unknown error");
+				const info = await parseErrorResponse(response);
 				return Err(
 					new LSError(
-						`List connector types failed (${response.status}): ${text}`,
+						formatTransportError("List connector types failed", response.status, info),
 						"TRANSPORT_ERROR",
 					),
 				);
@@ -288,7 +325,7 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 	 * length-prefixed proto frames from the response body.
 	 */
 	async checkpoint(): Promise<Result<CheckpointResponse | null, LakeSyncError>> {
-		const url = `${this.baseUrl}/sync/${this.gatewayId}/checkpoint`;
+		const url = `${this.baseUrl}${this.apiVersion}/sync/${this.gatewayId}/checkpoint`;
 
 		try {
 			const token = await this.resolveToken();
@@ -305,9 +342,9 @@ export class HttpTransport implements SyncTransport, CheckpointTransport, Action
 			}
 
 			if (!response.ok) {
-				const text = await response.text().catch(() => "Unknown error");
+				const info = await parseErrorResponse(response);
 				return Err(
-					new LSError(`Checkpoint failed (${response.status}): ${text}`, "TRANSPORT_ERROR"),
+					new LSError(formatTransportError("Checkpoint failed", response.status, info), "TRANSPORT_ERROR"),
 				);
 			}
 

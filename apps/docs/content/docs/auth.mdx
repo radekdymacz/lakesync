@@ -1,0 +1,218 @@
+---
+title: Authentication
+description: JWT-based authentication for LakeSync gateways — token generation, required claims, sync rules integration, and security best practices.
+---
+
+LakeSync uses JSON Web Tokens (JWT) signed with HMAC-SHA256 to authenticate clients against gateways. Every request to a gateway (push, pull, action, admin) must include a valid JWT.
+
+## How It Works
+
+1. Your server generates a JWT using `signToken()` with a shared secret
+2. The client SDK sends the token with every request
+3. The gateway verifies the signature and extracts claims
+4. Sync rules can reference JWT claims to filter data per-user
+
+```
+Server                    Client SDK                 Gateway
+  │                          │                          │
+  │──── signToken() ────────▶│                          │
+  │     (JWT)                │──── push/pull ──────────▶│
+  │                          │     Authorization:       │
+  │                          │     Bearer <jwt>         │── verifyToken()
+  │                          │                          │── check exp
+  │                          │                          │── extract claims
+  │                          │◀──── response ───────────│
+```
+
+## Required Claims
+
+| Claim | Type | Required | Description |
+|-------|------|----------|-------------|
+| `sub` | `string` | Yes | Client identifier — uniquely identifies the connecting client |
+| `gw` | `string` | Yes | Gateway ID — must match the gateway being accessed |
+| `exp` | `number` | Yes | Expiry as Unix timestamp (seconds). `signToken` defaults to 1 hour. |
+| `role` | `string` | No | `"admin"` or `"client"` (default: `"client"`). Admin tokens can access admin routes (flush, schema, sync rules). |
+
+Any additional claims are available as custom claims for sync rule evaluation.
+
+## Generating Tokens (Server-Side)
+
+Use `signToken()` from `@lakesync/core` or the unified `lakesync` package. It uses the Web Crypto API and works on any edge runtime (Cloudflare Workers, Deno, Bun, Node 20+).
+
+```ts
+import { signToken } from "lakesync";
+
+// Minimal token — defaults to role: "client", exp: now + 1 hour
+const token = await signToken(
+  { sub: "user-123", gw: "my-gateway" },
+  process.env.JWT_SECRET
+);
+
+// Admin token with custom claims
+const adminToken = await signToken(
+  {
+    sub: "admin-1",
+    gw: "my-gateway",
+    role: "admin",
+    exp: Math.floor(Date.now() / 1000) + 7200, // 2 hours
+    orgId: "org-abc",
+  },
+  process.env.JWT_SECRET
+);
+```
+
+### TokenPayload
+
+```ts
+interface TokenPayload {
+  sub: string;                // clientId (required)
+  gw: string;                 // gatewayId (required)
+  role?: "admin" | "client";  // defaults to "client"
+  exp?: number;               // defaults to now + 3600s
+  [key: string]: string | string[] | number | undefined;
+}
+```
+
+## Client SDK Configuration
+
+### Static Token
+
+Pass a pre-generated token directly:
+
+```ts
+import { HttpTransport } from "lakesync/client";
+
+const transport = new HttpTransport({
+  baseUrl: "https://gateway.example.com",
+  gatewayId: "my-gateway",
+  token: "eyJhbGciOiJIUzI1NiIs...",
+});
+```
+
+### Dynamic Token (Recommended)
+
+Pass a `getToken` function that fetches fresh tokens before they expire:
+
+```ts
+const transport = new HttpTransport({
+  baseUrl: "https://gateway.example.com",
+  gatewayId: "my-gateway",
+  getToken: async () => {
+    const res = await fetch("/api/token");
+    const { token } = await res.json();
+    return token;
+  },
+});
+```
+
+### WebSocket Transport
+
+WebSocket connections send the token on connection:
+
+```ts
+import { WebSocketTransport } from "lakesync/client";
+
+const transport = new WebSocketTransport({
+  url: "wss://gateway.example.com/sync/my-gateway/ws",
+  token: "eyJhbGciOiJIUzI1NiIs...",
+});
+```
+
+For the self-hosted gateway server, tokens can also be passed via the `?token=` query parameter.
+
+## Sync Rules and JWT Claims
+
+Sync rules can reference JWT claims using the `jwt:` prefix. This enables per-user data filtering without custom server logic.
+
+```ts
+const syncRules = {
+  buckets: [
+    {
+      name: "user-data",
+      tables: ["todos", "notes"],
+      filters: [
+        { column: "owner_id", op: "eq", value: "jwt:sub" },
+      ],
+    },
+    {
+      name: "org-data",
+      tables: ["projects"],
+      filters: [
+        { column: "org_id", op: "eq", value: "jwt:orgId" },
+      ],
+    },
+  ],
+};
+```
+
+When a client with `sub: "user-123"` and `orgId: "org-abc"` pulls data:
+- `todos` and `notes` are filtered to rows where `owner_id = "user-123"`
+- `projects` are filtered to rows where `org_id = "org-abc"`
+
+Custom claims (any claim that is not `sub`, `gw`, `exp`, `iat`, `iss`, `aud`, or `role`) are automatically extracted and made available for sync rule evaluation. The `sub` claim is always included.
+
+## Security Best Practices
+
+- **Keep secrets server-side.** Never embed the JWT secret in client code. Generate tokens on your backend and pass them to the client.
+- **Set short expiry times.** The default 1-hour expiry is a good starting point. Use `getToken` on the client for automatic refresh.
+- **Use distinct secrets per gateway.** If you run multiple gateways, use a unique secret for each one to limit the blast radius of a compromised key.
+- **Rotate secrets periodically.** LakeSync supports dual-secret verification for zero-downtime rotation. Set the new secret as primary and keep the old one as a fallback until existing tokens expire.
+- **Validate on your backend.** Before issuing a token, verify that the requesting user is authorised to access the specified gateway and has the correct role.
+- **Use `role: "client"` by default.** Only issue `role: "admin"` tokens for server-side operations (flush, schema management, sync rules). Client apps should never hold admin tokens.
+
+## Verifying Tokens
+
+The gateway verifies tokens automatically. If you need to verify tokens in your own code (for example, in a middleware layer), use `verifyToken()`:
+
+```ts
+import { verifyToken } from "lakesync";
+
+const result = await verifyToken(token, process.env.JWT_SECRET);
+if (!result.ok) {
+  console.error("Auth failed:", result.error.message);
+  return;
+}
+
+const { clientId, gatewayId, role, customClaims } = result.value;
+```
+
+`verifyToken` returns a `Result<AuthClaims, AuthError>` — it never throws.
+
+## Secret Rotation
+
+LakeSync supports dual-secret verification for zero-downtime JWT secret rotation. Both `verifyToken` and the gateway accept a `[primary, previous]` tuple instead of a single secret string.
+
+### Rotation Procedure
+
+1. **Set the new secret as primary, keep the old one as previous:**
+
+   ```ts
+   // verifyToken accepts both forms
+   const result = await verifyToken(token, [newSecret, oldSecret]);
+   ```
+
+2. **Wait for all tokens signed with the old secret to expire** (maximum 1 hour with default expiry).
+
+3. **Remove the previous secret** — go back to a single secret string.
+
+### Gateway Configuration
+
+**Cloudflare Workers** (`gateway-worker`):
+
+Set `JWT_SECRET_PREVIOUS` as an additional secret via `wrangler secret put JWT_SECRET_PREVIOUS`. The worker automatically passes both secrets to `verifyToken` when `JWT_SECRET_PREVIOUS` is present.
+
+**Self-hosted gateway server** (`gateway-server`):
+
+```ts
+const server = new GatewayServer({
+  gatewayId: "my-gateway",
+  jwtSecret: process.env.JWT_SECRET,
+  jwtSecretPrevious: process.env.JWT_SECRET_PREVIOUS, // optional
+});
+```
+
+### How It Works
+
+- `verifyToken` tries the primary secret first. If signature verification fails, it falls back to the previous secret.
+- `signToken` always signs with the single provided secret — it does not accept a tuple. New tokens should always be signed with the primary secret.
+- Non-signature errors (malformed JWT, expired, missing claims) are returned immediately without trying the fallback.

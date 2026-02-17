@@ -396,12 +396,12 @@ describe("SourcePoller — diff strategy", () => {
 		expect(handlePushSpy).not.toHaveBeenCalled();
 	});
 
-	it("warns on large snapshots", { timeout: 30_000 }, async () => {
+	it("warns on large snapshots", async () => {
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-		// Build a large result set
+		// Build a result set just above the LARGE_SNAPSHOT_WARN threshold (1,000)
 		const rows: Record<string, unknown>[] = [];
-		for (let i = 0; i < 50_001; i++) {
+		for (let i = 0; i < 1_001; i++) {
 			rows.push({ id: String(i), value: i });
 		}
 
@@ -424,7 +424,7 @@ describe("SourcePoller — diff strategy", () => {
 
 		await poller.poll();
 
-		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("50001 rows"));
+		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("1001 rows"));
 
 		warnSpy.mockRestore();
 	});

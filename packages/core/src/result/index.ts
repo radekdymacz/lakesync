@@ -1,6 +1,8 @@
 export {
 	AdapterError,
 	AdapterNotFoundError,
+	API_ERROR_CODES,
+	type ApiErrorCode,
 	BackpressureError,
 	ClockDriftError,
 	ConflictError,

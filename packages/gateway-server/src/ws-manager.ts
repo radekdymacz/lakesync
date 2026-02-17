@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { IncomingMessage, Server } from "node:http";
-import type { HLCTimestamp, ResolvedClaims, RowDelta, SyncRulesContext } from "@lakesync/core";
+import type { HLCTimestamp, ResolvedClaims, RowDelta, SyncRulesContext, UsageRecorder } from "@lakesync/core";
 import { filterDeltas } from "@lakesync/core";
 import type { ConfigStore, SyncGateway } from "@lakesync/gateway";
 import {
@@ -56,8 +56,9 @@ export class WebSocketManager {
 		private readonly gateway: SyncGateway,
 		private readonly configStore: ConfigStore,
 		private readonly gatewayId: string,
-		private readonly jwtSecret: string | undefined,
+		private readonly jwtSecret: string | [string, string] | undefined,
 		limits?: WebSocketLimitsConfig,
+		private readonly usageRecorder?: UsageRecorder,
 	) {
 		this.wss = new WebSocketServer({ noServer: true });
 		this.maxConnections = limits?.maxConnections ?? 1000;
@@ -165,6 +166,16 @@ export class WebSocketManager {
 			const claims: Record<string, unknown> = auth?.customClaims ?? {};
 
 			this.clients.set(ws, { clientId, claims });
+
+			// Record ws_connection usage event
+			if (this.usageRecorder) {
+				this.usageRecorder.record({
+					gatewayId: this.gatewayId,
+					eventType: "ws_connection",
+					count: 1,
+					timestamp: new Date(),
+				});
+			}
 
 			ws.on("message", (data: Buffer) => {
 				// Per-client message rate limiting

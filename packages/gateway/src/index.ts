@@ -34,7 +34,7 @@ export {
 	isFlushQueue,
 	MemoryFlushQueue,
 } from "./flush-queue";
-export { SyncGateway, type SyncPull, type SyncPush, type SyncResponse } from "./gateway";
+export { SyncGateway, type PurgeFilter, type SyncPull, type SyncPush, type SyncResponse } from "./gateway";
 export {
 	type CachedActionResult,
 	type IdempotencyCache,
@@ -75,10 +75,13 @@ export {
 	buildSyncRulesContext,
 	parseJson,
 	parsePullParams,
+	pushErrorToApiCode,
 	pushErrorToStatus,
 	type RequestError,
 	validateActionBody,
+	validateDeltaTableName,
 	validatePushBody,
 	validateSchemaBody,
 } from "./validation";
 export { type DeltaValidator, ValidationPipeline } from "./validation-pipeline";
+export { generateOpenApiJson, openApiSpec } from "./openapi";

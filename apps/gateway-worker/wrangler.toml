@@ -16,3 +16,41 @@ bucket_name = "lakesync-data"
 
 [vars]
 NESSIE_URI = "http://localhost:19120/iceberg"
+
+# ── Staging environment ──────────────────────────────────────────────
+[env.staging]
+name = "lakesync-gateway-staging"
+
+[[env.staging.durable_objects.bindings]]
+name = "SYNC_GATEWAY"
+class_name = "SyncGatewayDO"
+
+[[env.staging.migrations]]
+tag = "v1"
+new_classes = ["SyncGatewayDO"]
+
+[[env.staging.r2_buckets]]
+binding = "LAKE_BUCKET"
+bucket_name = "lakesync-data-staging"
+
+[env.staging.vars]
+NESSIE_URI = "https://nessie-staging.example.com/iceberg"
+
+# ── Production environment ───────────────────────────────────────────
+[env.production]
+name = "lakesync-gateway"
+
+[[env.production.durable_objects.bindings]]
+name = "SYNC_GATEWAY"
+class_name = "SyncGatewayDO"
+
+[[env.production.migrations]]
+tag = "v1"
+new_classes = ["SyncGatewayDO"]
+
+[[env.production.r2_buckets]]
+binding = "LAKE_BUCKET"
+bucket_name = "lakesync-data"
+
+[env.production.vars]
+NESSIE_URI = "https://nessie.example.com/iceberg"

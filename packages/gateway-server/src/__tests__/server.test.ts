@@ -110,7 +110,7 @@ describe("GatewayServer", () => {
 		const delta = makeDelta();
 
 		// Push
-		const pushRes = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const pushRes = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([delta]),
@@ -121,7 +121,7 @@ describe("GatewayServer", () => {
 		expect(pushData.serverHlc).toBeDefined();
 
 		// Pull
-		const pullRes = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=client-1`);
+		const pullRes = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=client-1`);
 		expect(pullRes.status).toBe(200);
 		const pullData = JSON.parse(pullRes.body, bigintReviver) as {
 			deltas: RowDelta[];
@@ -143,7 +143,7 @@ describe("GatewayServer", () => {
 	});
 
 	it("returns 404 for wrong gateway ID", async () => {
-		const res = await req(`${baseUrl}/sync/wrong-gw/push`, {
+		const res = await req(`${baseUrl}/v1/sync/wrong-gw/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([makeDelta()]),
@@ -156,7 +156,7 @@ describe("GatewayServer", () => {
 	// -----------------------------------------------------------------------
 
 	it("rejects push with invalid JSON", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: "not json",
@@ -165,7 +165,7 @@ describe("GatewayServer", () => {
 	});
 
 	it("rejects push with missing fields", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ clientId: "c1" }),
@@ -178,7 +178,7 @@ describe("GatewayServer", () => {
 	// -----------------------------------------------------------------------
 
 	it("rejects pull with missing since param", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?clientId=c1`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?clientId=c1`);
 		expect(res.status).toBe(400);
 	});
 
@@ -195,7 +195,7 @@ describe("GatewayServer", () => {
 			],
 		};
 
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(schema),
@@ -206,7 +206,7 @@ describe("GatewayServer", () => {
 	});
 
 	it("rejects invalid schema", async () => {
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ table: "t" }),
@@ -230,7 +230,7 @@ describe("GatewayServer", () => {
 			],
 		};
 
-		const res = await req(`${baseUrl}/admin/sync-rules/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/sync-rules/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(rules),
@@ -245,7 +245,7 @@ describe("GatewayServer", () => {
 	// -----------------------------------------------------------------------
 
 	it("flush returns success when buffer is empty", async () => {
-		const res = await req(`${baseUrl}/admin/flush/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/flush/${gatewayId}`, {
 			method: "POST",
 		});
 		expect(res.status).toBe(200);
@@ -258,7 +258,7 @@ describe("GatewayServer", () => {
 	// -----------------------------------------------------------------------
 
 	it("GET /admin/metrics returns buffer stats", async () => {
-		const res = await req(`${baseUrl}/admin/metrics/${gatewayId}`);
+		const res = await req(`${baseUrl}/v1/admin/metrics/${gatewayId}`);
 		expect(res.status).toBe(200);
 		const body = JSON.parse(res.body);
 		expect(typeof body.logSize).toBe("number");
@@ -273,7 +273,7 @@ describe("GatewayServer", () => {
 	// -----------------------------------------------------------------------
 
 	it("responds to CORS preflight", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "OPTIONS",
 			headers: { Origin: "http://localhost:5173" },
 		});
@@ -286,6 +286,46 @@ describe("GatewayServer", () => {
 			headers: { Origin: "http://localhost:5173" },
 		});
 		expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
+	});
+
+	// -----------------------------------------------------------------------
+	// Security headers (A4)
+	// -----------------------------------------------------------------------
+
+	it("health response includes security headers but not Cache-Control: no-store", async () => {
+		const res = await req(`${baseUrl}/health`);
+		expect(res.status).toBe(200);
+		expect(res.headers["x-content-type-options"]).toBe("nosniff");
+		expect(res.headers["x-frame-options"]).toBe("DENY");
+		expect(res.headers["strict-transport-security"]).toBe(
+			"max-age=31536000; includeSubDomains",
+		);
+		// Health endpoint should NOT have Cache-Control: no-store
+		expect(res.headers["cache-control"]).toBeUndefined();
+	});
+
+	it("sync route response includes Cache-Control: no-store", async () => {
+		const delta = makeDelta();
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: pushBody([delta]),
+		});
+		expect(res.status).toBe(200);
+		expect(res.headers["x-content-type-options"]).toBe("nosniff");
+		expect(res.headers["x-frame-options"]).toBe("DENY");
+		expect(res.headers["strict-transport-security"]).toBe(
+			"max-age=31536000; includeSubDomains",
+		);
+		expect(res.headers["cache-control"]).toBe("no-store");
+	});
+
+	it("admin route response includes Cache-Control: no-store", async () => {
+		const res = await req(`${baseUrl}/v1/admin/flush/${gatewayId}`, {
+			method: "POST",
+		});
+		expect(res.status).toBe(200);
+		expect(res.headers["cache-control"]).toBe("no-store");
 	});
 });
 
@@ -305,7 +345,7 @@ describe("GatewayServer periodic flush", () => {
 
 		// Push a delta
 		const delta = makeDelta();
-		await req(`${baseUrl}/sync/flush-gw/push`, {
+		await req(`${baseUrl}/v1/sync/flush-gw/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([delta]),
@@ -440,7 +480,7 @@ describe("GatewayServer with JWT auth", () => {
 	}
 
 	it("rejects requests without a token", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([makeDelta()]),
@@ -459,7 +499,7 @@ describe("GatewayServer with JWT auth", () => {
 			jwtSecret,
 		);
 
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -481,7 +521,7 @@ describe("GatewayServer with JWT auth", () => {
 			jwtSecret,
 		);
 
-		const res = await req(`${baseUrl}/admin/flush/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/flush/${gatewayId}`, {
 			method: "POST",
 			headers: { Authorization: `Bearer ${token}` },
 		});
@@ -499,7 +539,7 @@ describe("GatewayServer with JWT auth", () => {
 			jwtSecret,
 		);
 
-		const res = await req(`${baseUrl}/admin/flush/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/flush/${gatewayId}`, {
 			method: "POST",
 			headers: { Authorization: `Bearer ${token}` },
 		});
@@ -517,7 +557,7 @@ describe("GatewayServer with JWT auth", () => {
 			jwtSecret,
 		);
 
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GatewayServer } from "../server";
 
-describe("GET /connectors/types", () => {
+describe("GET /v1/connectors/types", () => {
 	let server: GatewayServer;
 
 	beforeAll(async () => {
@@ -18,7 +18,7 @@ describe("GET /connectors/types", () => {
 	});
 
 	it("returns 200 with connector descriptors (no auth required)", async () => {
-		const res = await fetch(`http://localhost:${server.port}/connectors/types`);
+		const res = await fetch(`http://localhost:${server.port}/v1/connectors/types`);
 		expect(res.status).toBe(200);
 
 		const body = (await res.json()) as Array<Record<string, unknown>>;
@@ -34,7 +34,7 @@ describe("GET /connectors/types", () => {
 
 	it("returns 200 even with jwtSecret configured", async () => {
 		// jwtSecret is set in beforeAll — this verifies the route is unauthenticated
-		const res = await fetch(`http://localhost:${server.port}/connectors/types`);
+		const res = await fetch(`http://localhost:${server.port}/v1/connectors/types`);
 		expect(res.status).toBe(200);
 	});
 });

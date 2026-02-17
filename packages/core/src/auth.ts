@@ -13,6 +13,7 @@ interface HmacSubtle {
 		extractable: boolean,
 		usages: string[],
 	): Promise<unknown>;
+	sign(algorithm: string, key: unknown, data: Uint8Array): Promise<ArrayBuffer>;
 	verify(
 		algorithm: string,
 		key: unknown,
@@ -56,6 +57,24 @@ interface JwtPayload {
 }
 
 /**
+ * Encode a Uint8Array to a base64url string (no padding).
+ */
+function base64urlEncode(bytes: Uint8Array): string {
+	let binary = "";
+	for (let i = 0; i < bytes.length; i++) {
+		binary += String.fromCharCode(bytes[i]!);
+	}
+	return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+/**
+ * Encode a UTF-8 string to a base64url string (no padding).
+ */
+function base64urlEncodeString(input: string): string {
+	return btoa(input).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+/**
  * Decode a base64url-encoded string to a Uint8Array.
  * Handles the URL-safe alphabet (+/- replaced with -/_) and missing padding.
  */
@@ -88,11 +107,32 @@ function parseJson(text: string): unknown {
  * Uses the Web Crypto API exclusively (no external dependencies), making it
  * suitable for Cloudflare Workers and other edge runtimes.
  *
+ * Accepts a single secret string or a `[primary, previous]` tuple for
+ * zero-downtime secret rotation. When a tuple is provided, the primary
+ * secret is tried first; if signature verification fails, the previous
+ * secret is tried. `signToken` always signs with the first (primary) secret.
+ *
  * @param token - The raw JWT string (header.payload.signature)
- * @param secret - The HMAC-SHA256 secret key
+ * @param secret - The HMAC-SHA256 secret key, or `[primary, previous]` for rotation
  * @returns A Result containing AuthClaims on success, or AuthError on failure
  */
 export async function verifyToken(
+	token: string,
+	secret: string | [string, string],
+): Promise<Result<AuthClaims, AuthError>> {
+	if (Array.isArray(secret)) {
+		const primaryResult = await verifyTokenWithSecret(token, secret[0]);
+		if (primaryResult.ok) return primaryResult;
+		// Primary failed — try previous secret before giving up
+		return verifyTokenWithSecret(token, secret[1]);
+	}
+	return verifyTokenWithSecret(token, secret);
+}
+
+/**
+ * Verify a JWT with a single HMAC-SHA256 secret.
+ */
+async function verifyTokenWithSecret(
 	token: string,
 	secret: string,
 ): Promise<Result<AuthClaims, AuthError>> {
@@ -220,4 +260,66 @@ export async function verifyToken(
 		role,
 		customClaims,
 	});
+}
+
+// ---------------------------------------------------------------------------
+// signToken — server-side JWT creation
+// ---------------------------------------------------------------------------
+
+/** Payload for signing a LakeSync JWT. */
+export interface TokenPayload {
+	/** Client identifier (becomes JWT `sub` claim) */
+	sub: string;
+	/** Authorised gateway ID (becomes JWT `gw` claim) */
+	gw: string;
+	/** Role for route-level access control. Defaults to `"client"`. */
+	role?: "admin" | "client";
+	/** Expiry as Unix seconds. Defaults to now + 3600 (1 hour). */
+	exp?: number;
+	/** Additional custom claims for sync rule evaluation */
+	[key: string]: string | string[] | number | undefined;
+}
+
+/**
+ * Sign a LakeSync JWT using HMAC-SHA256 via the Web Crypto API.
+ *
+ * Edge-runtime compatible (Cloudflare Workers, Deno, Bun, Node 20+).
+ * The token header is always `{"alg":"HS256","typ":"JWT"}`.
+ *
+ * @param payload - The token payload. `role` defaults to `"client"`, `exp` defaults to now + 1 hour.
+ * @param secret - The HMAC-SHA256 secret key.
+ * @returns The signed JWT string.
+ */
+export async function signToken(payload: TokenPayload, secret: string): Promise<string> {
+	const headerB64 = base64urlEncodeString(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+
+	// Apply defaults
+	const claims: Record<string, unknown> = { ...payload };
+	if (claims.role === undefined) {
+		claims.role = "client";
+	}
+	if (claims.exp === undefined) {
+		claims.exp = Math.floor(Date.now() / 1000) + 3600;
+	}
+
+	const payloadB64 = base64urlEncodeString(JSON.stringify(claims));
+	const signingInput = `${headerB64}.${payloadB64}`;
+
+	const encoder = new TextEncoder();
+	const key = await (crypto.subtle as unknown as HmacSubtle).importKey(
+		"raw",
+		encoder.encode(secret),
+		{ name: "HMAC", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+
+	const signature = await (crypto.subtle as unknown as HmacSubtle).sign(
+		"HMAC",
+		key,
+		encoder.encode(signingInput),
+	);
+
+	const signatureB64 = base64urlEncode(new Uint8Array(signature));
+	return `${signingInput}.${signatureB64}`;
 }

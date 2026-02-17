@@ -161,7 +161,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 	// -----------------------------------------------------------------------
 
 	it("push without token returns 401", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([makeDelta()]),
@@ -171,19 +171,19 @@ describe("GatewayServer JWT auth enforcement", () => {
 	});
 
 	it("pull without token returns 401", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=client-1`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=client-1`);
 		expect(res.status).toBe(401);
 	});
 
 	it("admin flush without token returns 401", async () => {
-		const res = await req(`${baseUrl}/admin/flush/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/flush/${gatewayId}`, {
 			method: "POST",
 		});
 		expect(res.status).toBe(401);
 	});
 
 	it("admin schema without token returns 401", async () => {
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ table: "t", columns: [{ name: "a", type: "string" }] }),
@@ -192,7 +192,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 	});
 
 	it("admin sync-rules without token returns 401", async () => {
-		const res = await req(`${baseUrl}/admin/sync-rules/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/sync-rules/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ version: 1, buckets: [] }),
@@ -206,7 +206,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 
 	it("push with valid client token returns 200", async () => {
 		const token = await validClientToken(jwtSecret, gatewayId);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -219,7 +219,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 
 	it("pull with valid client token returns 200", async () => {
 		const token = await validClientToken(jwtSecret, gatewayId);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=client-1`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=client-1`, {
 			headers: { Authorization: `Bearer ${token}` },
 		});
 		expect(res.status).toBe(200);
@@ -239,7 +239,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 			},
 			jwtSecret,
 		);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -252,7 +252,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 
 	it("token signed with wrong secret returns 401", async () => {
 		const token = await validClientToken("wrong-secret-key-for-testing", gatewayId);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -264,7 +264,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 	});
 
 	it("malformed token (not JWT format) returns 401", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -284,7 +284,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 			},
 			jwtSecret,
 		);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -304,7 +304,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 			},
 			jwtSecret,
 		);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -324,7 +324,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 			},
 			jwtSecret,
 		);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -341,7 +341,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 
 	it("missing 'Bearer ' prefix in Authorization header returns 401", async () => {
 		const token = await validClientToken(jwtSecret, gatewayId);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -366,7 +366,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 			},
 			jwtSecret,
 		);
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -384,7 +384,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 
 	it("admin flush with client role returns 403", async () => {
 		const token = await validClientToken(jwtSecret, gatewayId);
-		const res = await req(`${baseUrl}/admin/flush/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/flush/${gatewayId}`, {
 			method: "POST",
 			headers: { Authorization: `Bearer ${token}` },
 		});
@@ -394,7 +394,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 
 	it("admin flush with admin role returns 200", async () => {
 		const token = await validAdminToken(jwtSecret, gatewayId);
-		const res = await req(`${baseUrl}/admin/flush/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/flush/${gatewayId}`, {
 			method: "POST",
 			headers: { Authorization: `Bearer ${token}` },
 		});
@@ -403,7 +403,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 
 	it("admin schema with admin role returns 200", async () => {
 		const token = await validAdminToken(jwtSecret, gatewayId);
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -423,7 +423,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 
 	it("push with mismatched clientId returns 403", async () => {
 		const token = await validClientToken(jwtSecret, gatewayId, "client-1");
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -461,7 +461,7 @@ describe("GatewayServer without JWT auth", () => {
 	});
 
 	it("push without token succeeds when auth is disabled", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/push`, {
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: pushBody([makeDelta()]),
@@ -470,19 +470,19 @@ describe("GatewayServer without JWT auth", () => {
 	});
 
 	it("pull without token succeeds when auth is disabled", async () => {
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=client-1`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=client-1`);
 		expect(res.status).toBe(200);
 	});
 
 	it("admin flush without token succeeds when auth is disabled", async () => {
-		const res = await req(`${baseUrl}/admin/flush/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/flush/${gatewayId}`, {
 			method: "POST",
 		});
 		expect(res.status).toBe(200);
 	});
 
 	it("admin schema without token succeeds when auth is disabled", async () => {
-		const res = await req(`${baseUrl}/admin/schema/${gatewayId}`, {
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({

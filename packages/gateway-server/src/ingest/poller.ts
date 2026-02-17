@@ -9,7 +9,7 @@ import type { IngestSourceConfig, IngestTableConfig } from "./types";
 
 const DEFAULT_INTERVAL_MS = 10_000;
 const DEFAULT_LOOKBACK_MS = 5_000;
-const LARGE_SNAPSHOT_WARN = 50_000;
+const LARGE_SNAPSHOT_WARN = 1_000;
 
 /** Per-table state for cursor strategy. */
 interface CursorState {
@@ -227,7 +227,7 @@ export class SourcePoller {
 
 		if (currentMap.size > LARGE_SNAPSHOT_WARN) {
 			console.warn(
-				`[lakesync:ingest] Diff snapshot for "${tableConfig.table}" has ${currentMap.size} rows (>50k). Consider using cursor strategy.`,
+				`[lakesync:ingest] Diff snapshot for "${tableConfig.table}" has ${currentMap.size} rows (>1k). Consider using cursor strategy.`,
 			);
 		}
 

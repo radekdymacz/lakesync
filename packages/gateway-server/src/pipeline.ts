@@ -4,14 +4,14 @@
 
 import type { ServerResponse } from "node:http";
 import type { HLCTimestamp, LakeAdapter } from "@lakesync/core";
-import { isDatabaseAdapter } from "@lakesync/core";
-import { handleListConnectorTypes } from "@lakesync/gateway";
+import { API_ERROR_CODES, isDatabaseAdapter } from "@lakesync/core";
+import { generateOpenApiJson, handleListConnectorTypes } from "@lakesync/gateway";
 import { authenticateRequest } from "./auth-middleware";
 import { handlePreflight } from "./cors-middleware";
 import type { MetricsRegistry } from "./metrics";
 import type { Middleware, RouteHandler } from "./middleware";
 import type { RateLimiter } from "./rate-limiter";
-import { matchRoute } from "./router";
+import { matchLegacyRoute, matchRoute } from "./router";
 import type { GatewayServerConfig } from "./server";
 
 // ---------------------------------------------------------------------------
@@ -21,7 +21,7 @@ import type { GatewayServerConfig } from "./server";
 /** Immutable configuration for building the server pipeline. */
 export interface PipelineConfig {
 	readonly allowedOrigins?: string[];
-	readonly jwtSecret?: string;
+	readonly jwtSecret?: string | [string, string];
 	readonly requestTimeoutMs?: number;
 	readonly gatewayId: string;
 	readonly rateLimiter: RateLimiter | null;
@@ -55,14 +55,18 @@ export function sendJson(
 	res.end(json);
 }
 
-/** Send a JSON error response. */
+/** Send a JSON error response with optional structured error code and request ID. */
 export function sendError(
 	res: ServerResponse,
 	message: string,
 	status: number,
 	extraHeaders?: Record<string, string>,
+	opts?: { code?: string; requestId?: string },
 ): void {
-	sendJson(res, { error: message }, status, extraHeaders);
+	const body: Record<string, string> = { error: message };
+	if (opts?.code) body.code = opts.code;
+	if (opts?.requestId) body.requestId = opts.requestId;
+	sendJson(res, body, status, extraHeaders);
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +79,37 @@ const DEFAULT_ADAPTER_HEALTH_TIMEOUT_MS = 5_000;
 // ---------------------------------------------------------------------------
 // Standalone middleware factories
 // ---------------------------------------------------------------------------
+
+/** Standard security headers applied to every response. */
+const SECURITY_HEADERS: Record<string, string> = {
+	"X-Content-Type-Options": "nosniff",
+	"X-Frame-Options": "DENY",
+	"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+};
+
+/**
+ * Security headers — sets standard security headers on every response.
+ *
+ * Also sets `Cache-Control: no-store` on /sync/* and /admin/* paths
+ * (including /v1/ prefixed routes) to prevent caching of sensitive data.
+ */
+function securityHeaders(): Middleware {
+	return async (ctx, next) => {
+		for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
+			ctx.res.setHeader(key, value);
+		}
+		const { pathname } = ctx;
+		if (
+			pathname.startsWith("/sync/") ||
+			pathname.startsWith("/admin/") ||
+			pathname.startsWith("/v1/sync/") ||
+			pathname.startsWith("/v1/admin/")
+		) {
+			ctx.res.setHeader("Cache-Control", "no-store");
+		}
+		await next();
+	};
+}
 
 /** CORS preflight — short-circuits OPTIONS requests. */
 function corsPreflight(): Middleware {
@@ -115,9 +150,32 @@ function staticRoutes(
 			return;
 		}
 
-		if (pathname === "/connectors/types" && method === "GET") {
+		if (pathname === "/v1/openapi.json" && method === "GET") {
+			res.writeHead(200, {
+				"Content-Type": "application/json",
+				"API-Version": "v1",
+				...corsH,
+			});
+			res.end(generateOpenApiJson());
+			return;
+		}
+
+		if (pathname === "/v1/connectors/types" && method === "GET") {
 			const result = handleListConnectorTypes();
-			sendJson(res, result.body, result.status, corsH);
+			sendJson(res, result.body, result.status, { ...corsH, "API-Version": "v1" });
+			return;
+		}
+
+		// Legacy path redirect — unversioned /sync/, /admin/, /connectors/types → 301 to /v1/
+		const legacyRedirect = matchLegacyRoute(pathname);
+		if (legacyRedirect) {
+			res.writeHead(301, {
+				Location: legacyRedirect,
+				Sunset: "2026-06-01",
+				"Content-Type": "application/json",
+				...corsH,
+			});
+			res.end();
 			return;
 		}
 
@@ -129,7 +187,7 @@ function staticRoutes(
 function drainGuard(state: PipelineState): Middleware {
 	return async (ctx, next) => {
 		if (state.draining) {
-			sendError(ctx.res, "Service is shutting down", 503, ctx.corsHeaders);
+			sendError(ctx.res, "Service is shutting down", 503, ctx.corsHeaders, { code: API_ERROR_CODES.INTERNAL_ERROR, requestId: ctx.requestId });
 			return;
 		}
 		await next();
@@ -142,7 +200,7 @@ function requestTimeout(config: PipelineConfig): Middleware {
 		const timeoutMs = config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 		ctx.res.setTimeout(timeoutMs, () => {
 			if (!ctx.res.writableEnded) {
-				sendError(ctx.res, "Request timeout", 504, ctx.corsHeaders);
+				sendError(ctx.res, "Request timeout", 504, ctx.corsHeaders, { code: API_ERROR_CODES.INTERNAL_ERROR, requestId: ctx.requestId });
 			}
 		});
 		await next();
@@ -166,12 +224,12 @@ function routeMatching(config: PipelineConfig): Middleware {
 	return async (ctx, next) => {
 		const route = matchRoute(ctx.pathname, ctx.method);
 		if (!route) {
-			sendError(ctx.res, "Not found", 404, ctx.corsHeaders);
+			sendError(ctx.res, "Not found", 404, ctx.corsHeaders, { code: API_ERROR_CODES.NOT_FOUND, requestId: ctx.requestId });
 			return;
 		}
 
 		if (route.gatewayId !== config.gatewayId) {
-			sendError(ctx.res, "Gateway ID mismatch", 404, ctx.corsHeaders);
+			sendError(ctx.res, "Gateway ID mismatch", 404, ctx.corsHeaders, { code: API_ERROR_CODES.NOT_FOUND, requestId: ctx.requestId });
 			return;
 		}
 
@@ -191,7 +249,7 @@ function authMiddleware(config: PipelineConfig): Middleware {
 			config.jwtSecret,
 		);
 		if (!authResult.authenticated) {
-			sendError(ctx.res, authResult.message, authResult.status, ctx.corsHeaders);
+			sendError(ctx.res, authResult.message, authResult.status, ctx.corsHeaders, { code: API_ERROR_CODES.AUTH_ERROR, requestId: ctx.requestId });
 			return;
 		}
 		ctx.auth = config.jwtSecret ? authResult.claims : undefined;
@@ -209,7 +267,7 @@ function rateLimitMiddleware(config: PipelineConfig): Middleware {
 				sendError(ctx.res, "Too many requests", 429, {
 					...ctx.corsHeaders,
 					"Retry-After": String(retryAfter),
-				});
+				}, { code: API_ERROR_CODES.RATE_LIMITED, requestId: ctx.requestId });
 				return;
 			}
 		}
@@ -217,14 +275,16 @@ function rateLimitMiddleware(config: PipelineConfig): Middleware {
 	};
 }
 
-/** Route dispatch — looks up handler from the route handler map. */
+/** Route dispatch — looks up handler from the route handler map. Sets API-Version header. */
 function routeDispatch(routeHandlers: Record<string, RouteHandler>): Middleware {
 	return async (ctx) => {
 		const handler = routeHandlers[ctx.route!.action];
 		if (!handler) {
-			sendError(ctx.res, "Not found", 404, ctx.corsHeaders);
+			sendError(ctx.res, "Not found", 404, ctx.corsHeaders, { code: API_ERROR_CODES.NOT_FOUND, requestId: ctx.requestId });
 			return;
 		}
+		// Set API-Version header on all versioned route responses
+		ctx.res.setHeader("API-Version", "v1");
 		await handler(ctx);
 	};
 }
@@ -296,8 +356,8 @@ async function checkAdapterHealth(adapter: GatewayServerConfig["adapter"]): Prom
  *
  * Each middleware is a standalone function closed over its dependencies —
  * no class binding required. The pipeline follows the order:
- * cors -> static routes -> drain -> timeout -> tracking -> route match ->
- * auth -> rate limit -> dispatch.
+ * security headers -> cors -> static routes -> drain -> timeout ->
+ * tracking -> route match -> auth -> rate limit -> dispatch.
  */
 export function buildServerPipeline(
 	config: PipelineConfig,
@@ -307,6 +367,7 @@ export function buildServerPipeline(
 	updateBufferGauges: () => void,
 ): Middleware[] {
 	return [
+		securityHeaders(),
 		corsPreflight(),
 		staticRoutes(config, state, metrics, updateBufferGauges),
 		drainGuard(state),

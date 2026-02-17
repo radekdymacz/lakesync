@@ -51,7 +51,7 @@ describe("GatewayServer action route", () => {
 			],
 		};
 
-		const response = await fetch(`http://localhost:${port}/sync/action-test/action`, {
+		const response = await fetch(`http://localhost:${port}/v1/sync/action-test/action`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(body),
@@ -78,7 +78,7 @@ describe("GatewayServer action route", () => {
 			],
 		};
 
-		const response = await fetch(`http://localhost:${port}/sync/action-test/action`, {
+		const response = await fetch(`http://localhost:${port}/v1/sync/action-test/action`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(body),
@@ -90,7 +90,7 @@ describe("GatewayServer action route", () => {
 	});
 
 	it("rejects missing required fields", async () => {
-		const response = await fetch(`http://localhost:${port}/sync/action-test/action`, {
+		const response = await fetch(`http://localhost:${port}/v1/sync/action-test/action`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ clientId: "client-1" }),
@@ -100,7 +100,7 @@ describe("GatewayServer action route", () => {
 	});
 
 	it("rejects invalid JSON", async () => {
-		const response = await fetch(`http://localhost:${port}/sync/action-test/action`, {
+		const response = await fetch(`http://localhost:${port}/v1/sync/action-test/action`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: "not-json",
@@ -129,7 +129,7 @@ describe("GatewayServer action discovery route", () => {
 	});
 
 	it("GET /sync/:id/actions returns registered action descriptors", async () => {
-		const response = await fetch(`http://localhost:${port}/sync/discover-test/actions`);
+		const response = await fetch(`http://localhost:${port}/v1/sync/discover-test/actions`);
 
 		expect(response.status).toBe(200);
 		const data = (await response.json()) as {
@@ -146,7 +146,7 @@ describe("GatewayServer action discovery route", () => {
 		server.gatewayInstance.unregisterActionHandler("slack");
 
 		try {
-			const response = await fetch(`http://localhost:${port}/sync/discover-test/actions`);
+			const response = await fetch(`http://localhost:${port}/v1/sync/discover-test/actions`);
 			expect(response.status).toBe(200);
 			const data = (await response.json()) as {
 				connectors: Record<string, unknown>;

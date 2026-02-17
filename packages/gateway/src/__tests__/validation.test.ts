@@ -1,4 +1,4 @@
-import type { HLCTimestamp, SyncRulesConfig } from "@lakesync/core";
+import type { HLCTimestamp, RowDelta, SyncRulesConfig } from "@lakesync/core";
 import { bigintReplacer } from "@lakesync/core";
 import { describe, expect, it } from "vitest";
 import { MAX_DELTAS_PER_PUSH, MAX_PULL_LIMIT } from "../constants";
@@ -7,6 +7,7 @@ import {
 	parsePullParams,
 	pushErrorToStatus,
 	validateActionBody,
+	validateDeltaTableName,
 	validatePushBody,
 	validateSchemaBody,
 } from "../validation";
@@ -458,6 +459,128 @@ describe("validateSchemaBody", () => {
 		if (result.ok) {
 			expect(result.value.softDelete).toBe(false);
 		}
+	});
+
+	// ── SQL identifier sanitisation (A1) ──────────────────────────────
+
+	it("rejects SQL injection in table name", () => {
+		const raw = JSON.stringify({
+			table: '"; DROP TABLE users--',
+			columns: [{ name: "id", type: "string" }],
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.status).toBe(400);
+			expect(result.error.message).toContain("Invalid table name");
+		}
+	});
+
+	it("rejects table name starting with a digit", () => {
+		const raw = JSON.stringify({
+			table: "1users",
+			columns: [{ name: "id", type: "string" }],
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.message).toContain("Invalid table name");
+		}
+	});
+
+	it("rejects table name exceeding 64 characters", () => {
+		const raw = JSON.stringify({
+			table: "a".repeat(65),
+			columns: [{ name: "id", type: "string" }],
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.message).toContain("Invalid table name");
+		}
+	});
+
+	it("rejects column name with backticks", () => {
+		const raw = JSON.stringify({
+			table: "users",
+			columns: [{ name: "col`name", type: "string" }],
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.status).toBe(400);
+			expect(result.error.message).toContain("Invalid column name");
+		}
+	});
+
+	it("rejects column name with spaces", () => {
+		const raw = JSON.stringify({
+			table: "users",
+			columns: [{ name: "has space", type: "string" }],
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.message).toContain("Invalid column name");
+		}
+	});
+
+	it("accepts valid identifiers with underscores", () => {
+		const raw = JSON.stringify({
+			table: "_private_table",
+			columns: [{ name: "col_1", type: "string" }],
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(true);
+	});
+
+	it("accepts table name at exactly 64 characters", () => {
+		const raw = JSON.stringify({
+			table: "a".repeat(64),
+			columns: [{ name: "id", type: "string" }],
+		});
+		const result = validateSchemaBody(raw);
+		expect(result.ok).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// validateDeltaTableName (defence in depth)
+// ---------------------------------------------------------------------------
+
+describe("validateDeltaTableName", () => {
+	function makeDelta(table: string): RowDelta {
+		return {
+			deltaId: "d1",
+			table,
+			rowId: "r1",
+			clientId: "c1",
+			hlc: 0n as HLCTimestamp,
+			op: "INSERT",
+			columns: [],
+		};
+	}
+
+	it("accepts valid table names", () => {
+		expect(validateDeltaTableName(makeDelta("users")).ok).toBe(true);
+		expect(validateDeltaTableName(makeDelta("_private")).ok).toBe(true);
+		expect(validateDeltaTableName(makeDelta("table_1")).ok).toBe(true);
+	});
+
+	it("rejects SQL injection attempts", () => {
+		const result = validateDeltaTableName(makeDelta('"; DROP TABLE users--'));
+		expect(result.ok).toBe(false);
+	});
+
+	it("rejects empty table name", () => {
+		const result = validateDeltaTableName(makeDelta(""));
+		expect(result.ok).toBe(false);
+	});
+
+	it("rejects table name with special characters", () => {
+		expect(validateDeltaTableName(makeDelta("table name")).ok).toBe(false);
+		expect(validateDeltaTableName(makeDelta("table-name")).ok).toBe(false);
+		expect(validateDeltaTableName(makeDelta("table.name")).ok).toBe(false);
 	});
 });
 

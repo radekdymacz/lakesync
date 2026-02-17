@@ -23,10 +23,56 @@ Phases 1–5 built the core: HLC, deltas, gateway, queue, proto, S3/R2 adapter, 
 | 6 (done) | — | Database adapters, composite routing, migration tooling, flush accuracy |
 | 7 | — | Gateway scaling: table sharding + self-hosted server |
 | 8 | — | Advanced adapters: BigQuery, fan-out, data lifecycle |
+| 9 (done) | [phase-9-simple-made-easy.md](./phase-9-simple-made-easy.md) | Rich Hickey "Simple Made Easy" review |
+| 10 (done) | [phase-10-production-hardening.md](./phase-10-production-hardening.md) | Production hardening, transport, rate limiting, observability |
+| 11 | [phase-11-saas-mvp.md](./phase-11-saas-mvp.md) | SaaS MVP: control plane, billing, dashboard, security, DevOps |
 
 ## Dependency Graph
 
 ```
+Phases 1–10 (done)
+  │
+  └──▶ Phase 11: SaaS MVP
+       │
+       ├── PARALLEL GROUP A (Quick Wins — no deps)
+       │   ├── A1: SQL identifier sanitisation
+       │   ├── A2: API versioning (/v1/)
+       │   ├── A3: signToken utility
+       │   ├── A4: Security headers
+       │   ├── A5: Structured error codes
+       │   └── A6: Request ID in responses
+       │
+       ├── PARALLEL GROUP B (Control Plane — foundation)
+       │   ├── B1: Tenant/Org data model
+       │   ├── B2: Clerk auth integration      ← after B1
+       │   ├── B3: Gateway provisioning API     ← after B1+B2
+       │   └── B4: API key management           ← after B1+B2
+       │
+       ├── PARALLEL GROUP C (Billing — after B1)
+       │   ├── C1: UsageRecorder + gateway hooks ← after B1
+       │   ├── C2: Quota enforcement             ← after C1
+       │   └── C3: Stripe billing                ← after B1+C1
+       │
+       ├── PARALLEL GROUP D (Dashboard — after B+C)
+       │   ├── D1: Next.js scaffold + Clerk      ← after B2
+       │   ├── D2: Gateway management pages      ← after B3+D1
+       │   ├── D3: API key management pages      ← after B4+D1
+       │   └── D4: Usage & billing pages         ← after C3+D1
+       │
+       ├── PARALLEL GROUP E (Security — after B1)
+       │   ├── E1: Audit logging                 ← after B1
+       │   ├── E2: GDPR data deletion            ← after B1
+       │   ├── E3: RBAC expansion                ← after B1+B2
+       │   └── E4: JWT secret rotation           ← independent
+       │
+       └── PARALLEL GROUP F (DevOps & DX)
+           ├── F1: CD pipeline                   ← independent
+           ├── F2: OpenAPI spec                  ← independent
+           ├── F3: CLI tool                      ← after A3+B3+B4
+           └── F4: Webhook system                ← after B1
+
+Phase 1–10 Historical Dependency Graph:
+
 Phase 1 (done)
   │
   ├──▶ PARALLEL GROUP A ◀────────────────────────────────┐
@@ -109,6 +155,7 @@ For a solo developer, the optimal execution order maximises parallelism where po
 | 12 | **8B** Fan-out adapter | PARALLEL with 8A + 8C, after 7 | — |
 | 12 | **8C** Data lifecycle | PARALLEL with 8A + 8B, after 7 | — |
 | 13 | **10** Production hardening | PARALLEL groups A–F, after 8 | — |
+| 14 | **11** SaaS MVP | See [phase-11-saas-mvp.md](./phase-11-saas-mvp.md) | — |
 
 ## All Tasks by Phase
 

@@ -44,7 +44,7 @@ export async function authenticateRequest(
 	req: IncomingMessage,
 	routeGatewayId: string,
 	routeAction: string,
-	jwtSecret: string | undefined,
+	jwtSecret: string | [string, string] | undefined,
 ): Promise<AuthResult> {
 	if (!jwtSecret) {
 		return { authenticated: true, claims: undefined as unknown as AuthClaims };
@@ -80,6 +80,6 @@ export async function authenticateRequest(
 }
 
 /** Check whether auth is disabled (no jwtSecret configured). */
-export function isAuthDisabled(jwtSecret: string | undefined): boolean {
+export function isAuthDisabled(jwtSecret: string | [string, string] | undefined): boolean {
 	return jwtSecret === undefined;
 }

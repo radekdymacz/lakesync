@@ -8,6 +8,8 @@ export interface Env {
 	NESSIE_URI: string;
 	/** JWT secret for authentication (set via wrangler secret) */
 	JWT_SECRET: string;
+	/** Previous JWT secret for zero-downtime rotation (optional). */
+	JWT_SECRET_PREVIOUS?: string;
 	/** Optional comma-separated list of allowed CORS origins */
 	ALLOWED_ORIGINS?: string;
 	/** Optional JSON shard configuration for table-based sharding across DOs */

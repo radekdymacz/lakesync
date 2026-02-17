@@ -100,8 +100,8 @@ describe("WebSocket connection limits", () => {
 	});
 
 	it("allows connections up to the limit", async () => {
-		const ws1 = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-limits/ws`);
-		const ws2 = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-limits/ws`);
+		const ws1 = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-limits/ws`);
+		const ws2 = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-limits/ws`);
 		await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
 
 		expect(ws1.readyState).toBe(WebSocket.OPEN);
@@ -112,12 +112,12 @@ describe("WebSocket connection limits", () => {
 	});
 
 	it("rejects connections exceeding the limit", async () => {
-		const ws1 = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-limits/ws`);
-		const ws2 = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-limits/ws`);
+		const ws1 = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-limits/ws`);
+		const ws2 = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-limits/ws`);
 		await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
 
 		// Third connection should be rejected
-		const result = await tryConnect(`ws://localhost:${server.port}/sync/gw-ws-limits/ws`);
+		const result = await tryConnect(`ws://localhost:${server.port}/v1/sync/gw-ws-limits/ws`);
 		expect(result.connected).toBe(false);
 
 		ws1.close();
@@ -125,8 +125,8 @@ describe("WebSocket connection limits", () => {
 	});
 
 	it("allows new connections after one disconnects", async () => {
-		const ws1 = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-limits/ws`);
-		const ws2 = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-limits/ws`);
+		const ws1 = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-limits/ws`);
+		const ws2 = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-limits/ws`);
 		await Promise.all([waitForOpen(ws1), waitForOpen(ws2)]);
 
 		// Close one
@@ -134,7 +134,7 @@ describe("WebSocket connection limits", () => {
 		await new Promise((resolve) => setTimeout(resolve, 100));
 
 		// Now a new connection should be allowed
-		const ws3 = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-limits/ws`);
+		const ws3 = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-limits/ws`);
 		await waitForOpen(ws3);
 		expect(ws3.readyState).toBe(WebSocket.OPEN);
 
@@ -169,7 +169,7 @@ describe("WebSocket message rate limits", () => {
 	});
 
 	it("allows messages within the rate limit", async () => {
-		const ws = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-rate/ws`);
+		const ws = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-rate/ws`);
 		await waitForOpen(ws);
 
 		const hlc = HLC.encode(1_000_000, 0);
@@ -198,7 +198,7 @@ describe("WebSocket message rate limits", () => {
 	});
 
 	it("closes connection with 1008 when message rate exceeded", async () => {
-		const ws = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-rate/ws`);
+		const ws = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-rate/ws`);
 		await waitForOpen(ws);
 
 		const hlc = HLC.encode(1_000_000, 0);

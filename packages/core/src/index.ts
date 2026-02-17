@@ -7,7 +7,7 @@ export type {
 	ObjectInfo,
 } from "./adapter-types";
 export { isDatabaseAdapter, isMaterialisable } from "./adapter-types";
-export { type AuthClaims, AuthError, verifyToken } from "./auth";
+export { type AuthClaims, AuthError, signToken, type TokenPayload, verifyToken } from "./auth";
 export {
 	BaseSourcePoller,
 	type IngestTarget,
@@ -32,4 +32,12 @@ export { ChunkedPusher, type FlushableTarget, PollingScheduler, PressureManager 
 export * from "./result";
 export type { OnDeltas, Source, SourceCursor } from "./source-types";
 export * from "./sync-rules";
+export {
+	MemoryUsageRecorder,
+	type UsageAggregate,
+	type UsageEvent,
+	type UsageEventType,
+	type UsageRecorder,
+	type UsageStore,
+} from "./usage";
 export * from "./validation";

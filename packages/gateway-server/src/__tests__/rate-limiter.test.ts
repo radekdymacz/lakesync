@@ -178,7 +178,7 @@ describe("GatewayServer with rate limiting", () => {
 
 	it("allows requests within the rate limit", async () => {
 		for (let i = 0; i < 3; i++) {
-			const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=client-1`);
+			const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=client-1`);
 			expect(res.status).toBe(200);
 		}
 	});
@@ -186,11 +186,11 @@ describe("GatewayServer with rate limiting", () => {
 	it("returns 429 when rate limit exceeded", async () => {
 		// Use up the limit
 		for (let i = 0; i < 3; i++) {
-			await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=client-1`);
+			await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=client-1`);
 		}
 
 		// Next request should be rejected
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=client-1`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=client-1`);
 		expect(res.status).toBe(429);
 		const body = JSON.parse(res.body);
 		expect(body.error).toBe("Too many requests");
@@ -199,10 +199,10 @@ describe("GatewayServer with rate limiting", () => {
 	it("includes Retry-After header on 429 response", async () => {
 		// Use up the limit
 		for (let i = 0; i < 3; i++) {
-			await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=client-1`);
+			await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=client-1`);
 		}
 
-		const res = await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=client-1`);
+		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=client-1`);
 		expect(res.status).toBe(429);
 		expect(res.headers["retry-after"]).toBeDefined();
 		expect(Number(res.headers["retry-after"])).toBeGreaterThan(0);
@@ -211,7 +211,7 @@ describe("GatewayServer with rate limiting", () => {
 	it("does not rate limit health check", async () => {
 		// Exhaust rate limit
 		for (let i = 0; i < 3; i++) {
-			await req(`${baseUrl}/sync/${gatewayId}/pull?since=0&clientId=client-1`);
+			await req(`${baseUrl}/v1/sync/${gatewayId}/pull?since=0&clientId=client-1`);
 		}
 
 		// Health check should still work (it returns before rate limiting)

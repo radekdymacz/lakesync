@@ -1,3 +1,4 @@
+import { API_ERROR_CODES } from "@lakesync/core";
 import { verifyToken } from "./auth";
 import type { Env } from "./env";
 import { logger } from "./logger";
@@ -27,10 +28,10 @@ function extractBearerToken(request: Request): string | null {
 /**
  * Return a 401 Unauthorized JSON response with the given error message.
  */
-function unauthorised(message: string): Response {
-	return new Response(JSON.stringify({ error: message }), {
+function unauthorised(message: string, requestId: string): Response {
+	return new Response(JSON.stringify({ error: message, code: API_ERROR_CODES.AUTH_ERROR, requestId }), {
 		status: 401,
-		headers: { "Content-Type": "application/json" },
+		headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
 	});
 }
 
@@ -57,8 +58,8 @@ interface RouteEntry {
 
 const ROUTE_TABLE: RouteEntry[] = [
 	{
-		// POST /sync/:gatewayId/push | GET /sync/:gatewayId/pull | POST /sync/:gatewayId/action | GET /sync/:gatewayId/actions
-		pattern: /^\/sync\/([^/]+)\/(push|pull|action|actions)$/,
+		// POST /v1/sync/:gatewayId/push | GET /v1/sync/:gatewayId/pull | POST /v1/sync/:gatewayId/action | GET /v1/sync/:gatewayId/actions
+		pattern: /^\/v1\/sync\/([^/]+)\/(push|pull|action|actions)$/,
 		extract: (match) => {
 			const gatewayId = match[1];
 			const action = match[2];
@@ -71,8 +72,8 @@ const ROUTE_TABLE: RouteEntry[] = [
 		},
 	},
 	{
-		// GET /sync/:gatewayId/checkpoint
-		pattern: /^\/sync\/([^/]+)\/checkpoint$/,
+		// GET /v1/sync/:gatewayId/checkpoint
+		pattern: /^\/v1\/sync\/([^/]+)\/checkpoint$/,
 		extract: (match) => {
 			const gatewayId = match[1];
 			if (!gatewayId) return null;
@@ -80,8 +81,8 @@ const ROUTE_TABLE: RouteEntry[] = [
 		},
 	},
 	{
-		// WebSocket /sync/:gatewayId/ws
-		pattern: /^\/sync\/([^/]+)\/ws$/,
+		// WebSocket /v1/sync/:gatewayId/ws
+		pattern: /^\/v1\/sync\/([^/]+)\/ws$/,
 		extract: (match) => {
 			const gatewayId = match[1];
 			if (!gatewayId) return null;
@@ -89,8 +90,8 @@ const ROUTE_TABLE: RouteEntry[] = [
 		},
 	},
 	{
-		// POST /admin/flush/:gatewayId
-		pattern: /^\/admin\/flush\/([^/]+)$/,
+		// POST /v1/admin/flush/:gatewayId
+		pattern: /^\/v1\/admin\/flush\/([^/]+)$/,
 		extract: (match) => {
 			const gatewayId = match[1];
 			if (!gatewayId) return null;
@@ -98,8 +99,8 @@ const ROUTE_TABLE: RouteEntry[] = [
 		},
 	},
 	{
-		// POST /admin/schema/:gatewayId
-		pattern: /^\/admin\/schema\/([^/]+)$/,
+		// POST /v1/admin/schema/:gatewayId
+		pattern: /^\/v1\/admin\/schema\/([^/]+)$/,
 		extract: (match) => {
 			const gatewayId = match[1];
 			if (!gatewayId) return null;
@@ -107,8 +108,8 @@ const ROUTE_TABLE: RouteEntry[] = [
 		},
 	},
 	{
-		// POST /admin/sync-rules/:gatewayId
-		pattern: /^\/admin\/sync-rules\/([^/]+)$/,
+		// POST /v1/admin/sync-rules/:gatewayId
+		pattern: /^\/v1\/admin\/sync-rules\/([^/]+)$/,
 		extract: (match) => {
 			const gatewayId = match[1];
 			if (!gatewayId) return null;
@@ -116,8 +117,8 @@ const ROUTE_TABLE: RouteEntry[] = [
 		},
 	},
 	{
-		// POST|GET /admin/connectors/:gatewayId
-		pattern: /^\/admin\/connectors\/([^/]+)$/,
+		// POST|GET /v1/admin/connectors/:gatewayId
+		pattern: /^\/v1\/admin\/connectors\/([^/]+)$/,
 		extract: (match, method) => {
 			const gatewayId = match[1];
 			if (!gatewayId) return null;
@@ -128,8 +129,8 @@ const ROUTE_TABLE: RouteEntry[] = [
 		},
 	},
 	{
-		// DELETE /admin/connectors/:gatewayId/:name
-		pattern: /^\/admin\/connectors\/([^/]+)\/([^/]+)$/,
+		// DELETE /v1/admin/connectors/:gatewayId/:name
+		pattern: /^\/v1\/admin\/connectors\/([^/]+)\/([^/]+)$/,
 		extract: (match) => {
 			const gatewayId = match[1];
 			const name = match[2];
@@ -143,8 +144,8 @@ const ROUTE_TABLE: RouteEntry[] = [
 		},
 	},
 	{
-		// GET /admin/metrics/:gatewayId
-		pattern: /^\/admin\/metrics\/([^/]+)$/,
+		// GET /v1/admin/metrics/:gatewayId
+		pattern: /^\/v1\/admin\/metrics\/([^/]+)$/,
 		extract: (match) => {
 			const gatewayId = match[1];
 			if (!gatewayId) return null;
@@ -163,54 +164,84 @@ function matchRoute(path: string, method: string): RouteMatch | null {
 	return null;
 }
 
-async function handleRequest(request: Request, env: Env): Promise<Response> {
+async function handleRequest(request: Request, env: Env, requestId: string): Promise<Response> {
 	const startMs = Date.now();
 	const url = new URL(request.url);
 	const path = url.pathname;
 	const method = request.method;
 	const origin = request.headers.get("Origin");
 
-	logger.info("request", { method, path, origin: origin ?? undefined });
+	logger.info("request", { method, path, origin: origin ?? undefined, requestId });
 
 	// Health check — unauthenticated
 	if (path === "/health" && method === "GET") {
 		return new Response(JSON.stringify({ status: "ok" }), {
 			status: 200,
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
+		});
+	}
+
+	// OpenAPI spec — unauthenticated (static metadata)
+	if (path === "/v1/openapi.json" && method === "GET") {
+		const { generateOpenApiJson } = await import("@lakesync/gateway");
+		return new Response(generateOpenApiJson(), {
+			status: 200,
+			headers: { "Content-Type": "application/json", "API-Version": "v1", "X-Request-Id": requestId },
 		});
 	}
 
 	// Connector types — unauthenticated (static metadata)
-	if (path === "/connectors/types" && method === "GET") {
+	if (path === "/v1/connectors/types" && method === "GET") {
 		const { handleListConnectorTypes } = await import("@lakesync/gateway");
 		const result = handleListConnectorTypes();
 		return new Response(JSON.stringify(result.body), {
 			status: result.status,
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", "API-Version": "v1", "X-Request-Id": requestId },
+		});
+	}
+
+	// ── Legacy path redirect ───────────────────────────────────────
+	// Redirect unversioned paths to their /v1/ equivalents.
+	if (
+		(path.startsWith("/sync/") || path.startsWith("/admin/") || path === "/connectors/types") &&
+		!path.startsWith("/v1/")
+	) {
+		const newUrl = new URL(request.url);
+		newUrl.pathname = `/v1${path}`;
+		return new Response(null, {
+			status: 301,
+			headers: {
+				Location: newUrl.toString(),
+				Sunset: "2026-06-01",
+				"Content-Type": "application/json",
+			},
 		});
 	}
 
 	// ── Authentication ──────────────────────────────────────────────
 	const token = extractBearerToken(request) ?? url.searchParams.get("token");
 	if (!token) {
-		logger.warn("auth_failed", { reason: "Missing Bearer token" });
-		return unauthorised("Missing Bearer token");
+		logger.warn("auth_failed", { reason: "Missing Bearer token", requestId });
+		return unauthorised("Missing Bearer token", requestId);
 	}
 
-	const authResult = await verifyToken(token, env.JWT_SECRET);
+	const jwtSecret: string | [string, string] = env.JWT_SECRET_PREVIOUS
+		? [env.JWT_SECRET, env.JWT_SECRET_PREVIOUS]
+		: env.JWT_SECRET;
+	const authResult = await verifyToken(token, jwtSecret);
 	if (!authResult.ok) {
-		logger.warn("auth_failed", { reason: authResult.error.message });
-		return unauthorised(authResult.error.message);
+		logger.warn("auth_failed", { reason: authResult.error.message, requestId });
+		return unauthorised(authResult.error.message, requestId);
 	}
 
 	const { clientId, gatewayId: jwtGatewayId, role } = authResult.value;
 
 	// ── Admin route protection ───────────────────────────────────────
-	if (path.startsWith("/admin/") && role !== "admin") {
-		logger.warn("admin_denied", { clientId, path });
-		return new Response(JSON.stringify({ error: "Admin role required" }), {
+	if (path.startsWith("/v1/admin/") && role !== "admin") {
+		logger.warn("admin_denied", { clientId, path, requestId });
+		return new Response(JSON.stringify({ error: "Admin role required", code: API_ERROR_CODES.FORBIDDEN, requestId }), {
 			status: 403,
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
 		});
 	}
 
@@ -218,15 +249,18 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
 	const route = matchRoute(path, method);
 	if (!route) {
-		logger.warn("route_not_found", { path });
-		return new Response("Not found", { status: 404 });
+		logger.warn("route_not_found", { path, requestId });
+		return new Response(JSON.stringify({ error: "Not found", code: API_ERROR_CODES.NOT_FOUND, requestId }), {
+			status: 404,
+			headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
+		});
 	}
 
 	// ── Gateway ID enforcement ──────────────────────────────────────
 	if (route.gatewayId !== jwtGatewayId) {
 		return new Response(
-			JSON.stringify({ error: "Gateway ID mismatch: JWT authorises a different gateway" }),
-			{ status: 403, headers: { "Content-Type": "application/json" } },
+			JSON.stringify({ error: "Gateway ID mismatch: JWT authorises a different gateway", code: API_ERROR_CODES.FORBIDDEN, requestId }),
+			{ status: 403, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } },
 		);
 	}
 
@@ -249,7 +283,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 		const response = await handleShardedRoute(shardConfig, enrichedRequest, route, env);
 		const durationMs = Date.now() - startMs;
 		logger.info("response", { method, path, status: response.status, durationMs, sharded: true });
-		return response;
+		return withApiVersion(response);
 	}
 
 	// ── Direct DO routing (no sharding) ─────────────────────────────
@@ -271,7 +305,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 	const durationMs = Date.now() - startMs;
 	logger.info("response", { method, path, status: response.status, durationMs });
 
-	return response;
+	return withApiVersion(response);
 }
 
 /**
@@ -377,6 +411,21 @@ async function handleShardedRoute(
 }
 
 // ---------------------------------------------------------------------------
+// API version header
+// ---------------------------------------------------------------------------
+
+/** Add `API-Version: v1` header to a response from a versioned route. */
+function withApiVersion(response: Response): Response {
+	const headers = new Headers(response.headers);
+	headers.set("API-Version", "v1");
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
+}
+
+// ---------------------------------------------------------------------------
 // CORS
 // ---------------------------------------------------------------------------
 
@@ -400,15 +449,46 @@ function corsHeaders(env: Env, origin?: string | null): Record<string, string> {
 		"Access-Control-Allow-Origin": allowOrigin,
 		"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 		"Access-Control-Allow-Headers": "Authorization, Content-Type, X-Client-Id, X-Auth-Claims",
-		"Access-Control-Expose-Headers": "X-Checkpoint-Hlc, X-Sync-Rules-Version",
+		"Access-Control-Expose-Headers": "X-Checkpoint-Hlc, X-Sync-Rules-Version, X-Request-Id",
 		"Access-Control-Max-Age": "86400",
 	};
 }
 
-function withCors(response: Response, env: Env, origin?: string | null): Response {
+/** Standard security headers applied to every response. */
+const SECURITY_HEADERS: Record<string, string> = {
+	"X-Content-Type-Options": "nosniff",
+	"X-Frame-Options": "DENY",
+	"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+};
+
+function withCorsAndSecurity(
+	response: Response,
+	env: Env,
+	origin?: string | null,
+	path?: string,
+	requestId?: string,
+): Response {
 	const headers = new Headers(response.headers);
 	for (const [key, value] of Object.entries(corsHeaders(env, origin))) {
 		headers.set(key, value);
+	}
+	// Security headers on all responses
+	for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
+		headers.set(key, value);
+	}
+	// Request ID on all responses
+	if (requestId) {
+		headers.set("X-Request-Id", requestId);
+	}
+	// Cache-Control: no-store on /sync/* and /admin/* responses only (including /v1/ prefixed)
+	if (
+		path &&
+		(path.startsWith("/sync/") ||
+			path.startsWith("/admin/") ||
+			path.startsWith("/v1/sync/") ||
+			path.startsWith("/v1/admin/"))
+	) {
+		headers.set("Cache-Control", "no-store");
 	}
 	return new Response(response.body, {
 		status: response.status,
@@ -420,12 +500,19 @@ function withCors(response: Response, env: Env, origin?: string | null): Respons
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const origin = request.headers.get("Origin");
+		const path = new URL(request.url).pathname;
+
+		// Accept incoming X-Request-Id (pass-through from load balancer) or generate a new one
+		const requestId = request.headers.get("X-Request-Id") ?? crypto.randomUUID();
 
 		if (request.method === "OPTIONS") {
-			return new Response(null, { status: 204, headers: corsHeaders(env, origin) });
+			return new Response(null, {
+				status: 204,
+				headers: { ...corsHeaders(env, origin), "X-Request-Id": requestId },
+			});
 		}
 
-		const response = await handleRequest(request, env);
-		return withCors(response, env, origin);
+		const response = await handleRequest(request, env, requestId);
+		return withCorsAndSecurity(response, env, origin, path, requestId);
 	},
 } satisfies ExportedHandler<Env>;

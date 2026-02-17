@@ -65,14 +65,14 @@ describe("GatewayServer WebSocket", () => {
 	});
 
 	it("accepts WebSocket connections without JWT when no secret configured", async () => {
-		const ws = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-test/ws`);
+		const ws = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-test/ws`);
 		await waitForOpen(ws);
 		expect(ws.readyState).toBe(WebSocket.OPEN);
 		ws.close();
 	});
 
 	it("push via WebSocket returns SyncResponse", async () => {
-		const ws = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-test/ws`);
+		const ws = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-test/ws`);
 		await waitForOpen(ws);
 
 		const hlc = HLC.encode(1_000_000, 0);
@@ -108,7 +108,7 @@ describe("GatewayServer WebSocket", () => {
 		const hlc = HLC.encode(1_000_000, 0);
 		const delta = makeDelta({ hlc, clientId: "client-http", deltaId: "delta-pull-test" });
 
-		const pushRes = await fetch(`http://localhost:${server.port}/sync/gw-ws-test/push`, {
+		const pushRes = await fetch(`http://localhost:${server.port}/v1/sync/gw-ws-test/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(
@@ -123,7 +123,7 @@ describe("GatewayServer WebSocket", () => {
 		expect(pushRes.ok).toBe(true);
 
 		// Now pull via WebSocket
-		const ws = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-test/ws`);
+		const ws = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-test/ws`);
 		await waitForOpen(ws);
 
 		const pull = encodeSyncPull({
@@ -153,8 +153,8 @@ describe("GatewayServer WebSocket", () => {
 
 	it("HTTP push broadcasts to connected WebSocket clients", async () => {
 		// Connect two WS clients
-		const wsA = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-test/ws`);
-		const wsB = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-test/ws`);
+		const wsA = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-test/ws`);
+		const wsB = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-test/ws`);
 		await Promise.all([waitForOpen(wsA), waitForOpen(wsB)]);
 
 		// Listen for broadcast on both
@@ -169,7 +169,7 @@ describe("GatewayServer WebSocket", () => {
 			deltaId: "delta-broadcast-test",
 		});
 
-		const pushRes = await fetch(`http://localhost:${server.port}/sync/gw-ws-test/push`, {
+		const pushRes = await fetch(`http://localhost:${server.port}/v1/sync/gw-ws-test/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(
@@ -205,8 +205,8 @@ describe("GatewayServer WebSocket", () => {
 
 	it("WS push broadcasts to other WS clients but not sender", async () => {
 		// Connect two WS clients
-		const wsSender = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-test/ws`);
-		const wsReceiver = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-test/ws`);
+		const wsSender = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-test/ws`);
+		const wsReceiver = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-test/ws`);
 		await Promise.all([waitForOpen(wsSender), waitForOpen(wsReceiver)]);
 
 		// Listen for messages
@@ -249,7 +249,7 @@ describe("GatewayServer WebSocket", () => {
 	});
 
 	it("disconnected clients are removed from broadcast list", async () => {
-		const ws = new WebSocket(`ws://localhost:${server.port}/sync/gw-ws-test/ws`);
+		const ws = new WebSocket(`ws://localhost:${server.port}/v1/sync/gw-ws-test/ws`);
 		await waitForOpen(ws);
 
 		// Close the connection
@@ -258,7 +258,7 @@ describe("GatewayServer WebSocket", () => {
 
 		// Push via HTTP — should not throw even with closed clients
 		const hlc = HLC.encode(4_000_000, 0);
-		const pushRes = await fetch(`http://localhost:${server.port}/sync/gw-ws-test/push`, {
+		const pushRes = await fetch(`http://localhost:${server.port}/v1/sync/gw-ws-test/push`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(

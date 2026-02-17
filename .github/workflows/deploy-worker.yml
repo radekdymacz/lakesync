@@ -1,0 +1,93 @@
+name: Deploy Gateway Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/gateway-worker/**'
+      - 'packages/**'
+
+concurrency:
+  group: deploy-worker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+
+  deploy-staging:
+    name: Deploy to Staging
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Deploy to Cloudflare (staging)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          workingDirectory: apps/gateway-worker
+          command: deploy --env staging
+      - name: Smoke test
+        run: |
+          WORKER_URL="${{ vars.STAGING_WORKER_URL }}"
+          if [ -z "$WORKER_URL" ]; then
+            echo "STAGING_WORKER_URL not set, skipping smoke test"
+            exit 0
+          fi
+          for i in $(seq 1 10); do
+            STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$WORKER_URL/health")
+            if [ "$STATUS" = "200" ]; then
+              echo "Smoke test passed: /health returned 200"
+              exit 0
+            fi
+            echo "Attempt $i: got $STATUS, retrying..."
+            sleep 3
+          done
+          echo "Smoke test failed: /health did not return 200"
+          exit 1
+
+  deploy-production:
+    name: Deploy to Production
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Deploy to Cloudflare (production)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          workingDirectory: apps/gateway-worker
+          command: deploy --env production
+      - name: Smoke test
+        run: |
+          WORKER_URL="${{ vars.PRODUCTION_WORKER_URL }}"
+          if [ -z "$WORKER_URL" ]; then
+            echo "PRODUCTION_WORKER_URL not set, skipping smoke test"
+            exit 0
+          fi
+          for i in $(seq 1 10); do
+            STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$WORKER_URL/health")
+            if [ "$STATUS" = "200" ]; then
+              echo "Smoke test passed: /health returned 200"
+              exit 0
+            fi
+            echo "Attempt $i: got $STATUS, retrying..."
+            sleep 3
+          done
+          echo "Smoke test failed: /health did not return 200"
+          exit 1

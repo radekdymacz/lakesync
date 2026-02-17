@@ -38,6 +38,12 @@ export {
 	sendError,
 	sendJson,
 } from "./pipeline";
+export {
+	quotaMiddleware,
+	type OrgIdResolver,
+	type QuotaEnforcer,
+	type QuotaEnforcerResult,
+} from "./quota-middleware";
 export { RateLimiter, type RateLimiterConfig } from "./rate-limiter";
 export {
 	buildServerRouteHandlers,
