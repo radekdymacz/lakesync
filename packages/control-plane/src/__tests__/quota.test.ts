@@ -1,5 +1,5 @@
-import { Err, Ok, type Result } from "@lakesync/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Err, Ok } from "@lakesync/core";
+import { describe, expect, it, vi } from "vitest";
 import type { Gateway, Organisation } from "../entities";
 import { ControlPlaneError } from "../errors";
 import { CachedQuotaChecker, type QuotaCheckerDeps } from "../quota";

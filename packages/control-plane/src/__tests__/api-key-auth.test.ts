@@ -1,9 +1,7 @@
 import { Ok } from "@lakesync/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticateApiKey } from "../auth/api-key-auth";
-import { ControlPlaneError } from "../errors";
 import type { ApiKeyRepository } from "../repositories";
-import { mockApiKeyRow } from "./test-helpers";
 
 function createMockApiKeyRepo(): ApiKeyRepository {
 	return {

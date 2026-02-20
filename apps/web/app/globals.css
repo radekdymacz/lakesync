@@ -1,0 +1,81 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+@layer base {
+	:root {
+		--color-primary: #111827;
+		--color-primary-hover: #1f2937;
+
+		/* Landing page design tokens (light) */
+		--landing-bg: #ffffff;
+		--landing-bg-secondary: #f7f6f3;
+		--landing-fg: #37352f;
+		--landing-fg-secondary: rgba(55, 53, 47, 0.65);
+		--landing-fg-tertiary: rgba(55, 53, 47, 0.5);
+		--landing-border: rgba(55, 53, 47, 0.16);
+		--landing-border-light: rgba(55, 53, 47, 0.09);
+		--landing-accent: #2383e2;
+	}
+
+	.dark {
+		--landing-bg: #191919;
+		--landing-bg-secondary: #202020;
+		--landing-fg: rgba(255, 255, 255, 0.9);
+		--landing-fg-secondary: rgba(255, 255, 255, 0.6);
+		--landing-fg-tertiary: rgba(255, 255, 255, 0.4);
+		--landing-border: rgba(255, 255, 255, 0.13);
+		--landing-border-light: rgba(255, 255, 255, 0.07);
+		--landing-accent: #529cca;
+	}
+}
+
+/* Landing page code block */
+.code-block {
+	background: #1e1e1e;
+	color: #d4d4d4;
+}
+.code-block .kw {
+	color: #569cd6;
+}
+.code-block .str {
+	color: #ce9178;
+}
+.code-block .fn {
+	color: #dcdcaa;
+}
+.code-block .cm {
+	color: #6a9955;
+}
+.code-block .num {
+	color: #b5cea8;
+}
+.code-block .type {
+	color: #4ec9b0;
+}
+.code-block .op {
+	color: #d4d4d4;
+}
+
+/* Landing page animations */
+@keyframes fadeUp {
+	from {
+		opacity: 0;
+		transform: translateY(20px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+.animate-fade-up {
+	animation: fadeUp 0.6s ease-out forwards;
+}
+.animate-fade-up-delay {
+	animation: fadeUp 0.6s ease-out 0.15s forwards;
+	opacity: 0;
+}
+.animate-fade-up-delay-2 {
+	animation: fadeUp 0.6s ease-out 0.3s forwards;
+	opacity: 0;
+}

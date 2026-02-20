@@ -161,8 +161,8 @@ async function handleUserCreated(
 }
 
 async function handleUserDeleted(
-	user: ClerkUserPayload,
-	deps: ClerkWebhookDeps,
+	_user: ClerkUserPayload,
+	_deps: ClerkWebhookDeps,
 ): Promise<Result<WebhookResult, ControlPlaneError>> {
 	// Remove user from all organisations they belong to
 	// Note: in a full implementation, we'd query all orgs for this user.

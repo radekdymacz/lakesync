@@ -17,7 +17,7 @@ export async function status(flags: Record<string, string>): Promise<void> {
 		const healthResponse = await fetch(`${gatewayUrl}/health`);
 		const health = (await healthResponse.json()) as { status: string };
 		print(`Health: ${health.status}`);
-	} catch (err) {
+	} catch (_err) {
 		fatal(`Cannot reach gateway at ${gatewayUrl}`);
 	}
 

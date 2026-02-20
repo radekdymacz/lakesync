@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebhookEventType } from "../webhooks/types";
 import { WEBHOOK_EVENT_TYPES } from "../webhooks/types";
 import {
 	signPayload,

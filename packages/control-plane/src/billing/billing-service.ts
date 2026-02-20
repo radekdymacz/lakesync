@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { Err, Ok, type Result } from "@lakesync/core";
-import type { Organisation, PlanId } from "../entities";
+import type { PlanId } from "../entities";
 import { ControlPlaneError } from "../errors";
 import { PLANS } from "../plans";
 import type { OrgRepository, UsageRepository } from "../repositories";

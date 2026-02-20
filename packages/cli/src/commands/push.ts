@@ -35,7 +35,7 @@ export async function push(flags: Record<string, string>, positional: string[]):
 	let raw: string;
 	try {
 		raw = readFileSync(file, "utf-8");
-	} catch (err) {
+	} catch (_err) {
 		fatal(`Cannot read file: ${file}`);
 	}
 

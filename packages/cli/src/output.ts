@@ -1,6 +1,6 @@
 /** Print a message to stdout. */
 export function print(message: string): void {
-	process.stdout.write(message + "\n");
+	process.stdout.write(`${message}\n`);
 }
 
 /** Print an error to stderr and exit with code 1. */

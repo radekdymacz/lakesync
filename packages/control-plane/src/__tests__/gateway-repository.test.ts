@@ -1,6 +1,5 @@
 import type { Pool } from "pg";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ControlPlaneError } from "../errors";
 import { PgGatewayRepository } from "../postgres/gateway-repository";
 import { createMockPool, mockGatewayRow } from "./test-helpers";
 

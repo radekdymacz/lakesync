@@ -28,7 +28,8 @@
 			"!**/*.wasm",
 			"!**/*.proto",
 			"!**/gen",
-			"!apps/docs"
+			"!**/.source",
+			"!**/.next"
 		]
 	}
 }

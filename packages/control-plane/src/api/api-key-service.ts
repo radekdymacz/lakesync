@@ -67,7 +67,7 @@ export async function rotateApiKey(
 	deps: ApiKeyServiceDeps,
 ): Promise<Result<{ apiKey: ApiKey; rawKey: string }, ControlPlaneError>> {
 	// Get the current key to copy its properties
-	const listResult = await deps.apiKeyRepo.listByOrg(""); // We need getById — use getByHash indirectly
+	const _listResult = await deps.apiKeyRepo.listByOrg(""); // We need getById — use getByHash indirectly
 	// Actually, we need the key by ID. Since our repo doesn't have getById,
 	// we'll use a different approach: the caller provides the key details.
 	// For now, revoke first then create is the pattern.

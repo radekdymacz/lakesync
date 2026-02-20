@@ -1,7 +1,6 @@
 import { Ok, verifyToken } from "@lakesync/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { exchangeToken } from "../auth/token-exchange";
-import { ControlPlaneError } from "../errors";
 import type { MemberRepository } from "../repositories";
 
 const JWT_SECRET = "test-secret-for-token-exchange";

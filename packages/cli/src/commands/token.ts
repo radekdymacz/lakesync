@@ -1,5 +1,4 @@
 import { signToken } from "@lakesync/core";
-import { requireFlag } from "../args";
 import { loadConfig } from "../config";
 import { fatal, print } from "../output";
 

@@ -1,6 +1,5 @@
 import type { Pool } from "pg";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ControlPlaneError } from "../errors";
 import { PgApiKeyRepository } from "../postgres/api-key-repository";
 import { createMockPool, mockApiKeyRow } from "./test-helpers";
 

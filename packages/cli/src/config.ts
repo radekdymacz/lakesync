@@ -33,11 +33,7 @@ export function saveConfig(config: CliConfig): void {
 	if (!existsSync(CONFIG_DIR)) {
 		mkdirSync(CONFIG_DIR, { recursive: true });
 	}
-	writeFileSync(
-		CONFIG_FILE,
-		`${JSON.stringify(config, null, "\t")}\n`,
-		"utf-8",
-	);
+	writeFileSync(CONFIG_FILE, `${JSON.stringify(config, null, "\t")}\n`, "utf-8");
 }
 
 /** Get the config directory path. */

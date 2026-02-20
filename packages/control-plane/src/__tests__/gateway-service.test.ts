@@ -1,4 +1,4 @@
-import { Err, Ok } from "@lakesync/core";
+import { Ok } from "@lakesync/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceDeps } from "../api/gateway-service";
 import {
@@ -11,7 +11,6 @@ import {
 	updateGateway,
 } from "../api/gateway-service";
 import type { Gateway, Organisation } from "../entities";
-import { ControlPlaneError } from "../errors";
 
 function mockOrg(plan = "free"): Organisation {
 	return {

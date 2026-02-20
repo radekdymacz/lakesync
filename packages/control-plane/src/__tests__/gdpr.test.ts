@@ -9,7 +9,7 @@ import {
 	getDeletionRequest,
 	processDeletionRequest,
 } from "../gdpr/deletion-service";
-import { mockApiKeyRow, mockGatewayRow, mockMemberRow, mockOrgRow } from "./test-helpers";
+import { mockOrgRow } from "./test-helpers";
 
 function toOrg(row: Record<string, unknown>) {
 	return {

@@ -96,7 +96,7 @@ export async function processWebhookEvent(
 /** Resolve org by Stripe customer ID from subscription metadata or customer lookup */
 async function resolveOrgFromMetadata(
 	data: Record<string, unknown>,
-	deps: StripeWebhookDeps,
+	_deps: StripeWebhookDeps,
 ): Promise<Result<{ orgId: string }, ControlPlaneError>> {
 	const metadata = data.metadata as Record<string, string> | undefined;
 	const orgId = metadata?.orgId;

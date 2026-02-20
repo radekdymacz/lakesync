@@ -72,14 +72,12 @@ function createMockStripe(): StripeClient {
 			},
 		},
 		subscriptionItems: {
-			createUsageRecord: vi
-				.fn()
-				.mockResolvedValue({
-					id: "ur_123",
-					quantity: 100,
-					timestamp: 0,
-					subscription_item: "si_item1",
-				}),
+			createUsageRecord: vi.fn().mockResolvedValue({
+				id: "ur_123",
+				quantity: 100,
+				timestamp: 0,
+				subscription_item: "si_item1",
+			}),
 		},
 		webhooks: {
 			constructEvent: vi.fn(),
