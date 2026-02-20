@@ -13,7 +13,7 @@
 		"@clerk/nextjs": "^6.12.0",
 		"@lakesync/control-plane": "workspace:*",
 		"fumadocs-core": "^15.4.3",
-		"fumadocs-mdx": "^11.6.6",
+		"fumadocs-mdx": "^14.2.7",
 		"fumadocs-ui": "^15.4.3",
 		"mermaid": "^11.12.2",
 		"next": "^15.3.3",
