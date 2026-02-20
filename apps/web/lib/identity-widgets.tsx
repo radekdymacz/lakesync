@@ -1,6 +1,11 @@
 "use client";
 
-import { UserButton as ClerkUserButtonComponent, OrganizationSwitcher } from "@clerk/nextjs";
+import {
+	UserButton as ClerkUserButtonComponent,
+	OrganizationSwitcher,
+	useOrganizationList,
+} from "@clerk/nextjs";
+import { useCallback, useState } from "react";
 import { CLERK_ENABLED } from "./auth-config";
 import { BillingPage, WebhooksPage } from "./settings-pages";
 
@@ -109,4 +114,37 @@ export function getIdentityWidgets() {
 		OrgSwitcher: ClerkOrgSwitcher,
 		UserButton: ClerkUserButton,
 	};
+}
+
+/** Hook for creating an organisation. Uses Clerk in prod, instant redirect in dev. */
+export function useCreateOrg() {
+	const [creating, setCreating] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const clerkOrgs = useOrganizationList();
+
+	const create = useCallback(
+		async (name: string): Promise<boolean> => {
+			setError(null);
+			setCreating(true);
+			try {
+				if (!CLERK_ENABLED) return true;
+				if (!clerkOrgs?.createOrganization) {
+					setError("Organisation creation is not available.");
+					return false;
+				}
+				const org = await clerkOrgs.createOrganization({ name });
+				await clerkOrgs.setActive?.({ organization: org.id });
+				return true;
+			} catch (e) {
+				setError(e instanceof Error ? e.message : "Failed to create organisation.");
+				return false;
+			} finally {
+				setCreating(false);
+			}
+		},
+		[clerkOrgs],
+	);
+
+	return { create, creating, error };
 }
