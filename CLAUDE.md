@@ -213,6 +213,17 @@ For SEQUENTIAL tasks: execute one at a time.
 - NEVER use `any` type
 - NEVER create custom subagents — use built-in Task tool only
 
+## E2E Testing (apps/web)
+- Playwright with Chromium only — auto-starts Next.js dev server on port 3002 (separate from dev port 3001)
+- `bun run test:e2e` from root, or `bun run test:e2e` from `apps/web`
+- `bun run test:e2e:ui` for interactive Playwright UI mode
+- Dev server auto-starts via Playwright `webServer` config with Clerk keys cleared (dev/mock mode)
+- Tests in `apps/web/e2e/`: landing, dashboard, gateways, docs, navigation (18 tests)
+- Screenshots saved to `apps/web/test-results/` on failure
+- HTML report at `apps/web/playwright-report/`
+- To add a test: create `apps/web/e2e/<name>.spec.ts`
+- Install browsers: `cd apps/web && bunx playwright install chromium`
+
 ## Gotchas
 - Biome `--fix --unsafe` can break TypeScript by replacing `!` with `?.` on indexed access
 - IndexedDB structuredClone cannot handle bigint — IDBQueue serialises HLC to string
