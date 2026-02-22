@@ -1,7 +1,7 @@
 import type { DatabaseAdapter, HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
 import { Err, Ok } from "@lakesync/core";
 import { describe, expect, it, vi } from "vitest";
-import { AdapterBasedLock } from "../cluster";
+import { AdapterBasedLock, PostgresAdvisoryLock, type PostgresConnection } from "../cluster";
 import { SharedBuffer } from "../shared-buffer";
 
 // ---------------------------------------------------------------------------
@@ -89,6 +89,110 @@ describe("AdapterBasedLock", () => {
 
 		// Should not throw
 		await lock.release("flush:gw-1");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Mock PostgresConnection
+// ---------------------------------------------------------------------------
+
+function createMockPgConn(overrides: Partial<PostgresConnection> = {}): PostgresConnection {
+	return {
+		query: vi.fn().mockResolvedValue({ rows: [{ acquired: true }] }),
+		...overrides,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// PostgresAdvisoryLock
+// ---------------------------------------------------------------------------
+
+describe("PostgresAdvisoryLock", () => {
+	it("acquire returns true when pg_try_advisory_lock succeeds", async () => {
+		const conn = createMockPgConn();
+		const lock = new PostgresAdvisoryLock(conn);
+
+		const acquired = await lock.acquire("flush:gw-1", 30_000);
+
+		expect(acquired).toBe(true);
+		expect(conn.query).toHaveBeenCalledOnce();
+		const [sql, params] = (conn.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+		expect(sql).toContain("pg_try_advisory_lock");
+		expect(params).toHaveLength(2);
+		expect(typeof params[0]).toBe("number");
+		expect(typeof params[1]).toBe("number");
+	});
+
+	it("acquire returns false when pg_try_advisory_lock returns false", async () => {
+		const conn = createMockPgConn({
+			query: vi.fn().mockResolvedValue({ rows: [{ acquired: false }] }),
+		});
+		const lock = new PostgresAdvisoryLock(conn);
+
+		const acquired = await lock.acquire("flush:gw-1", 30_000);
+
+		expect(acquired).toBe(false);
+	});
+
+	it("acquire returns false when query throws", async () => {
+		const conn = createMockPgConn({
+			query: vi.fn().mockRejectedValue(new Error("connection lost")),
+		});
+		const lock = new PostgresAdvisoryLock(conn);
+
+		const acquired = await lock.acquire("flush:gw-1", 30_000);
+
+		expect(acquired).toBe(false);
+	});
+
+	it("release calls pg_advisory_unlock", async () => {
+		const conn = createMockPgConn();
+		const lock = new PostgresAdvisoryLock(conn);
+
+		await lock.acquire("flush:gw-1", 30_000);
+		await lock.release("flush:gw-1");
+
+		expect(conn.query).toHaveBeenCalledTimes(2);
+		const [sql] = (conn.query as ReturnType<typeof vi.fn>).mock.calls[1]!;
+		expect(sql).toContain("pg_advisory_unlock");
+	});
+
+	it("release does not throw when query fails", async () => {
+		const queryFn = vi
+			.fn()
+			.mockResolvedValueOnce({ rows: [{ acquired: true }] })
+			.mockRejectedValueOnce(new Error("connection lost"));
+		const conn = createMockPgConn({ query: queryFn });
+		const lock = new PostgresAdvisoryLock(conn);
+
+		await lock.acquire("flush:gw-1", 30_000);
+		// Should not throw
+		await lock.release("flush:gw-1");
+	});
+
+	it("produces deterministic hash keys for the same input", async () => {
+		const conn = createMockPgConn();
+		const lock = new PostgresAdvisoryLock(conn);
+
+		await lock.acquire("test-key", 1000);
+		await lock.acquire("test-key", 1000);
+
+		const calls = (conn.query as ReturnType<typeof vi.fn>).mock.calls;
+		expect(calls[0]![1]).toEqual(calls[1]![1]);
+	});
+
+	it("produces different hash keys for different inputs", async () => {
+		const conn = createMockPgConn();
+		const lock = new PostgresAdvisoryLock(conn);
+
+		await lock.acquire("key-a", 1000);
+		await lock.acquire("key-b", 1000);
+
+		const calls = (conn.query as ReturnType<typeof vi.fn>).mock.calls;
+		const [k1a, k2a] = calls[0]![1] as [number, number];
+		const [k1b, k2b] = calls[1]![1] as [number, number];
+		// At least one of the pair should differ
+		expect(k1a === k1b && k2a === k2b).toBe(false);
 	});
 });
 

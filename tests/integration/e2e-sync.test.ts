@@ -105,7 +105,7 @@ describe("Single client sync", () => {
 		});
 
 		// Pull since first HLC — should only get the second delta
-		const pullResult = gateway.handlePull({
+		const pullResult = gateway.pullFromBuffer({
 			clientId: "reader",
 			sinceHlc: firstHlc,
 			maxDeltas: 100,

@@ -73,11 +73,10 @@ describe("Adapter-sourced pull — integration", () => {
 		const mockAdapter = createMockDatabaseAdapter(adapterDeltas);
 		const gateway = createGatewayWithSource({ bigquery: mockAdapter });
 
-		const result = await gateway.handlePull({
+		const result = await gateway.pullFromAdapter("bigquery", {
 			clientId: "consumer-1",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
-			source: "bigquery",
 		});
 
 		expect(result.ok).toBe(true);
@@ -143,12 +142,12 @@ describe("Adapter-sourced pull — integration", () => {
 			},
 		};
 
-		const result = await gateway.handlePull(
+		const result = await gateway.pullFromAdapter(
+			"bigquery",
 			{
 				clientId: "consumer-1",
 				sinceHlc: HLC.encode(0, 0),
 				maxDeltas: 100,
-				source: "bigquery",
 			},
 			context,
 		);
@@ -219,12 +218,12 @@ describe("Adapter-sourced pull — integration", () => {
 			},
 		};
 
-		const result = await gateway.handlePull(
+		const result = await gateway.pullFromAdapter(
+			"postgres",
 			{
 				clientId: "dashboard",
 				sinceHlc: HLC.encode(0, 0),
 				maxDeltas: 100,
-				source: "postgres",
 			},
 			context,
 		);
@@ -268,7 +267,7 @@ describe("Adapter-sourced pull — integration", () => {
 		});
 
 		// Pull from buffer (no source) — returns buffer data
-		const bufferPull = gateway.handlePull({
+		const bufferPull = gateway.pullFromBuffer({
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
@@ -280,11 +279,10 @@ describe("Adapter-sourced pull — integration", () => {
 		}
 
 		// Pull from adapter source — returns adapter data
-		const adapterPull = await gateway.handlePull({
+		const adapterPull = await gateway.pullFromAdapter("bigquery", {
 			clientId: "consumer-1",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
-			source: "bigquery",
 		});
 		expect(adapterPull.ok).toBe(true);
 		if (adapterPull.ok) {
@@ -296,11 +294,10 @@ describe("Adapter-sourced pull — integration", () => {
 	it("unknown source returns AdapterNotFoundError", async () => {
 		const gateway = createGatewayWithSource({});
 
-		const result = await gateway.handlePull({
+		const result = await gateway.pullFromAdapter("nonexistent", {
 			clientId: "consumer-1",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
-			source: "nonexistent",
 		});
 
 		expect(result.ok).toBe(false);
@@ -320,11 +317,10 @@ describe("Adapter-sourced pull — integration", () => {
 
 		const gateway = createGatewayWithSource({ broken: failingAdapter });
 
-		const result = await gateway.handlePull({
+		const result = await gateway.pullFromAdapter("broken", {
 			clientId: "consumer-1",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
-			source: "broken",
 		});
 
 		expect(result.ok).toBe(false);
@@ -354,11 +350,10 @@ describe("Adapter-sourced pull — integration", () => {
 		const mockAdapter = createMockDatabaseAdapter(adapterDeltas);
 		const gateway = createGatewayWithSource({ postgres: mockAdapter });
 
-		const result = await gateway.handlePull({
+		const result = await gateway.pullFromAdapter("postgres", {
 			clientId: "consumer-1",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 5,
-			source: "postgres",
 		});
 
 		expect(result.ok).toBe(true);

@@ -47,8 +47,11 @@ interface CachedEntry {
  * Stale entries are evicted on every `set()` call and the cache is
  * trimmed to the configured max size (counting only non-idem entries).
  */
+/** Immutable cache snapshot. */
+type CacheSnapshot = ReadonlyMap<string, CachedEntry>;
+
 export class MemoryIdempotencyCache implements IdempotencyCache {
-	private readonly entries: Map<string, CachedEntry> = new Map();
+	private entries: CacheSnapshot = new Map();
 	private readonly maxSize: number;
 	private readonly ttlMs: number;
 
@@ -62,7 +65,6 @@ export class MemoryIdempotencyCache implements IdempotencyCache {
 		const entry = this.entries.get(actionId);
 		if (!entry) return false;
 		if (Date.now() - entry.cachedAt > this.ttlMs) {
-			this.entries.delete(actionId);
 			return false;
 		}
 		return true;
@@ -73,7 +75,6 @@ export class MemoryIdempotencyCache implements IdempotencyCache {
 		const entry = this.entries.get(key);
 		if (!entry) return undefined;
 		if (Date.now() - entry.cachedAt > this.ttlMs) {
-			this.entries.delete(key);
 			return undefined;
 		}
 		return entry.value;
@@ -81,33 +82,39 @@ export class MemoryIdempotencyCache implements IdempotencyCache {
 
 	/** {@inheritDoc IdempotencyCache.set} */
 	set(actionId: string, result: CachedActionResult, idempotencyKey?: string): void {
-		this.evictStaleEntries();
+		const evicted = this.buildEvictedSnapshot();
 
+		const next = new Map(evicted);
 		const entry: CachedEntry = { value: result, cachedAt: Date.now() };
-		this.entries.set(actionId, entry);
+		next.set(actionId, entry);
 		if (idempotencyKey) {
-			this.entries.set(`idem:${idempotencyKey}`, entry);
+			next.set(`idem:${idempotencyKey}`, entry);
 		}
+
+		this.entries = next;
 	}
 
-	/** Evict expired entries and trim to max size (counting only non-idem entries). */
-	private evictStaleEntries(): void {
+	/** Build a new snapshot with expired entries evicted and size trimmed. */
+	private buildEvictedSnapshot(): CacheSnapshot {
 		const now = Date.now();
+		const next = new Map<string, CachedEntry>();
 
-		// Evict expired entries
+		// Copy non-expired entries
 		for (const [key, entry] of this.entries) {
-			if (now - entry.cachedAt > this.ttlMs) {
-				this.entries.delete(key);
+			if (now - entry.cachedAt <= this.ttlMs) {
+				next.set(key, entry);
 			}
 		}
 
 		// Trim to max size — count only non-idem entries
-		const actionKeys = [...this.entries.keys()].filter((k) => !k.startsWith("idem:"));
+		const actionKeys = [...next.keys()].filter((k) => !k.startsWith("idem:"));
 		if (actionKeys.length > this.maxSize) {
 			const excess = actionKeys.length - this.maxSize;
 			for (let i = 0; i < excess; i++) {
-				this.entries.delete(actionKeys[i]!);
+				next.delete(actionKeys[i]!);
 			}
 		}
+
+		return next;
 	}
 }

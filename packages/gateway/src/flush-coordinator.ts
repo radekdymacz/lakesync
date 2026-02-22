@@ -7,29 +7,29 @@ import {
 	Ok,
 	type Result,
 	type RowDelta,
-	type TableSchema,
 } from "@lakesync/core";
 import type { DeltaBuffer } from "./buffer";
 import type { FlushConfig } from "./flush";
 import { flushEntries } from "./flush";
-import type { FlushQueue } from "./flush-queue";
 
 /** Dependencies for flush operations. */
 export interface FlushCoordinatorDeps {
 	/** Gateway configuration for flush. */
 	config: FlushConfig;
-	/** Table schemas for materialisation after flush. */
-	schemas?: ReadonlyArray<TableSchema>;
-	/** Optional flush queue for post-flush materialisation. */
-	flushQueue?: FlushQueue;
+}
+
+/** Result of a successful flush. */
+export interface FlushResult {
+	/** The flushed delta entries. */
+	entries: RowDelta[];
 }
 
 /**
  * Coordinates flush operations from the buffer to the adapter.
  *
- * Owns the flushing state to prevent concurrent flushes and handles
- * entry restoration on failure. After a successful flush, publishes
- * entries to the configured `FlushQueue` for downstream materialisation.
+ * Owns the flushing mutex to prevent concurrent flushes and handles
+ * entry restoration on failure. Returns flushed entries on success —
+ * the caller decides what to do next (e.g. publish to a flush queue).
  */
 export class FlushCoordinator {
 	private flushing = false;
@@ -43,19 +43,18 @@ export class FlushCoordinator {
 	 * Flush all entries from the buffer to the adapter.
 	 *
 	 * Drains the buffer first, then writes to the adapter. On failure,
-	 * entries are restored to the buffer. On success, publishes to the
-	 * flush queue as a non-fatal post-step.
+	 * entries are restored to the buffer.
 	 */
 	async flush(
 		buffer: DeltaBuffer,
 		adapter: LakeAdapter | DatabaseAdapter | null,
 		deps: FlushCoordinatorDeps,
-	): Promise<Result<void, FlushError>> {
+	): Promise<Result<FlushResult, FlushError>> {
 		if (this.flushing) {
 			return Err(new FlushError("Flush already in progress"));
 		}
 		if (buffer.logSize === 0) {
-			return Ok(undefined);
+			return Ok({ entries: [] });
 		}
 		if (!adapter) {
 			return Err(new FlushError("No adapter configured"));
@@ -67,7 +66,7 @@ export class FlushCoordinator {
 		const entries = buffer.drain();
 		if (entries.length === 0) {
 			this.flushing = false;
-			return Ok(undefined);
+			return Ok({ entries: [] });
 		}
 
 		try {
@@ -75,14 +74,11 @@ export class FlushCoordinator {
 				adapter,
 				config: deps.config,
 				restoreEntries: (e) => this.restoreEntries(buffer, e),
-				schemas: deps.schemas,
 			});
 
-			if (result.ok && deps.flushQueue) {
-				void this.publishToQueue(entries, deps);
-			}
+			if (!result.ok) return result as Result<never, FlushError>;
 
-			return result;
+			return Ok({ entries });
 		} finally {
 			this.flushing = false;
 		}
@@ -99,7 +95,7 @@ export class FlushCoordinator {
 		buffer: DeltaBuffer,
 		adapter: LakeAdapter | DatabaseAdapter | null,
 		deps: FlushCoordinatorDeps,
-	): Promise<Result<void, FlushError>> {
+	): Promise<Result<FlushResult, FlushError>> {
 		if (this.flushing) {
 			return Err(new FlushError("Flush already in progress"));
 		}
@@ -109,7 +105,7 @@ export class FlushCoordinator {
 
 		const entries = buffer.drainTable(table);
 		if (entries.length === 0) {
-			return Ok(undefined);
+			return Ok({ entries: [] });
 		}
 
 		this.flushing = true;
@@ -122,44 +118,15 @@ export class FlushCoordinator {
 					adapter,
 					config: deps.config,
 					restoreEntries: (e) => this.restoreEntries(buffer, e),
-					schemas: deps.schemas,
 				},
 				table,
 			);
 
-			if (result.ok && deps.flushQueue) {
-				void this.publishToQueue(entries, deps);
-			}
+			if (!result.ok) return result as Result<never, FlushError>;
 
-			return result;
+			return Ok({ entries });
 		} finally {
 			this.flushing = false;
-		}
-	}
-
-	/**
-	 * Publish flushed entries to the queue for materialisation (non-fatal).
-	 *
-	 * Failures are warned but never fail the flush.
-	 */
-	private async publishToQueue(entries: RowDelta[], deps: FlushCoordinatorDeps): Promise<void> {
-		if (!deps.flushQueue || !deps.schemas || deps.schemas.length === 0) return;
-
-		try {
-			const result = await deps.flushQueue.publish(entries, {
-				gatewayId: deps.config.gatewayId,
-				schemas: deps.schemas,
-			});
-			if (!result.ok) {
-				console.warn(
-					`[lakesync] FlushQueue publish failed (${entries.length} deltas): ${result.error.message}`,
-				);
-			}
-		} catch (error: unknown) {
-			const err = error instanceof Error ? error : new Error(String(error));
-			console.warn(
-				`[lakesync] FlushQueue publish error (${entries.length} deltas): ${err.message}`,
-			);
 		}
 	}
 

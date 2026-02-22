@@ -58,11 +58,10 @@ describe("SyncGateway source management", () => {
 		const adapter = createMockDatabaseAdapter();
 		gw.registerSource("my-src", adapter);
 
-		const result = await gw.handlePull({
+		const result = await gw.pullFromAdapter("my-src", {
 			clientId: "c1",
 			sinceHlc: 0n as HLCTimestamp,
 			maxDeltas: 100,
-			source: "my-src",
 		});
 		expect(result.ok).toBe(true);
 	});
@@ -74,11 +73,10 @@ describe("SyncGateway source management", () => {
 			maxBufferAgeMs: 30_000,
 		});
 
-		const result = await gw.handlePull({
+		const result = await gw.pullFromAdapter("missing", {
 			clientId: "c1",
 			sinceHlc: 0n as HLCTimestamp,
 			maxDeltas: 100,
-			source: "missing",
 		});
 		expect(result.ok).toBe(false);
 		if (!result.ok) {

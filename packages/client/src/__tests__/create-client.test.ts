@@ -92,7 +92,7 @@ describe("createClient", () => {
 	it("sets the correct clientId on the coordinator", async () => {
 		client = await createClient(baseConfig({ clientId: "my-client-42" }));
 
-		expect(client.coordinator.clientId).toBe("my-client-42");
+		expect(client.coordinator.engine.clientId).toBe("my-client-42");
 	});
 
 	it("does not start auto-sync when autoSyncMs is 0", async () => {
@@ -168,6 +168,6 @@ describe("createClient", () => {
 		);
 
 		// The coordinator is constructed — we verify it exists and has the correct clientId
-		expect(client.coordinator.clientId).toBe("test-client");
+		expect(client.coordinator.engine.clientId).toBe("test-client");
 	});
 });

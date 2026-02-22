@@ -1,6 +1,11 @@
 export { type AuthClaims, AuthError, verifyToken } from "./auth";
 export { type AuthResult, authenticateRequest, extractBearerToken } from "./auth-middleware";
-export { AdapterBasedLock, type DistributedLock } from "./cluster";
+export {
+	AdapterBasedLock,
+	type DistributedLock,
+	PostgresAdvisoryLock,
+	type PostgresConnection,
+} from "./cluster";
 export { ConnectorManager } from "./connector-manager";
 export { type CorsConfig, corsHeaders, handlePreflight } from "./cors-middleware";
 export {
@@ -50,7 +55,13 @@ export {
 	type RouteHandlerDeps,
 } from "./route-handlers";
 export { matchRoute, type RouteMatch } from "./router";
-export { GatewayServer, type GatewayServerConfig } from "./server";
+export {
+	buildServerComponents,
+	GatewayServer,
+	type GatewayServerConfig,
+	type ServerComponents,
+	startServer,
+} from "./server";
 export {
 	type ConsistencyMode,
 	SharedBuffer,

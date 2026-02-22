@@ -9,10 +9,15 @@ import type { HLCTimestamp } from "./types";
  *
  * The wall clock source is injectable for deterministic testing.
  */
+/** Immutable HLC state snapshot. */
+interface HLCSnapshot {
+	readonly wall: number;
+	readonly counter: number;
+}
+
 export class HLC {
 	private readonly wallClock: () => number;
-	private counter = 0;
-	private lastWall = 0;
+	private state: HLCSnapshot = { wall: 0, counter: 0 };
 
 	/** Maximum tolerated drift between local and remote physical clocks (ms). */
 	static readonly MAX_DRIFT_MS = 5_000;
@@ -38,21 +43,28 @@ export class HLC {
 	 */
 	now(): HLCTimestamp {
 		const physical = this.wallClock();
-		const wall = Math.max(physical, this.lastWall);
+		const prev = this.state;
+		const wall = Math.max(physical, prev.wall);
 
-		if (wall === this.lastWall) {
-			this.counter++;
-			if (this.counter > HLC.MAX_COUNTER) {
+		let nextWall: number;
+		let nextCounter: number;
+
+		if (wall === prev.wall) {
+			nextCounter = prev.counter + 1;
+			if (nextCounter > HLC.MAX_COUNTER) {
 				// Counter overflow: advance wall by 1 ms and reset counter
-				this.lastWall = wall + 1;
-				this.counter = 0;
+				nextWall = wall + 1;
+				nextCounter = 0;
+			} else {
+				nextWall = wall;
 			}
 		} else {
-			this.lastWall = wall;
-			this.counter = 0;
+			nextWall = wall;
+			nextCounter = 0;
 		}
 
-		return HLC.encode(this.lastWall, this.counter);
+		this.state = { wall: nextWall, counter: nextCounter };
+		return HLC.encode(nextWall, nextCounter);
 	}
 
 	/**
@@ -68,7 +80,8 @@ export class HLC {
 	recv(remote: HLCTimestamp): Result<HLCTimestamp, ClockDriftError> {
 		const { wall: remoteWall, counter: remoteCounter } = HLC.decode(remote);
 		const physical = this.wallClock();
-		const localWall = Math.max(physical, this.lastWall);
+		const prev = this.state;
+		const localWall = Math.max(physical, prev.wall);
 
 		// Check drift: compare remote wall against physical clock
 		if (remoteWall - physical > HLC.MAX_DRIFT_MS) {
@@ -79,24 +92,28 @@ export class HLC {
 			);
 		}
 
+		let nextWall: number;
+		let nextCounter: number;
+
 		if (remoteWall > localWall) {
-			this.lastWall = remoteWall;
-			this.counter = remoteCounter + 1;
+			nextWall = remoteWall;
+			nextCounter = remoteCounter + 1;
 		} else if (remoteWall === localWall) {
-			this.lastWall = localWall;
-			this.counter = Math.max(this.counter, remoteCounter) + 1;
+			nextWall = localWall;
+			nextCounter = Math.max(prev.counter, remoteCounter) + 1;
 		} else {
-			this.lastWall = localWall;
-			this.counter++;
+			nextWall = localWall;
+			nextCounter = prev.counter + 1;
 		}
 
-		if (this.counter > HLC.MAX_COUNTER) {
+		if (nextCounter > HLC.MAX_COUNTER) {
 			// Counter overflow: advance wall by 1 ms and reset counter
-			this.lastWall = this.lastWall + 1;
-			this.counter = 0;
+			nextWall = nextWall + 1;
+			nextCounter = 0;
 		}
 
-		return Ok(HLC.encode(this.lastWall, this.counter));
+		this.state = { wall: nextWall, counter: nextCounter };
+		return Ok(HLC.encode(nextWall, nextCounter));
 	}
 
 	/**

@@ -117,7 +117,7 @@ describe.skipIf(!hasCredentials)("Salesforce E2E", () => {
 		await poller.poll();
 
 		// Pull deltas from gateway to verify they arrived
-		const pullResult = gateway.handlePull({
+		const pullResult = gateway.pullFromBuffer({
 			clientId: "e2e-test-client",
 			sinceHlc: 0n as never,
 			maxDeltas: 10_000,
@@ -192,7 +192,7 @@ describe.skipIf(!hasCredentials)("Salesforce E2E — Performance", () => {
 		const heapAfter = process.memoryUsage().heapUsed;
 		const heapDeltaBytes = heapAfter - heapBefore;
 
-		const pullResult = gateway.handlePull({
+		const pullResult = gateway.pullFromBuffer({
 			clientId: "perf-client",
 			sinceHlc: 0n as never,
 			maxDeltas: 10_000,

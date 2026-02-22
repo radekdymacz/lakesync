@@ -199,11 +199,11 @@ describe("HttpTransport source query param", () => {
 	});
 });
 
-describe("LocalTransport source passthrough", () => {
-	it("passes source field through to gateway handlePull", async () => {
+describe("LocalTransport pullFromBuffer passthrough", () => {
+	it("passes pull message through to gateway pullFromBuffer", async () => {
 		const gateway: LocalGateway = {
 			handlePush: vi.fn().mockReturnValue(Ok({ serverHlc: HLC.encode(2_000_000, 0), accepted: 0 })),
-			handlePull: vi
+			pullFromBuffer: vi
 				.fn()
 				.mockReturnValue(Ok({ deltas: [], serverHlc: HLC.encode(2_000_000, 0), hasMore: false })),
 		};
@@ -214,21 +214,18 @@ describe("LocalTransport source passthrough", () => {
 			clientId: "client-1",
 			sinceHlc: HLC.encode(1_000_000, 0),
 			maxDeltas: 100,
-			source: "postgres",
 		};
 
 		await transport.pull(pullMsg);
 
-		expect(gateway.handlePull).toHaveBeenCalledWith(pullMsg);
-		const arg = (gateway.handlePull as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as SyncPull;
-		expect(arg.source).toBe("postgres");
+		expect(gateway.pullFromBuffer).toHaveBeenCalledWith(pullMsg);
 	});
 
-	it("handlePull can return LakeSyncError for adapter failures", async () => {
+	it("pullFromBuffer can return LakeSyncError", async () => {
 		const adapterErr = new LakeSyncErrorClass("Connection refused", "ADAPTER_ERROR");
 		const gateway: LocalGateway = {
 			handlePush: vi.fn().mockReturnValue(Ok({ serverHlc: HLC.encode(2_000_000, 0), accepted: 0 })),
-			handlePull: vi.fn().mockReturnValue(Err(adapterErr)),
+			pullFromBuffer: vi.fn().mockReturnValue(Err(adapterErr)),
 		};
 
 		const transport = new LocalTransport(gateway);
@@ -237,7 +234,6 @@ describe("LocalTransport source passthrough", () => {
 			clientId: "client-1",
 			sinceHlc: HLC.encode(1_000_000, 0),
 			maxDeltas: 100,
-			source: "postgres",
 		});
 
 		expect(result.ok).toBe(false);

@@ -89,17 +89,15 @@ export function LakeSyncProvider(props: LakeSyncProviderProps) {
 	}, []);
 
 	useEffect(() => {
-		const handleChange = (_count: number, tables?: string[]) => {
-			if (tables && tables.length > 0) {
-				invalidateTables(tables);
-			} else {
-				invalidate();
-			}
-		};
-		coordinator.on("onChange", handleChange);
-		return () => {
-			coordinator.off("onChange", handleChange);
-		};
+		return coordinator.subscribe({
+			onChange: (_count: number, tables?: string[]) => {
+				if (tables && tables.length > 0) {
+					invalidateTables(tables);
+				} else {
+					invalidate();
+				}
+			},
+		});
 	}, [coordinator, invalidate, invalidateTables]);
 
 	const stableValue = useMemo<LakeSyncStableContextValue>(

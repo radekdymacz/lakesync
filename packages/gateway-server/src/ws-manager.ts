@@ -281,15 +281,8 @@ export class WebSocketManager {
 			}
 
 			const context = await this.buildSyncRulesContext(claims);
-			const pullResult = this.gateway.handlePull(
-				decoded.value,
-				context,
-			) as import("@lakesync/core").Result<
-				import("@lakesync/core").SyncResponse,
-				{ message: string }
-			>;
+			const pullResult = this.gateway.pullFromBuffer(decoded.value, context);
 			if (!pullResult.ok) {
-				ws.close(1008, pullResult.error.message);
 				return;
 			}
 

@@ -7,7 +7,7 @@ export type {
 } from "@lakesync/core";
 export { type IngestTarget, isIngestTarget } from "@lakesync/core";
 export { type ActionCacheConfig, ActionDispatcher } from "./action-dispatcher";
-export { DeltaBuffer } from "./buffer";
+export { buildSnapshot, DeltaBuffer } from "./buffer";
 export { type ConfigStore, MemoryConfigStore } from "./config-store";
 export {
 	DEFAULT_MAX_BUFFER_AGE_MS,
@@ -26,7 +26,11 @@ export {
 	flushEntries,
 	hlcRange,
 } from "./flush";
-export { FlushCoordinator, type FlushCoordinatorDeps } from "./flush-coordinator";
+export {
+	FlushCoordinator,
+	type FlushCoordinatorDeps,
+	type FlushResult,
+} from "./flush-coordinator";
 export {
 	buildFlushQueue,
 	type FlushContext,
@@ -90,4 +94,4 @@ export {
 	validatePushBody,
 	validateSchemaBody,
 } from "./validation";
-export { type DeltaValidator, ValidationPipeline } from "./validation-pipeline";
+export { composePipeline, type DeltaValidator } from "./validation-pipeline";

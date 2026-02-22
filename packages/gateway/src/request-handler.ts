@@ -107,11 +107,8 @@ export async function handlePullRequest(
 	const context = buildSyncRulesContext(syncRules, claims ?? {});
 
 	const result = msg.source
-		? await gateway.handlePull(
-				msg as import("@lakesync/core").SyncPull & { source: string },
-				context,
-			)
-		: gateway.handlePull(msg, context);
+		? await gateway.pullFromAdapter(msg.source, msg, context)
+		: gateway.pullFromBuffer(msg, context);
 
 	if (!result.ok) {
 		const err = result.error;

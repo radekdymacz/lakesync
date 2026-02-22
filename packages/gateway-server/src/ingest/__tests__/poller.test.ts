@@ -29,7 +29,7 @@ function createGateway(): SyncGateway {
 
 /** Pull all deltas from the gateway buffer. */
 function pullAll(gw: SyncGateway): RowDelta[] {
-	const result = gw.handlePull(
+	const result = gw.pullFromBuffer(
 		{ clientId: "reader", sinceHlc: 0n as HLCTimestamp, maxDeltas: 10_000 },
 		undefined,
 	);

@@ -29,7 +29,8 @@ vi.mock("@lakesync/gateway", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@lakesync/gateway")>();
 	class MockSyncGateway {
 		handlePush = mockHandlePush;
-		handlePull = mockHandlePull;
+		pullFromBuffer = mockHandlePull;
+		pullFromAdapter = mockHandlePull;
 		flush = mockFlush;
 		shouldFlush = mockShouldFlush;
 		getTablesExceedingBudget = mockGetTablesExceedingBudget;

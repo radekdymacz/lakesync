@@ -54,18 +54,15 @@ export function useAction(): UseActionResult {
 	const waitingForCompletion = useRef(false);
 
 	useEffect(() => {
-		const handleComplete = (_actionId: string, result: ActionResult | ActionErrorResult) => {
-			if (waitingForCompletion.current) {
-				waitingForCompletion.current = false;
-				setLastResult(result);
-				setIsPending(false);
-			}
-		};
-
-		coordinator.on("onActionComplete", handleComplete);
-		return () => {
-			coordinator.off("onActionComplete", handleComplete);
-		};
+		return coordinator.subscribe({
+			onActionComplete: (_actionId: string, result: ActionResult | ActionErrorResult) => {
+				if (waitingForCompletion.current) {
+					waitingForCompletion.current = false;
+					setLastResult(result);
+					setIsPending(false);
+				}
+			},
+		});
 	}, [coordinator]);
 
 	const execute = useCallback(

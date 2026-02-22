@@ -7,6 +7,25 @@ import type { SyncContext } from "./strategy";
 import { PullFirstStrategy, type SyncStrategy } from "./strategy";
 import type { TransportWithCapabilities } from "./transport";
 
+/** Immutable engine state snapshot. */
+interface EngineSnapshot {
+	readonly lastSyncedHlc: HLCTimestamp;
+	readonly lastSyncTime: Date | null;
+	readonly syncing: boolean;
+}
+
+/** Result of a push operation. */
+export interface PushResult {
+	/** Number of entries that were dead-lettered. */
+	deadLettered: number;
+}
+
+/** Result of a pull operation. */
+export interface PullResult {
+	/** Number of remote deltas applied locally. */
+	remoteDeltasApplied: number;
+}
+
 /** Controls which operations syncOnce() performs */
 export type SyncMode = "full" | "pushOnly" | "pullOnly";
 
@@ -54,15 +73,11 @@ export class SyncEngine {
 	private readonly syncMode: SyncMode;
 	private readonly strategy: SyncStrategy;
 
-	private _lastSyncedHlc = HLC.encode(0, 0);
-	private _lastSyncTime: Date | null = null;
-	private _syncing = false;
-
-	/** Callback fired when remote deltas are applied. */
-	onRemoteDeltasApplied: ((count: number) => void) | null = null;
-
-	/** Callback fired when a dead-letter event occurs. */
-	onDeadLetter: ((count: number) => void) | null = null;
+	private snapshot: EngineSnapshot = {
+		lastSyncedHlc: HLC.encode(0, 0),
+		lastSyncTime: null,
+		syncing: false,
+	};
 
 	constructor(config: SyncEngineConfig) {
 		this.db = config.db;
@@ -82,37 +97,36 @@ export class SyncEngine {
 
 	/** HLC timestamp of the last successfully synced delta. */
 	get lastSyncedHlc(): HLCTimestamp {
-		return this._lastSyncedHlc;
+		return this.snapshot.lastSyncedHlc;
 	}
 
 	/** Last successful sync time, or null if never synced. */
 	get lastSyncTime(): Date | null {
-		return this._lastSyncTime;
+		return this.snapshot.lastSyncTime;
 	}
 
 	/** Whether a sync cycle is currently in progress. */
 	get syncing(): boolean {
-		return this._syncing;
+		return this.snapshot.syncing;
 	}
 
 	/** Push pending deltas to the gateway via the transport. */
-	async push(): Promise<void> {
+	async push(): Promise<PushResult> {
 		const peekResult = await this.queue.peek(100);
-		if (!peekResult.ok || peekResult.value.length === 0) return;
+		if (!peekResult.ok || peekResult.value.length === 0) return { deadLettered: 0 };
 
 		// Dead-letter entries that exceeded max retries
-		const deadLettered = peekResult.value.filter((e) => e.retryCount >= this.maxRetries);
+		const deadLetteredEntries = peekResult.value.filter((e) => e.retryCount >= this.maxRetries);
 		const entries = peekResult.value.filter((e) => e.retryCount < this.maxRetries);
 
-		if (deadLettered.length > 0) {
+		if (deadLetteredEntries.length > 0) {
 			console.warn(
-				`[SyncEngine] Dead-lettering ${deadLettered.length} entries after ${this.maxRetries} retries`,
+				`[SyncEngine] Dead-lettering ${deadLetteredEntries.length} entries after ${this.maxRetries} retries`,
 			);
-			await this.queue.ack(deadLettered.map((e) => e.id));
-			this.onDeadLetter?.(deadLettered.length);
+			await this.queue.ack(deadLetteredEntries.map((e) => e.id));
 		}
 
-		if (entries.length === 0) return;
+		if (entries.length === 0) return { deadLettered: deadLetteredEntries.length };
 
 		const ids = entries.map((e) => e.id);
 		await this.queue.markSending(ids);
@@ -125,11 +139,16 @@ export class SyncEngine {
 
 		if (pushResult.ok) {
 			await this.queue.ack(ids);
-			this._lastSyncedHlc = pushResult.value.serverHlc;
-			this._lastSyncTime = new Date();
+			this.snapshot = {
+				...this.snapshot,
+				lastSyncedHlc: pushResult.value.serverHlc,
+				lastSyncTime: new Date(),
+			};
 		} else {
 			await this.queue.nack(ids);
 		}
+
+		return { deadLettered: deadLetteredEntries.length };
 	}
 
 	/**
@@ -138,33 +157,35 @@ export class SyncEngine {
 	 * Convenience wrapper around {@link pull} that passes the
 	 * `source` field through to the gateway.
 	 */
-	async pullFrom(source: string): Promise<number> {
+	async pullFrom(source: string): Promise<PullResult> {
 		return this.pull(source);
 	}
 
 	/** Pull remote deltas from the gateway and apply them. */
-	async pull(source?: string): Promise<number> {
+	async pull(source?: string): Promise<PullResult> {
 		const pullResult = await this.transport.pull({
 			clientId: this._clientId,
-			sinceHlc: this._lastSyncedHlc,
+			sinceHlc: this.snapshot.lastSyncedHlc,
 			maxDeltas: 1000,
 			source,
 		});
 
-		if (!pullResult.ok || pullResult.value.deltas.length === 0) return 0;
+		if (!pullResult.ok || pullResult.value.deltas.length === 0) {
+			return { remoteDeltasApplied: 0 };
+		}
 
 		const { deltas, serverHlc } = pullResult.value;
 		const applyResult = await applyRemoteDeltas(this.db, deltas, this.resolver, this.queue);
 
 		if (applyResult.ok) {
-			this._lastSyncedHlc = serverHlc;
-			this._lastSyncTime = new Date();
-			if (applyResult.value > 0) {
-				this.onRemoteDeltasApplied?.(applyResult.value);
-			}
-			return applyResult.value;
+			this.snapshot = {
+				...this.snapshot,
+				lastSyncedHlc: serverHlc,
+				lastSyncTime: new Date(),
+			};
+			return { remoteDeltasApplied: applyResult.value };
 		}
-		return 0;
+		return { remoteDeltasApplied: 0 };
 	}
 
 	/**
@@ -174,20 +195,22 @@ export class SyncEngine {
 	 * logic as a regular pull. Advances `lastSyncedHlc` and fires
 	 * `onRemoteDeltasApplied`.
 	 */
-	async handleBroadcast(deltas: RowDelta[], serverHlc: HLCTimestamp): Promise<void> {
-		if (deltas.length === 0) return;
+	async handleBroadcast(deltas: RowDelta[], serverHlc: HLCTimestamp): Promise<PullResult> {
+		if (deltas.length === 0) return { remoteDeltasApplied: 0 };
 
 		const applyResult = await applyRemoteDeltas(this.db, deltas, this.resolver, this.queue);
 
 		if (applyResult.ok) {
-			if (HLC.compare(serverHlc, this._lastSyncedHlc) > 0) {
-				this._lastSyncedHlc = serverHlc;
-			}
-			this._lastSyncTime = new Date();
-			if (applyResult.value > 0) {
-				this.onRemoteDeltasApplied?.(applyResult.value);
-			}
+			const prev = this.snapshot;
+			this.snapshot = {
+				...prev,
+				lastSyncedHlc:
+					HLC.compare(serverHlc, prev.lastSyncedHlc) > 0 ? serverHlc : prev.lastSyncedHlc,
+				lastSyncTime: new Date(),
+			};
+			return { remoteDeltasApplied: applyResult.value };
 		}
+		return { remoteDeltasApplied: 0 };
 	}
 
 	/**
@@ -205,8 +228,11 @@ export class SyncEngine {
 		if (deltas.length > 0) {
 			await applyRemoteDeltas(this.db, deltas, this.resolver, this.queue);
 		}
-		this._lastSyncedHlc = snapshotHlc;
-		this._lastSyncTime = new Date();
+		this.snapshot = {
+			...this.snapshot,
+			lastSyncedHlc: snapshotHlc,
+			lastSyncTime: new Date(),
+		};
 	}
 
 	/** Get the queue depth. */
@@ -216,13 +242,25 @@ export class SyncEngine {
 	}
 
 	/** Build a {@link SyncContext} exposing sync operations for the current cycle. */
-	createSyncContext(processActions: () => Promise<void>): SyncContext {
+	createSyncContext(
+		processActions: () => Promise<void>,
+		onPull?: (result: PullResult) => void,
+		onPush?: (result: PushResult) => void,
+	): SyncContext {
 		return {
-			isFirstSync: this._lastSyncedHlc === HLC.encode(0, 0),
+			isFirstSync: this.snapshot.lastSyncedHlc === HLC.encode(0, 0),
 			syncMode: this.syncMode,
 			initialSync: () => this.initialSync(),
-			pull: () => this.pull(),
-			push: () => this.push(),
+			pull: async () => {
+				const result = await this.pull();
+				onPull?.(result);
+				return result;
+			},
+			push: async () => {
+				const result = await this.push();
+				onPush?.(result);
+				return result;
+			},
 			processActions,
 		};
 	}
@@ -236,16 +274,22 @@ export class SyncEngine {
 	 * ordering structural rather than temporal.
 	 *
 	 * @param processActions - Callback to process the action queue.
+	 * @param onPull - Optional callback invoked after each pull with the result.
+	 * @param onPush - Optional callback invoked after each push with the result.
 	 * @returns true if the cycle executed, false if skipped (already syncing).
 	 */
-	async syncOnce(processActions: () => Promise<void>): Promise<boolean> {
-		if (this._syncing) return false;
-		this._syncing = true;
+	async syncOnce(
+		processActions: () => Promise<void>,
+		onPull?: (result: PullResult) => void,
+		onPush?: (result: PushResult) => void,
+	): Promise<boolean> {
+		if (this.snapshot.syncing) return false;
+		this.snapshot = { ...this.snapshot, syncing: true };
 		try {
-			await this.strategy.execute(this.createSyncContext(processActions));
+			await this.strategy.execute(this.createSyncContext(processActions, onPull, onPush));
 			return true;
 		} finally {
-			this._syncing = false;
+			this.snapshot = { ...this.snapshot, syncing: false };
 		}
 	}
 }

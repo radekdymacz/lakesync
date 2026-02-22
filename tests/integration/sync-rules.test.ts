@@ -76,7 +76,7 @@ describe("Sync rules — filtered pull", () => {
 		});
 
 		// User A pulls with their claims — should only see their own todo
-		const pullA = gateway.handlePull(
+		const pullA = gateway.pullFromBuffer(
 			{ clientId: "user-a", sinceHlc: HLC.encode(0, 0), maxDeltas: 100 },
 			ctx("user-a"),
 		);
@@ -87,7 +87,7 @@ describe("Sync rules — filtered pull", () => {
 		}
 
 		// User B pulls — should only see their own todo
-		const pullB = gateway.handlePull(
+		const pullB = gateway.pullFromBuffer(
 			{ clientId: "user-b", sinceHlc: HLC.encode(0, 0), maxDeltas: 100 },
 			ctx("user-b"),
 		);
@@ -160,7 +160,7 @@ describe("Sync rules — filtered pull", () => {
 		});
 
 		// User A pulls — should see their todo + public note, but NOT private note
-		const pull = gateway.handlePull(
+		const pull = gateway.pullFromBuffer(
 			{ clientId: "user-a", sinceHlc: HLC.encode(0, 0), maxDeltas: 100 },
 			ctx("user-a"),
 		);
@@ -200,7 +200,7 @@ describe("Sync rules — filtered pull", () => {
 		});
 
 		// Pull without context — all deltas returned
-		const pull = gateway.handlePull({
+		const pull = gateway.pullFromBuffer({
 			clientId: "anyone",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
@@ -239,7 +239,7 @@ describe("Sync rules — filtered pull", () => {
 		}
 
 		// User A requests maxDeltas=3 — should get exactly 3 with hasMore=true
-		const pull = gateway.handlePull(
+		const pull = gateway.pullFromBuffer(
 			{ clientId: "user-a", sinceHlc: HLC.encode(0, 0), maxDeltas: 3 },
 			ctx("user-a"),
 		);
@@ -279,7 +279,7 @@ describe("Sync rules — filtered pull", () => {
 		});
 
 		// User B with different claims cannot see user-a's data
-		const pullB = gateway.handlePull(
+		const pullB = gateway.pullFromBuffer(
 			{ clientId: "user-b", sinceHlc: HLC.encode(0, 0), maxDeltas: 100 },
 			ctx("user-b"),
 		);

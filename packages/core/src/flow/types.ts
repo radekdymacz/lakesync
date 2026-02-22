@@ -213,6 +213,46 @@ export class FlowError extends Error {
 // FlowEngine — lifecycle management interface
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// FlowRuntime — injected wiring for flow execution
+// ---------------------------------------------------------------------------
+
+/**
+ * Handle returned by {@link FlowRuntime.start} representing a running flow.
+ *
+ * The engine calls `stop()` when the flow is stopped or the engine shuts down.
+ */
+export interface FlowHandle {
+	/** Stop the running flow and release resources. */
+	stop(): Promise<void>;
+}
+
+/**
+ * Runtime wiring for flow execution.
+ *
+ * The flow engine is defined in `@lakesync/core` which cannot depend on
+ * `@lakesync/gateway` or `@lakesync/adapter`. Instead, consumers inject
+ * a `FlowRuntime` that knows how to resolve adapter names, create gateways,
+ * and wire source → store → materialise pipelines.
+ *
+ * When no runtime is provided, the engine manages state transitions only
+ * (useful for testing and configuration validation).
+ */
+export interface FlowRuntime {
+	/**
+	 * Start a flow based on its configuration.
+	 *
+	 * The runtime is responsible for:
+	 * - Resolving named adapters from the config
+	 * - Creating gateways for the store path
+	 * - Wiring materialisation targets
+	 * - Setting up polling/CDC/push listeners
+	 *
+	 * Returns a handle that can stop the flow.
+	 */
+	start(config: FlowConfig): Promise<FlowHandle>;
+}
+
 /** Dependencies injected into the flow engine. */
 export interface FlowEngineDeps {
 	/**
@@ -220,6 +260,15 @@ export interface FlowEngineDeps {
 	 * Useful for logging and monitoring.
 	 */
 	onFlowStateChange?: (name: string, from: FlowState, to: FlowState) => void;
+
+	/**
+	 * Optional runtime for wiring flow execution.
+	 *
+	 * When provided, `startFlow()` delegates to `runtime.start()` to
+	 * create the adapter → gateway → materialise pipeline. When absent,
+	 * the engine only manages state transitions (dry-run mode).
+	 */
+	runtime?: FlowRuntime;
 }
 
 /**

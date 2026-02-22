@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createFlowEngine } from "../flow/engine";
-import type { FlowConfig, FlowState } from "../flow/types";
+import type { FlowConfig, FlowHandle, FlowRuntime, FlowState } from "../flow/types";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -265,6 +265,122 @@ describe("FlowEngine", () => {
 
 			expect(cdcStatus?.state).toBe("stopped");
 			expect(pushStatus?.state).toBe("running");
+		});
+	});
+
+	describe("runtime wiring", () => {
+		function createMockRuntime(): FlowRuntime & {
+			handles: Map<string, FlowHandle>;
+			startCalls: FlowConfig[];
+		} {
+			const handles = new Map<string, FlowHandle>();
+			const startCalls: FlowConfig[] = [];
+			return {
+				handles,
+				startCalls,
+				async start(config: FlowConfig): Promise<FlowHandle> {
+					startCalls.push(config);
+					const handle: FlowHandle = {
+						stop: vi.fn().mockResolvedValue(undefined),
+					};
+					handles.set(config.name, handle);
+					return handle;
+				},
+			};
+		}
+
+		it("calls runtime.start when starting a flow", async () => {
+			const runtime = createMockRuntime();
+			const engine = createFlowEngine({ runtime });
+			engine.addFlow(CDC_FLOW);
+
+			await engine.startFlow("postgres-to-r2");
+
+			expect(runtime.startCalls).toHaveLength(1);
+			expect(runtime.startCalls[0]!.name).toBe("postgres-to-r2");
+		});
+
+		it("calls handle.stop when stopping a flow", async () => {
+			const runtime = createMockRuntime();
+			const engine = createFlowEngine({ runtime });
+			engine.addFlow(CDC_FLOW);
+
+			await engine.startFlow("postgres-to-r2");
+			await engine.stopFlow("postgres-to-r2");
+
+			const handle = runtime.handles.get("postgres-to-r2")!;
+			expect(handle.stop).toHaveBeenCalledOnce();
+		});
+
+		it("transitions to error state when runtime.start throws", async () => {
+			const runtime: FlowRuntime = {
+				async start(): Promise<FlowHandle> {
+					throw new Error("adapter not found: postgres-prod");
+				},
+			};
+			const engine = createFlowEngine({ runtime });
+			engine.addFlow(CDC_FLOW);
+
+			const result = await engine.startFlow("postgres-to-r2");
+
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.error.code).toBe("FLOW_START_FAILED");
+			expect(result.error.message).toContain("adapter not found");
+
+			const status = engine.getStatus().find((s) => s.name === "postgres-to-r2");
+			expect(status?.state).toBe("error");
+			expect(status?.lastError).toContain("adapter not found");
+		});
+
+		it("does not call runtime.start for already-running flow", async () => {
+			const runtime = createMockRuntime();
+			const engine = createFlowEngine({ runtime });
+			engine.addFlow(CDC_FLOW);
+
+			await engine.startFlow("postgres-to-r2");
+			await engine.startFlow("postgres-to-r2");
+
+			expect(runtime.startCalls).toHaveLength(1);
+		});
+
+		it("calls handle.stop for all flows on stopAll", async () => {
+			const runtime = createMockRuntime();
+			const engine = createFlowEngine({ runtime });
+			engine.addFlow(CDC_FLOW);
+			engine.addFlow(PUSH_FLOW);
+
+			await engine.startAll();
+			await engine.stopAll();
+
+			for (const handle of runtime.handles.values()) {
+				expect(handle.stop).toHaveBeenCalledOnce();
+			}
+		});
+
+		it("passes correct config to runtime.start", async () => {
+			const runtime = createMockRuntime();
+			const engine = createFlowEngine({ runtime });
+			engine.addFlow(PUSH_FLOW);
+
+			await engine.startFlow("offline-app");
+
+			const config = runtime.startCalls[0]!;
+			expect(config.source.type).toBe("push");
+			expect(config.store?.type).toBe("database");
+			expect(config.materialise).toHaveLength(1);
+			expect(config.direction).toBe("bidirectional");
+		});
+
+		it("works without runtime (dry-run mode)", async () => {
+			const engine = createFlowEngine();
+			engine.addFlow(CDC_FLOW);
+
+			const result = await engine.startFlow("postgres-to-r2");
+			expect(result.ok).toBe(true);
+
+			const status = engine.getStatus().find((s) => s.name === "postgres-to-r2");
+			expect(status?.state).toBe("running");
 		});
 	});
 });

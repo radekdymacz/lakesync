@@ -6,9 +6,8 @@ export {
 	type SyncCoordinatorConfig,
 	type SyncEvents,
 	type SyncMode,
-	type SyncState,
 } from "./coordinator";
-export { SyncEngine, type SyncEngineConfig } from "./engine";
+export { type PullResult, type PushResult, SyncEngine, type SyncEngineConfig } from "./engine";
 export { OnlineManager } from "./online-manager";
 export { SchemaSynchroniser } from "./schema-sync";
 export {

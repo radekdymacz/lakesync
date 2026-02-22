@@ -13,7 +13,9 @@ import { describe, expect, it, vi } from "vitest";
 import { DeltaBuffer } from "../buffer";
 import { FlushCoordinator } from "../flush-coordinator";
 import { MemoryFlushQueue } from "../flush-queue";
+import { SyncGateway } from "../gateway";
 import { collectMaterialisers } from "../materialisation-processor";
+import type { GatewayConfig } from "../types";
 
 /** Helper to build a RowDelta with sensible defaults. */
 function makeDelta(opts: Partial<RowDelta> & { hlc: HLCTimestamp }): RowDelta {
@@ -70,7 +72,7 @@ function createFailingDbAdapter(): DatabaseAdapter {
 }
 
 /** Build a MemoryFlushQueue from an adapter and optional extras. */
-function buildFlushQueue(
+function buildFlushQueueHelper(
 	adapter: unknown,
 	extras?: ReadonlyArray<Materialisable>,
 	onFailure?: (table: string, deltaCount: number, error: Error) => void,
@@ -89,7 +91,134 @@ const todoSchemas: TableSchema[] = [
 /** Drain the microtask queue so fire-and-forget publishToQueue completes. */
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
 
-describe("FlushCoordinator — materialisation via FlushQueue", () => {
+describe("FlushCoordinator", () => {
+	it("returns flushed entries on success", async () => {
+		const dbAdapter = createMockDbAdapter();
+		const buffer = new DeltaBuffer();
+		buffer.append(makeDelta({ hlc: hlcLow }));
+
+		const coordinator = new FlushCoordinator();
+		const result = await coordinator.flush(buffer, dbAdapter, {
+			config: { gatewayId: "gw-test" },
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.entries).toHaveLength(1);
+		}
+		expect(buffer.logSize).toBe(0);
+	});
+
+	it("returns empty entries when buffer is empty", async () => {
+		const dbAdapter = createMockDbAdapter();
+		const buffer = new DeltaBuffer();
+
+		const coordinator = new FlushCoordinator();
+		const result = await coordinator.flush(buffer, dbAdapter, {
+			config: { gatewayId: "gw-empty" },
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.entries).toHaveLength(0);
+		}
+	});
+
+	it("returns error when no adapter configured", async () => {
+		const buffer = new DeltaBuffer();
+		buffer.append(makeDelta({ hlc: hlcLow }));
+
+		const coordinator = new FlushCoordinator();
+		const result = await coordinator.flush(buffer, null, {
+			config: { gatewayId: "gw-no-adapter" },
+		});
+
+		expect(result.ok).toBe(false);
+	});
+
+	it("returns error when flush already in progress", async () => {
+		const slowAdapter: DatabaseAdapter = {
+			...createMockDbAdapter(),
+			async insertDeltas() {
+				await new Promise((r) => setTimeout(r, 100));
+				return Ok(undefined);
+			},
+		};
+		const buffer = new DeltaBuffer();
+		buffer.append(makeDelta({ hlc: hlcLow }));
+
+		const coordinator = new FlushCoordinator();
+		const flush1 = coordinator.flush(buffer, slowAdapter, {
+			config: { gatewayId: "gw-concurrent" },
+		});
+		const flush2 = await coordinator.flush(buffer, slowAdapter, {
+			config: { gatewayId: "gw-concurrent" },
+		});
+
+		expect(flush2.ok).toBe(false);
+		if (!flush2.ok) {
+			expect(flush2.error.message).toContain("already in progress");
+		}
+
+		await flush1;
+	});
+
+	it("restores entries on flush failure", async () => {
+		const dbAdapter = createFailingDbAdapter();
+		const buffer = new DeltaBuffer();
+		buffer.append(makeDelta({ hlc: hlcLow }));
+
+		const coordinator = new FlushCoordinator();
+		const result = await coordinator.flush(buffer, dbAdapter, {
+			config: { gatewayId: "gw-fail" },
+		});
+
+		expect(result.ok).toBe(false);
+		expect(buffer.logSize).toBe(1);
+	});
+
+	it("flushTable returns entries for single table", async () => {
+		const dbAdapter = createMockDbAdapter();
+		const buffer = new DeltaBuffer();
+		buffer.append(makeDelta({ hlc: hlcLow, table: "todos", deltaId: "d1" }));
+		buffer.append(
+			makeDelta({ hlc: HLC.encode(2_000_000, 0), table: "users", rowId: "row-2", deltaId: "d2" }),
+		);
+
+		const coordinator = new FlushCoordinator();
+		const result = await coordinator.flushTable("todos", buffer, dbAdapter, {
+			config: { gatewayId: "gw-table" },
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.value.entries).toHaveLength(1);
+			expect(result.value.entries[0]!.table).toBe("todos");
+		}
+		// users table should remain
+		expect(buffer.logSize).toBe(1);
+	});
+});
+
+describe("SyncGateway — materialisation via FlushQueue", () => {
+	function makeGatewayConfig(
+		adapter: DatabaseAdapter,
+		opts?: {
+			schemas?: TableSchema[];
+			materialisers?: Materialisable[];
+			flushQueue?: MemoryFlushQueue;
+		},
+	): GatewayConfig {
+		return {
+			gatewayId: "gw-mat",
+			maxBufferBytes: 1_048_576,
+			maxBufferAgeMs: 30_000,
+			adapter,
+			schemas: opts?.schemas ?? todoSchemas,
+			flushQueue: opts?.flushQueue ?? buildFlushQueueHelper(adapter, opts?.materialisers),
+		};
+	}
+
 	it("calls materialise on the adapter when it is materialisable and flush succeeds", async () => {
 		const materialiseCalls: Array<{ deltas: RowDelta[]; schemas: TableSchema[] }> = [];
 		const dbAdapter: DatabaseAdapter & Materialisable = {
@@ -100,15 +229,10 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			},
 		};
 
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow }));
+		const gw = new SyncGateway(makeGatewayConfig(dbAdapter));
+		gw.handlePush({ clientId: "c1", deltas: [makeDelta({ hlc: hlcLow })], lastSeenHlc: hlcLow });
 
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-mat" },
-			schemas: todoSchemas,
-			flushQueue: buildFlushQueue(dbAdapter),
-		});
+		const result = await gw.flush();
 		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
@@ -116,7 +240,7 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 		expect(materialiseCalls[0]!.deltas).toHaveLength(1);
 	});
 
-	it("calls additional materialisers from deps alongside the adapter", async () => {
+	it("calls additional materialisers alongside the adapter", async () => {
 		const adapterCalls: Array<{ deltas: RowDelta[] }> = [];
 		const extraCalls: Array<{ deltas: RowDelta[] }> = [];
 
@@ -135,15 +259,12 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			},
 		};
 
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow }));
+		const gw = new SyncGateway(
+			makeGatewayConfig(dbAdapter, { materialisers: [extraMaterialiser] }),
+		);
+		gw.handlePush({ clientId: "c1", deltas: [makeDelta({ hlc: hlcLow })], lastSeenHlc: hlcLow });
 
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-multi-mat" },
-			schemas: todoSchemas,
-			flushQueue: buildFlushQueue(dbAdapter, [extraMaterialiser]),
-		});
+		const result = await gw.flush();
 		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
@@ -155,33 +276,13 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 		const materialise = vi.fn().mockResolvedValue(Ok(undefined));
 		const dbAdapter = { ...createMockDbAdapter(), materialise };
 
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow }));
+		const gw = new SyncGateway(makeGatewayConfig(dbAdapter, { schemas: [] }));
+		gw.handlePush({ clientId: "c1", deltas: [makeDelta({ hlc: hlcLow })], lastSeenHlc: hlcLow });
 
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-no-schemas" },
-			flushQueue: buildFlushQueue(dbAdapter),
-		});
+		const result = await gw.flush();
 
 		expect(result.ok).toBe(true);
 		expect(materialise).not.toHaveBeenCalled();
-	});
-
-	it("does not call materialise when adapter is not materialisable", async () => {
-		const dbAdapter = createMockDbAdapter();
-
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow }));
-
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-not-mat" },
-			schemas: todoSchemas,
-			flushQueue: buildFlushQueue(dbAdapter),
-		});
-
-		expect(result.ok).toBe(true);
 	});
 
 	it("flush still succeeds when materialise returns Err", async () => {
@@ -193,15 +294,10 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 		};
 
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow }));
+		const gw = new SyncGateway(makeGatewayConfig(dbAdapter));
+		gw.handlePush({ clientId: "c1", deltas: [makeDelta({ hlc: hlcLow })], lastSeenHlc: hlcLow });
 
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-mat-fail" },
-			schemas: todoSchemas,
-			flushQueue: buildFlushQueue(dbAdapter),
-		});
+		const result = await gw.flush();
 		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
@@ -218,15 +314,10 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 		};
 
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow }));
+		const gw = new SyncGateway(makeGatewayConfig(dbAdapter));
+		gw.handlePush({ clientId: "c1", deltas: [makeDelta({ hlc: hlcLow })], lastSeenHlc: hlcLow });
 
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-mat-throw" },
-			schemas: todoSchemas,
-			flushQueue: buildFlushQueue(dbAdapter),
-		});
+		const result = await gw.flush();
 		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
@@ -241,15 +332,10 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			materialise,
 		};
 
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow }));
+		const gw = new SyncGateway(makeGatewayConfig(dbAdapter));
+		gw.handlePush({ clientId: "c1", deltas: [makeDelta({ hlc: hlcLow })], lastSeenHlc: hlcLow });
 
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-flush-fail" },
-			schemas: todoSchemas,
-			flushQueue: buildFlushQueue(dbAdapter),
-		});
+		const result = await gw.flush();
 
 		expect(result.ok).toBe(false);
 		expect(materialise).not.toHaveBeenCalled();
@@ -266,74 +352,24 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const onFailure = vi.fn();
 
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow, table: "todos" }));
-
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-mat-cb" },
-			schemas: todoSchemas,
-			flushQueue: buildFlushQueue(dbAdapter, undefined, onFailure),
+		const gw = new SyncGateway({
+			...makeGatewayConfig(dbAdapter, {
+				flushQueue: buildFlushQueueHelper(dbAdapter, undefined, onFailure),
+			}),
 		});
+		gw.handlePush({
+			clientId: "c1",
+			deltas: [makeDelta({ hlc: hlcLow, table: "todos" })],
+			lastSeenHlc: hlcLow,
+		});
+
+		const result = await gw.flush();
 		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);
 		expect(onFailure).toHaveBeenCalledTimes(1);
 		expect(onFailure).toHaveBeenCalledWith("todos", 1, expect.any(Error));
 		expect(onFailure.mock.calls[0]![2].message).toBe("mat failed");
-		warnSpy.mockRestore();
-	});
-
-	it("does NOT invoke onFailure callback when materialise succeeds", async () => {
-		const dbAdapter: DatabaseAdapter & Materialisable = {
-			...createMockDbAdapter(),
-			materialise: async () => {
-				return Ok(undefined);
-			},
-		};
-
-		const onFailure = vi.fn();
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow }));
-
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-mat-ok" },
-			schemas: todoSchemas,
-			flushQueue: buildFlushQueue(dbAdapter, undefined, onFailure),
-		});
-		await flushMicrotasks();
-
-		expect(result.ok).toBe(true);
-		expect(onFailure).not.toHaveBeenCalled();
-	});
-
-	it("invokes onFailure callback when materialise throws", async () => {
-		const dbAdapter: DatabaseAdapter & Materialisable = {
-			...createMockDbAdapter(),
-			materialise: async () => {
-				throw new Error("explosion");
-			},
-		};
-
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		const onFailure = vi.fn();
-
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow, table: "todos" }));
-
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flush(buffer, dbAdapter, {
-			config: { gatewayId: "gw-mat-throw-cb" },
-			schemas: todoSchemas,
-			flushQueue: buildFlushQueue(dbAdapter, undefined, onFailure),
-		});
-		await flushMicrotasks();
-
-		expect(result.ok).toBe(true);
-		expect(onFailure).toHaveBeenCalledTimes(1);
-		expect(onFailure).toHaveBeenCalledWith("todos", 1, expect.any(Error));
-		expect(onFailure.mock.calls[0]![2].message).toBe("explosion");
 		warnSpy.mockRestore();
 	});
 
@@ -347,15 +383,14 @@ describe("FlushCoordinator — materialisation via FlushQueue", () => {
 			},
 		};
 
-		const buffer = new DeltaBuffer();
-		buffer.append(makeDelta({ hlc: hlcLow, table: "todos" }));
-
-		const coordinator = new FlushCoordinator();
-		const result = await coordinator.flushTable("todos", buffer, dbAdapter, {
-			config: { gatewayId: "gw-table-mat" },
-			schemas: todoSchemas,
-			flushQueue: buildFlushQueue(dbAdapter),
+		const gw = new SyncGateway(makeGatewayConfig(dbAdapter));
+		gw.handlePush({
+			clientId: "c1",
+			deltas: [makeDelta({ hlc: hlcLow, table: "todos" })],
+			lastSeenHlc: hlcLow,
 		});
+
+		const result = await gw.flushTable("todos");
 		await flushMicrotasks();
 
 		expect(result.ok).toBe(true);

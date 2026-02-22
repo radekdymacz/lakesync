@@ -35,7 +35,7 @@ describe("Conflict resolution", () => {
 		});
 
 		// Pull from the start — log should contain both events
-		const pullResult = gateway.handlePull({
+		const pullResult = gateway.pullFromBuffer({
 			clientId: "client-c",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
@@ -86,7 +86,7 @@ describe("Conflict resolution", () => {
 		expect(gateway.bufferStats.indexSize).toBe(1);
 
 		// Pull and verify both events are present in the log
-		const pullResult = gateway.handlePull({
+		const pullResult = gateway.pullFromBuffer({
 			clientId: "observer",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,

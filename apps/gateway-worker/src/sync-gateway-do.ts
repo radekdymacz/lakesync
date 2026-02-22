@@ -223,7 +223,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 
 		const url = new URL(request.url);
 
-		// Handle DELETE /admin/connectors/:name
+		// Handle DELETE /admin/connectors/:name (parametric route)
 		if (url.pathname.startsWith("/admin/connectors/")) {
 			const name = url.pathname.slice("/admin/connectors/".length);
 			if (name && request.method === "DELETE") {
@@ -231,32 +231,22 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			}
 		}
 
-		switch (url.pathname) {
-			case "/push":
-				return this.handlePush(request);
-			case "/pull":
-				return this.handlePull(url, request);
-			case "/action":
-				return this.handleAction(request);
-			case "/actions":
-				return this.handleDescribeActions();
-			case "/flush":
-				return this.handleFlush();
-			case "/admin/schema":
-				return this.handleSchema(request);
-			case "/admin/sync-rules":
-				return this.handleSyncRules(request);
-			case "/admin/connectors":
-				return this.handleConnectors(request);
-			case "/checkpoint":
-				return this.handleCheckpoint(request);
-			case "/admin/metrics":
-				return this.handleMetrics();
-			case "/internal/broadcast":
-				return this.handleInternalBroadcast(request);
-			default:
-				return errorResponse("Not found", 404);
-		}
+		const routeMap: Record<string, (request: Request, url: URL) => Promise<Response>> = {
+			"/push": (req) => this.handlePush(req),
+			"/pull": (req, u) => this.handlePull(u, req),
+			"/action": (req) => this.handleAction(req),
+			"/actions": () => this.handleDescribeActions(),
+			"/flush": () => this.handleFlush(),
+			"/admin/schema": (req) => this.handleSchema(req),
+			"/admin/sync-rules": (req) => this.handleSyncRules(req),
+			"/admin/connectors": (req) => this.handleConnectors(req),
+			"/checkpoint": (req) => this.handleCheckpoint(req),
+			"/admin/metrics": () => this.handleMetrics(),
+			"/internal/broadcast": (req) => this.handleInternalBroadcast(req),
+		};
+
+		const handler = routeMap[url.pathname];
+		return handler ? handler(request, url) : errorResponse("Not found", 404);
 	}
 
 	// -----------------------------------------------------------------------
@@ -705,7 +695,7 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			const context = buildSyncRulesContext(rules, storedClaims);
 
 			// WebSocket pull: source adapters not supported via proto (HTTP only)
-			const pullResult = gateway.handlePull(decoded.value, context);
+			const pullResult = gateway.pullFromBuffer(decoded.value, context);
 			if (!pullResult.ok) {
 				this.sendProtoError(ws, pullResult.error);
 				return;

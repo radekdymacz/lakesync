@@ -29,7 +29,7 @@ describe("LocalTransport", () => {
 			const expected = Ok({ serverHlc: SERVER_HLC, accepted: 3 });
 			const gateway: LocalGateway = {
 				handlePush: vi.fn().mockReturnValue(expected),
-				handlePull: vi.fn(),
+				pullFromBuffer: vi.fn(),
 			};
 			const transport = new LocalTransport(gateway);
 			const msg = createPushMsg();
@@ -49,7 +49,7 @@ describe("LocalTransport", () => {
 			const expected = Err(error);
 			const gateway: LocalGateway = {
 				handlePush: vi.fn().mockReturnValue(expected),
-				handlePull: vi.fn(),
+				pullFromBuffer: vi.fn(),
 			};
 			const transport = new LocalTransport(gateway);
 
@@ -64,7 +64,7 @@ describe("LocalTransport", () => {
 	});
 
 	describe("pull", () => {
-		it("delegates to gateway.handlePull", async () => {
+		it("delegates to gateway.pullFromBuffer", async () => {
 			const deltaHlc = HLC.encode(1_700_000_000_000, 2);
 			const response: SyncResponse = {
 				deltas: [
@@ -84,15 +84,15 @@ describe("LocalTransport", () => {
 			const expected = Ok(response);
 			const gateway: LocalGateway = {
 				handlePush: vi.fn(),
-				handlePull: vi.fn().mockReturnValue(expected),
+				pullFromBuffer: vi.fn().mockReturnValue(expected),
 			};
 			const transport = new LocalTransport(gateway);
 			const msg = createPullMsg();
 
 			const result = await transport.pull(msg);
 
-			expect(gateway.handlePull).toHaveBeenCalledTimes(1);
-			expect(gateway.handlePull).toHaveBeenCalledWith(msg);
+			expect(gateway.pullFromBuffer).toHaveBeenCalledTimes(1);
+			expect(gateway.pullFromBuffer).toHaveBeenCalledWith(msg);
 			expect(result.ok).toBe(true);
 			if (!result.ok) return;
 			expect(result.value.serverHlc).toBe(SERVER_HLC);
@@ -112,7 +112,7 @@ describe("LocalTransport", () => {
 			const gatewayResult = Ok(response);
 			const gateway: LocalGateway = {
 				handlePush: vi.fn(),
-				handlePull: vi.fn().mockReturnValue(gatewayResult),
+				pullFromBuffer: vi.fn().mockReturnValue(gatewayResult),
 			};
 			const transport = new LocalTransport(gateway);
 

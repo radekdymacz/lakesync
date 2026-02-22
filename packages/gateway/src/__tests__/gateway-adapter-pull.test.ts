@@ -38,7 +38,7 @@ function makeConfig(sourceAdapters?: Record<string, DatabaseAdapter>): GatewayCo
 	};
 }
 
-describe("handlePull with source adapter", () => {
+describe("pullFromAdapter with source adapter", () => {
 	it("pulls deltas from a named source adapter", async () => {
 		const hlc1 = HLC.encode(1_000_000, 0);
 		const hlc2 = HLC.encode(2_000_000, 0);
@@ -50,11 +50,10 @@ describe("handlePull with source adapter", () => {
 		const adapter = mockDatabaseAdapter(adapterDeltas);
 		const gw = new SyncGateway(makeConfig({ postgres: adapter }));
 
-		const result = await gw.handlePull({
+		const result = await gw.pullFromAdapter("postgres", {
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
-			source: "postgres",
 		});
 
 		expect(result.ok).toBe(true);
@@ -112,12 +111,12 @@ describe("handlePull with source adapter", () => {
 			},
 		};
 
-		const result = await gw.handlePull(
+		const result = await gw.pullFromAdapter(
+			"postgres",
 			{
 				clientId: "client-b",
 				sinceHlc: HLC.encode(0, 0),
 				maxDeltas: 100,
-				source: "postgres",
 			},
 			context,
 		);
@@ -132,7 +131,7 @@ describe("handlePull with source adapter", () => {
 		}
 	});
 
-	it("uses buffer path when source is not set (backwards compat)", () => {
+	it("uses buffer path when pullFromBuffer is called", () => {
 		const gw = new SyncGateway(makeConfig());
 
 		gw.handlePush({
@@ -141,14 +140,12 @@ describe("handlePull with source adapter", () => {
 			lastSeenHlc: HLC.encode(0, 0),
 		});
 
-		const result = gw.handlePull({
+		const result = gw.pullFromBuffer({
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
 		});
 
-		// Buffer path returns synchronously
-		expect(result).not.toBeInstanceOf(Promise);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.value.deltas).toHaveLength(1);
@@ -158,11 +155,10 @@ describe("handlePull with source adapter", () => {
 	it("returns AdapterNotFoundError for unknown source name", async () => {
 		const gw = new SyncGateway(makeConfig({ postgres: mockDatabaseAdapter([]) }));
 
-		const result = await gw.handlePull({
+		const result = await gw.pullFromAdapter("unknown-db", {
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
-			source: "unknown-db",
 		});
 
 		expect(result.ok).toBe(false);
@@ -176,11 +172,10 @@ describe("handlePull with source adapter", () => {
 	it("returns AdapterNotFoundError when no sourceAdapters configured", async () => {
 		const gw = new SyncGateway(makeConfig());
 
-		const result = await gw.handlePull({
+		const result = await gw.pullFromAdapter("postgres", {
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
-			source: "postgres",
 		});
 
 		expect(result.ok).toBe(false);
@@ -193,11 +188,10 @@ describe("handlePull with source adapter", () => {
 		const adapter = mockDatabaseAdapter([]);
 		const gw = new SyncGateway(makeConfig({ postgres: adapter }));
 
-		const result = await gw.handlePull({
+		const result = await gw.pullFromAdapter("postgres", {
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
-			source: "postgres",
 		});
 
 		expect(result.ok).toBe(true);
@@ -213,11 +207,10 @@ describe("handlePull with source adapter", () => {
 		});
 		const gw = new SyncGateway(makeConfig({ postgres: failingAdapter }));
 
-		const result = await gw.handlePull({
+		const result = await gw.pullFromAdapter("postgres", {
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
-			source: "postgres",
 		});
 
 		expect(result.ok).toBe(false);
@@ -242,11 +235,10 @@ describe("handlePull with source adapter", () => {
 		const adapter = mockDatabaseAdapter(adapterDeltas);
 		const gw = new SyncGateway(makeConfig({ postgres: adapter }));
 
-		const result = await gw.handlePull({
+		const result = await gw.pullFromAdapter("postgres", {
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 5,
-			source: "postgres",
 		});
 
 		expect(result.ok).toBe(true);
@@ -265,11 +257,10 @@ describe("handlePull with source adapter", () => {
 		const adapter = mockDatabaseAdapter(adapterDeltas);
 		const gw = new SyncGateway(makeConfig({ postgres: adapter }));
 
-		const result = await gw.handlePull({
+		const result = await gw.pullFromAdapter("postgres", {
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 5,
-			source: "postgres",
 		});
 
 		expect(result.ok).toBe(true);
@@ -294,7 +285,7 @@ describe("handlePull with source adapter", () => {
 		});
 
 		// Pull without source — should use buffer
-		const result = gw.handlePull({
+		const result = gw.pullFromBuffer({
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,

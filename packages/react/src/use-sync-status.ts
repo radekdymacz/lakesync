@@ -12,7 +12,7 @@ export interface UseSyncStatusResult {
 /**
  * Observe the sync lifecycle.
  *
- * Reads `coordinator.state` directly for sync status and subscribes to
+ * Reads engine state directly for sync status and subscribes to
  * events only for invalidation (re-reading the state snapshot).
  * Uses the stable context so it does not re-render on data version changes.
  */
@@ -26,58 +26,45 @@ export function useSyncStatus(): UseSyncStatusResult {
 	});
 
 	const refreshStatus = useCallback(async () => {
-		const state = coordinator.state;
+		const { engine } = coordinator;
 		const depth = await coordinator.queueDepth();
 		setStatus((prev) => ({
-			isSyncing: state.syncing,
-			lastSyncTime: state.lastSyncTime,
+			isSyncing: engine.syncing,
+			lastSyncTime: engine.lastSyncTime,
 			queueDepth: depth,
 			error: prev.error,
 		}));
 	}, [coordinator]);
 
 	useEffect(() => {
-		const handleSyncStart = () => {
-			setStatus((prev) => ({ ...prev, isSyncing: true }));
-		};
-
-		const handleSyncComplete = () => {
-			const state = coordinator.state;
-			setStatus((prev) => ({
-				...prev,
-				isSyncing: false,
-				lastSyncTime: state.lastSyncTime,
-				error: null,
-			}));
-			refreshStatus();
-		};
-
-		const handleError = (err: Error) => {
-			setStatus((prev) => ({
-				...prev,
-				isSyncing: false,
-				error: err,
-			}));
-		};
-
-		const handleChange = () => {
-			refreshStatus();
-		};
-
-		coordinator.on("onSyncStart", handleSyncStart);
-		coordinator.on("onSyncComplete", handleSyncComplete);
-		coordinator.on("onError", handleError);
-		coordinator.on("onChange", handleChange);
-
 		// Initial status read
 		refreshStatus();
 
-		return () => {
-			coordinator.off("onSyncStart", handleSyncStart);
-			coordinator.off("onSyncComplete", handleSyncComplete);
-			coordinator.off("onError", handleError);
-			coordinator.off("onChange", handleChange);
-		};
+		return coordinator.subscribe({
+			onSyncStart: () => {
+				setStatus((prev) => ({ ...prev, isSyncing: true }));
+			},
+			onSyncComplete: () => {
+				const { engine } = coordinator;
+				setStatus((prev) => ({
+					...prev,
+					isSyncing: false,
+					lastSyncTime: engine.lastSyncTime,
+					error: null,
+				}));
+				refreshStatus();
+			},
+			onError: (err: Error) => {
+				setStatus((prev) => ({
+					...prev,
+					isSyncing: false,
+					error: err,
+				}));
+			},
+			onChange: () => {
+				refreshStatus();
+			},
+		});
 	}, [coordinator, refreshStatus]);
 
 	return status;

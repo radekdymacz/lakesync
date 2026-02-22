@@ -33,15 +33,27 @@ function mockCoordinator(
 			delete: vi.fn(),
 			query: vi.fn().mockResolvedValue(queryResult),
 		},
+		engine: {
+			syncing: false,
+			lastSyncTime: null,
+			lastSyncedHlc: 0n,
+			clientId: "test-client",
+		},
 		on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
 			if (event in listeners) {
 				listeners[event as keyof Listeners].push(cb);
 			}
 		}),
 		off: vi.fn(),
+		subscribe: vi.fn((handlers: Record<string, (...args: unknown[]) => void>) => {
+			for (const [event, handler] of Object.entries(handlers)) {
+				if (event in listeners && handler) {
+					listeners[event as keyof Listeners].push(handler);
+				}
+			}
+			return () => {};
+		}),
 		queueDepth: vi.fn().mockResolvedValue(0),
-		lastSyncTime: null,
-		state: { syncing: false, lastSyncTime: null, lastSyncedHlc: 0n },
 		_listeners: listeners,
 	};
 }

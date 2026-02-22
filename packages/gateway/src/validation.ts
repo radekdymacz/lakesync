@@ -280,7 +280,7 @@ export function validateSchemaBody(raw: string): Result<TableSchema, RequestErro
  * Validate that a push delta's table name is a safe SQL identifier.
  *
  * Intended for use as a {@link DeltaValidator} in the gateway
- * {@link ValidationPipeline} — defence in depth against SQL injection
+ * {@link composePipeline} — defence in depth against SQL injection
  * via crafted table names.
  */
 export function validateDeltaTableName(delta: RowDelta): Result<void, SchemaError> {

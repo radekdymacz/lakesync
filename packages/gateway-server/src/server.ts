@@ -100,6 +100,111 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
 const DEFAULT_FLUSH_TIMEOUT_MS = 60_000;
 
 // ---------------------------------------------------------------------------
+// Server components — extracted from GatewayServer constructor
+// ---------------------------------------------------------------------------
+
+/** All independent components built from a {@link GatewayServerConfig}. */
+export interface ServerComponents {
+	gateway: SyncGateway;
+	configStore: ConfigStore;
+	persistence: DeltaPersistence;
+	connectors: ConnectorManager;
+	sharedBuffer: SharedBuffer | null;
+	rateLimiter: RateLimiter | null;
+	logger: Logger;
+	metrics: MetricsRegistry;
+	resolvedConfig: Required<Pick<GatewayServerConfig, "port" | "gatewayId" | "flushIntervalMs">> &
+		GatewayServerConfig;
+}
+
+/**
+ * Build all independent server components from configuration.
+ *
+ * This is a pure factory — no side effects, no server started.
+ * Useful for testing or custom composition.
+ */
+export function buildServerComponents(config: GatewayServerConfig): ServerComponents {
+	const resolvedConfig = {
+		port: config.port ?? DEFAULT_PORT,
+		flushIntervalMs: config.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS,
+		...config,
+	};
+
+	const gateway = new SyncGateway(
+		{
+			gatewayId: config.gatewayId,
+			maxBufferBytes: config.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
+			maxBufferAgeMs: config.maxBufferAgeMs ?? DEFAULT_MAX_BUFFER_AGE_MS,
+			flushQueue: config.flushQueue,
+		},
+		config.adapter,
+	);
+
+	const configStore = new MemoryConfigStore();
+
+	const persistence =
+		config.persistence === "sqlite"
+			? new SqlitePersistence(config.sqlitePath ?? "./lakesync-buffer.sqlite")
+			: new MemoryPersistence();
+
+	const sharedBuffer = config.cluster
+		? new SharedBuffer(config.cluster.sharedAdapter, config.cluster.sharedBufferConfig)
+		: null;
+
+	// Build poller registry — default includes Jira + Salesforce
+	const pollerRegistry =
+		config.pollerRegistry ??
+		createPollerRegistry()
+			.with("jira", jiraPollerFactory)
+			.with("salesforce", salesforcePollerFactory);
+
+	const connectors = new ConnectorManager(configStore, gateway, {
+		pollerRegistry,
+		adapterRegistry: config.adapterRegistry,
+		persistence,
+	});
+
+	const rateLimiter = config.rateLimiter ? new RateLimiter(config.rateLimiter) : null;
+	const logger = new Logger(config.logLevel ?? "info");
+	const metrics = new MetricsRegistry();
+
+	return {
+		gateway,
+		configStore,
+		persistence,
+		connectors,
+		sharedBuffer,
+		rateLimiter,
+		logger,
+		metrics,
+		resolvedConfig,
+	};
+}
+
+/**
+ * Create and start a {@link GatewayServer} in one call.
+ *
+ * Convenience factory that builds components, creates the server,
+ * and starts it. Returns the running server instance.
+ *
+ * @example
+ * ```ts
+ * const server = await startServer({
+ *   gatewayId: "my-gateway",
+ *   adapter: new PostgresAdapter({ connectionString: "..." }),
+ *   jwtSecret: process.env.JWT_SECRET,
+ * });
+ * // server is now accepting connections
+ * await server.stop();
+ * ```
+ */
+export async function startServer(config: GatewayServerConfig): Promise<GatewayServer> {
+	const server = new GatewayServer(config);
+	await server.start();
+	return server;
+}
+
+// ---------------------------------------------------------------------------
 // GatewayServer
 // ---------------------------------------------------------------------------
 
@@ -111,6 +216,9 @@ const DEFAULT_FLUSH_TIMEOUT_MS = 60_000;
  * middleware pipeline built by {@link buildServerPipeline}: cors ->
  * static routes -> drain -> timeout -> route match -> auth -> rate
  * limit -> dispatch.
+ *
+ * Construction delegates to {@link buildServerComponents} for wiring.
+ * The class is a thin lifecycle shell — start/stop/flush.
  *
  * @example
  * ```ts
@@ -153,50 +261,16 @@ export class GatewayServer {
 	private signalCleanup: (() => void) | null = null;
 
 	constructor(config: GatewayServerConfig) {
-		this.config = {
-			port: config.port ?? DEFAULT_PORT,
-			flushIntervalMs: config.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS,
-			...config,
-		};
-
-		this.gateway = new SyncGateway(
-			{
-				gatewayId: config.gatewayId,
-				maxBufferBytes: config.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
-				maxBufferAgeMs: config.maxBufferAgeMs ?? DEFAULT_MAX_BUFFER_AGE_MS,
-				flushQueue: config.flushQueue,
-				usageRecorder: config.usageRecorder,
-			},
-			config.adapter,
-		);
-
-		this.configStore = new MemoryConfigStore();
-
-		this.persistence =
-			config.persistence === "sqlite"
-				? new SqlitePersistence(config.sqlitePath ?? "./lakesync-buffer.sqlite")
-				: new MemoryPersistence();
-
-		this.sharedBuffer = config.cluster
-			? new SharedBuffer(config.cluster.sharedAdapter, config.cluster.sharedBufferConfig)
-			: null;
-
-		// Build poller registry — default includes Jira + Salesforce
-		const pollerRegistry =
-			config.pollerRegistry ??
-			createPollerRegistry()
-				.with("jira", jiraPollerFactory)
-				.with("salesforce", salesforcePollerFactory);
-
-		this.connectors = new ConnectorManager(this.configStore, this.gateway, {
-			pollerRegistry,
-			adapterRegistry: config.adapterRegistry,
-			persistence: this.persistence,
-		});
-
-		this.rateLimiter = config.rateLimiter ? new RateLimiter(config.rateLimiter) : null;
-		this.logger = new Logger(config.logLevel ?? "info");
-		this.metrics = new MetricsRegistry();
+		const components = buildServerComponents(config);
+		this.config = components.resolvedConfig;
+		this.gateway = components.gateway;
+		this.configStore = components.configStore;
+		this.persistence = components.persistence;
+		this.connectors = components.connectors;
+		this.sharedBuffer = components.sharedBuffer;
+		this.rateLimiter = components.rateLimiter;
+		this.logger = components.logger;
+		this.metrics = components.metrics;
 
 		// Pipeline state — shared mutable object bridging the class fields
 		// to the standalone pipeline functions. Reads/writes are proxied

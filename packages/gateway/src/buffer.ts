@@ -68,6 +68,46 @@ function emptySnapshot(): BufferSnapshot {
 }
 
 /**
+ * Build a complete buffer snapshot from a list of deltas.
+ *
+ * Pure function — computes log, index, deltaIds, estimatedBytes,
+ * tableBytes, and tableLog from scratch. Used by {@link DeltaBuffer.purge}
+ * and {@link DeltaBuffer.drainTable} to rebuild state after filtering.
+ */
+export function buildSnapshot(entries: RowDelta[], createdAt: number): BufferSnapshot {
+	const index = new Map<RowKey, RowDelta>();
+	const deltaIds = new Set<string>();
+	const tableBytes = new Map<string, number>();
+	const tableLog = new Map<string, RowDelta[]>();
+	let estimatedBytes = 0;
+
+	for (const delta of entries) {
+		const key = rowKey(delta.table, delta.rowId);
+		index.set(key, delta);
+		deltaIds.add(delta.deltaId);
+		const bytes = estimateDeltaBytes(delta);
+		estimatedBytes += bytes;
+		tableBytes.set(delta.table, (tableBytes.get(delta.table) ?? 0) + bytes);
+		const tl = tableLog.get(delta.table);
+		if (tl) {
+			tl.push(delta);
+		} else {
+			tableLog.set(delta.table, [delta]);
+		}
+	}
+
+	return {
+		log: entries,
+		index,
+		deltaIds,
+		estimatedBytes,
+		createdAt,
+		tableBytes,
+		tableLog,
+	};
+}
+
+/**
  * Dual-structure delta buffer.
  *
  * Maintains an append-only log for event streaming (pull) and flush,
@@ -162,34 +202,8 @@ export class DeltaBuffer {
 		const tableDeltas = prev.tableLog.get(table);
 		if (!tableDeltas || tableDeltas.length === 0) return [];
 
-		// Build new snapshot without the drained table
-		const drainedDeltaIds = new Set(tableDeltas.map((d) => d.deltaId));
-		const drainedRowKeys = new Set(tableDeltas.map((d) => rowKey(d.table, d.rowId)));
-
-		const newLog = prev.log.filter((d) => d.table !== table);
-		const newIndex = new Map(prev.index);
-		for (const key of drainedRowKeys) {
-			newIndex.delete(key);
-		}
-		const newDeltaIds = new Set(prev.deltaIds);
-		for (const id of drainedDeltaIds) {
-			newDeltaIds.delete(id);
-		}
-		const tableByteSize = prev.tableBytes.get(table) ?? 0;
-		const newTableBytes = new Map(prev.tableBytes);
-		newTableBytes.delete(table);
-		const newTableLog = new Map(prev.tableLog);
-		newTableLog.delete(table);
-
-		this.state = {
-			log: newLog,
-			index: newIndex,
-			deltaIds: newDeltaIds,
-			estimatedBytes: prev.estimatedBytes - tableByteSize,
-			createdAt: prev.createdAt,
-			tableBytes: newTableBytes,
-			tableLog: newTableLog,
-		};
+		const kept = prev.log.filter((d) => d.table !== table) as RowDelta[];
+		this.state = buildSnapshot(kept, prev.createdAt);
 
 		return [...tableDeltas];
 	}
@@ -232,37 +246,7 @@ export class DeltaBuffer {
 
 		if (removedCount === 0) return 0;
 
-		// Rebuild snapshot from kept deltas
-		const newIndex = new Map<RowKey, RowDelta>();
-		const newDeltaIds = new Set<string>();
-		const newTableBytes = new Map<string, number>();
-		const newTableLog = new Map<string, RowDelta[]>();
-		let newBytes = 0;
-
-		for (const delta of kept) {
-			const key = rowKey(delta.table, delta.rowId);
-			newIndex.set(key, delta);
-			newDeltaIds.add(delta.deltaId);
-			const bytes = estimateDeltaBytes(delta);
-			newBytes += bytes;
-			newTableBytes.set(delta.table, (newTableBytes.get(delta.table) ?? 0) + bytes);
-			const tl = newTableLog.get(delta.table);
-			if (tl) {
-				tl.push(delta);
-			} else {
-				newTableLog.set(delta.table, [delta]);
-			}
-		}
-
-		this.state = {
-			log: kept,
-			index: newIndex,
-			deltaIds: newDeltaIds,
-			estimatedBytes: newBytes,
-			createdAt: prev.createdAt,
-			tableBytes: newTableBytes,
-			tableLog: newTableLog,
-		};
+		this.state = buildSnapshot(kept, prev.createdAt);
 
 		return removedCount;
 	}

@@ -268,7 +268,7 @@ describe("SyncCoordinator", () => {
 
 	describe("lastSyncTime", () => {
 		it("is null before any sync", () => {
-			expect(coordinator.lastSyncTime).toBeNull();
+			expect(coordinator.engine.lastSyncTime).toBeNull();
 		});
 
 		it("updates on successful push", async () => {
@@ -279,8 +279,8 @@ describe("SyncCoordinator", () => {
 			await coordinator.pushToGateway();
 			const after = Date.now();
 
-			expect(coordinator.lastSyncTime).not.toBeNull();
-			const ts = coordinator.lastSyncTime as Date;
+			expect(coordinator.engine.lastSyncTime).not.toBeNull();
+			const ts = coordinator.engine.lastSyncTime as Date;
 			expect(ts.getTime()).toBeGreaterThanOrEqual(before);
 			expect(ts.getTime()).toBeLessThanOrEqual(after);
 		});
@@ -294,7 +294,7 @@ describe("SyncCoordinator", () => {
 
 			await coordinator.pushToGateway();
 
-			expect(coordinator.lastSyncTime).toBeNull();
+			expect(coordinator.engine.lastSyncTime).toBeNull();
 		});
 
 		it("updates on successful pull", async () => {
@@ -312,8 +312,8 @@ describe("SyncCoordinator", () => {
 			await coordinator.pullFromGateway();
 			const after = Date.now();
 
-			expect(coordinator.lastSyncTime).not.toBeNull();
-			const ts = coordinator.lastSyncTime as Date;
+			expect(coordinator.engine.lastSyncTime).not.toBeNull();
+			const ts = coordinator.engine.lastSyncTime as Date;
 			expect(ts.getTime()).toBeGreaterThanOrEqual(before);
 			expect(ts.getTime()).toBeLessThanOrEqual(after);
 		});
@@ -323,7 +323,7 @@ describe("SyncCoordinator", () => {
 
 	describe("clientId", () => {
 		it("returns the configured client identifier", () => {
-			expect(coordinator.clientId).toBe(CLIENT_ID);
+			expect(coordinator.engine.clientId).toBe(CLIENT_ID);
 		});
 	});
 

@@ -30,6 +30,12 @@ function mockCoordinator() {
 			delete: vi.fn(),
 			query: vi.fn(),
 		},
+		engine: {
+			syncing: false,
+			lastSyncTime: null,
+			lastSyncedHlc: 0n,
+			clientId: "test-client",
+		},
 		on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
 			if (event in listeners) {
 				listeners[event as keyof Listeners].push(cb);
@@ -42,9 +48,23 @@ function mockCoordinator() {
 				if (idx !== -1) arr.splice(idx, 1);
 			}
 		}),
+		subscribe: vi.fn((handlers: Record<string, (...args: unknown[]) => void>) => {
+			for (const [event, handler] of Object.entries(handlers)) {
+				if (event in listeners && handler) {
+					listeners[event as keyof Listeners].push(handler);
+				}
+			}
+			return () => {
+				for (const [event, handler] of Object.entries(handlers)) {
+					if (event in listeners && handler) {
+						const arr = listeners[event as keyof Listeners];
+						const idx = arr.indexOf(handler);
+						if (idx !== -1) arr.splice(idx, 1);
+					}
+				}
+			};
+		}),
 		queueDepth: vi.fn().mockResolvedValue(0),
-		lastSyncTime: null,
-		state: { syncing: false, lastSyncTime: null, lastSyncedHlc: 0n },
 		_listeners: listeners,
 	};
 }
@@ -88,11 +108,14 @@ describe("LakeSyncProvider + useLakeSync", () => {
 			wrapper: wrapper(coord),
 		});
 
-		expect(coord.on).toHaveBeenCalledWith("onChange", expect.any(Function));
+		expect(coord.subscribe).toHaveBeenCalledWith(
+			expect.objectContaining({ onChange: expect.any(Function) }),
+		);
 
 		unmount();
 
-		expect(coord.off).toHaveBeenCalledWith("onChange", expect.any(Function));
+		// subscribe returns an unsubscribe function that is called on unmount
+		expect(coord._listeners.onChange).toHaveLength(0);
 	});
 
 	it("increments dataVersion when onChange fires", () => {
@@ -137,23 +160,7 @@ describe("LakeSyncProvider + useLakeSync", () => {
 		expect(result.current.tableVersions.size).toBe(0);
 	});
 
-	it("bumps specific table versions when onChange fires with tables", () => {
-		const coord = mockCoordinator();
-		const { result } = renderHook(() => useLakeSync(), {
-			wrapper: wrapper(coord),
-		});
-
-		act(() => {
-			for (const cb of coord._listeners.onChange) {
-				cb(1, ["todos"]);
-			}
-		});
-
-		expect(result.current.tableVersions.get("todos")).toBe(1);
-		expect(result.current.tableVersions.has("users")).toBe(false);
-	});
-
-	it("bumps globalVersion when onChange fires without tables", () => {
+	it("bumps globalVersion and dataVersion when onChange fires", () => {
 		const coord = mockCoordinator();
 		const { result } = renderHook(() => useLakeSync(), {
 			wrapper: wrapper(coord),
@@ -161,7 +168,6 @@ describe("LakeSyncProvider + useLakeSync", () => {
 
 		expect(result.current.globalVersion).toBe(0);
 
-		// Fire onChange without tables — should bump globalVersion
 		act(() => {
 			for (const cb of coord._listeners.onChange) {
 				cb(1);

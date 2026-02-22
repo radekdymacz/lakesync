@@ -38,7 +38,7 @@ describe("Two clients non-conflicting", () => {
 		});
 
 		// A third client pulling from the start should see both changes
-		const pullResult = gateway.handlePull({
+		const pullResult = gateway.pullFromBuffer({
 			clientId: "client-c",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,

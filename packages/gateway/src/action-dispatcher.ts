@@ -29,7 +29,7 @@ export type ActionCacheConfig = IdempotencyCacheConfig;
  * Completely decoupled from the HLC clock — takes a callback for timestamp generation.
  */
 export class ActionDispatcher {
-	private actionHandlers: Map<string, ActionHandler> = new Map();
+	private handlers: ReadonlyMap<string, ActionHandler> = new Map();
 	private readonly cache: IdempotencyCache;
 
 	/**
@@ -45,9 +45,11 @@ export class ActionDispatcher {
 		cache?: IdempotencyCache,
 	) {
 		if (handlers) {
+			const initial = new Map<string, ActionHandler>();
 			for (const [name, handler] of Object.entries(handlers)) {
-				this.actionHandlers.set(name, handler);
+				initial.set(name, handler);
 			}
+			this.handlers = initial;
 		}
 		this.cache = cache ?? new MemoryIdempotencyCache(cacheConfig);
 	}
@@ -99,7 +101,7 @@ export class ActionDispatcher {
 			}
 
 			// Resolve handler
-			const handler = this.actionHandlers.get(action.connector);
+			const handler = this.handlers.get(action.connector);
 			if (!handler) {
 				const errorResult = {
 					actionId: action.actionId,
@@ -158,7 +160,9 @@ export class ActionDispatcher {
 	 * @param handler - The action handler to register.
 	 */
 	registerHandler(name: string, handler: ActionHandler): void {
-		this.actionHandlers.set(name, handler);
+		const next = new Map(this.handlers);
+		next.set(name, handler);
+		this.handlers = next;
 	}
 
 	/**
@@ -167,7 +171,9 @@ export class ActionDispatcher {
 	 * @param name - The connector name to remove.
 	 */
 	unregisterHandler(name: string): void {
-		this.actionHandlers.delete(name);
+		const next = new Map(this.handlers);
+		next.delete(name);
+		this.handlers = next;
 	}
 
 	/**
@@ -176,7 +182,7 @@ export class ActionDispatcher {
 	 * @returns Array of registered connector names.
 	 */
 	listHandlers(): string[] {
-		return [...this.actionHandlers.keys()];
+		return [...this.handlers.keys()];
 	}
 
 	/**
@@ -189,7 +195,7 @@ export class ActionDispatcher {
 	 */
 	describe(): ActionDiscovery {
 		const connectors: Record<string, ActionDescriptor[]> = {};
-		for (const [name, handler] of this.actionHandlers) {
+		for (const [name, handler] of this.handlers) {
 			connectors[name] = handler.supportedActions;
 		}
 		return { connectors };

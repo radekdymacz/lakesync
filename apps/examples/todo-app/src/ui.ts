@@ -82,13 +82,13 @@ export function setupUI(coordinator: SyncCoordinator): void {
 
 	async function updateStatus(): Promise<void> {
 		const depth = await coordinator.queueDepth();
-		const lastSync = coordinator.lastSyncTime;
+		const lastSync = coordinator.engine.lastSyncTime;
 		const lastSyncStr = lastSync ? lastSync.toLocaleTimeString() : "never";
 
 		status.textContent =
 			`Queue: ${depth === 0 ? "synced" : `${depth} pending`} | ` +
 			`Last sync: ${lastSyncStr} | ` +
-			`Client: ${coordinator.clientId.slice(0, 8)}...`;
+			`Client: ${coordinator.engine.clientId.slice(0, 8)}...`;
 	}
 
 	addBtn.addEventListener("click", async () => {

@@ -31,15 +31,27 @@ function mockCoordinator() {
 			delete: vi.fn(),
 			query: vi.fn(),
 		},
+		engine: {
+			syncing: false,
+			lastSyncTime: null as Date | null,
+			lastSyncedHlc: 0n,
+			clientId: "test-client",
+		},
 		on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
 			if (event in listeners) {
 				listeners[event as keyof Listeners].push(cb);
 			}
 		}),
 		off: vi.fn(),
+		subscribe: vi.fn((handlers: Record<string, (...args: unknown[]) => void>) => {
+			for (const [event, handler] of Object.entries(handlers)) {
+				if (event in listeners && handler) {
+					listeners[event as keyof Listeners].push(handler);
+				}
+			}
+			return () => {};
+		}),
 		queueDepth: vi.fn().mockResolvedValue(0),
-		lastSyncTime: null as Date | null,
-		state: { syncing: false, lastSyncTime: null as Date | null, lastSyncedHlc: 0n },
 		_listeners: listeners,
 	};
 
@@ -81,8 +93,8 @@ describe("useSyncStatus", () => {
 	it("updates lastSyncTime and clears error on syncComplete", async () => {
 		const coord = mockCoordinator();
 		const syncTime = new Date();
-		coord.lastSyncTime = syncTime;
-		coord.state.lastSyncTime = syncTime;
+		coord.engine.lastSyncTime = syncTime;
+		coord.engine.lastSyncTime = syncTime;
 
 		const { result } = renderHook(() => useSyncStatus(), {
 			wrapper: wrapper(coord),
@@ -173,8 +185,7 @@ describe("useSyncStatus", () => {
 		expect(result.current.error).toBe(err);
 
 		// Then: success clears error
-		coord.lastSyncTime = new Date();
-		coord.state.lastSyncTime = coord.lastSyncTime;
+		coord.engine.lastSyncTime = new Date();
 		act(() => {
 			for (const cb of coord._listeners.onSyncComplete) {
 				cb();

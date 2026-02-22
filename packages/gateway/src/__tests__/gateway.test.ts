@@ -56,7 +56,7 @@ describe("SyncGateway", () => {
 
 		// Pull since HLC 0 (before all deltas)
 		const zeroHlc = HLC.encode(0, 0);
-		const pullResult = gw.handlePull({
+		const pullResult = gw.pullFromBuffer({
 			clientId: "client-b",
 			sinceHlc: zeroHlc,
 			maxDeltas: 100,
@@ -96,7 +96,7 @@ describe("SyncGateway", () => {
 		});
 
 		// Pull since hlcMid should only return d3
-		const pullResult = gw.handlePull({
+		const pullResult = gw.pullFromBuffer({
 			clientId: "client-b",
 			sinceHlc: hlcMid,
 			maxDeltas: 100,
@@ -130,7 +130,7 @@ describe("SyncGateway", () => {
 		});
 
 		const zeroHlc = HLC.encode(0, 0);
-		const pullResult = gw.handlePull({
+		const pullResult = gw.pullFromBuffer({
 			clientId: "client-b",
 			sinceHlc: zeroHlc,
 			maxDeltas: 3,
@@ -300,7 +300,7 @@ describe("SyncGateway", () => {
 		expect(gw.bufferStats.indexSize).toBe(2);
 
 		const zeroHlc = HLC.encode(0, 0);
-		const pullBefore = gw.handlePull({
+		const pullBefore = gw.pullFromBuffer({
 			clientId: "client-b",
 			sinceHlc: zeroHlc,
 			maxDeltas: 100,
@@ -544,7 +544,7 @@ describe("SyncGateway", () => {
 
 		// Pull from a third client — the latest delta (hlcHigh) should be present
 		const zeroHlc = HLC.encode(0, 0);
-		const pullResult = gw.handlePull({
+		const pullResult = gw.pullFromBuffer({
 			clientId: "client-c",
 			sinceHlc: zeroHlc,
 			maxDeltas: 100,

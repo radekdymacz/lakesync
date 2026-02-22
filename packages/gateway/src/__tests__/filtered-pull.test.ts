@@ -30,7 +30,7 @@ describe("handlePull with SyncRulesContext", () => {
 			lastSeenHlc: HLC.encode(0, 0),
 		});
 
-		const result = gw.handlePull({
+		const result = gw.pullFromBuffer({
 			clientId: "client-b",
 			sinceHlc: HLC.encode(0, 0),
 			maxDeltas: 100,
@@ -77,7 +77,7 @@ describe("handlePull with SyncRulesContext", () => {
 			},
 		};
 
-		const result = gw.handlePull(
+		const result = gw.pullFromBuffer(
 			{ clientId: "client-a", sinceHlc: HLC.encode(0, 0), maxDeltas: 100 },
 			context,
 		);
@@ -128,7 +128,7 @@ describe("handlePull with SyncRulesContext", () => {
 			},
 		};
 
-		const result = gw.handlePull(
+		const result = gw.pullFromBuffer(
 			{ clientId: "client-x", sinceHlc: HLC.encode(0, 0), maxDeltas: 5 },
 			context,
 		);
@@ -168,7 +168,7 @@ describe("handlePull with SyncRulesContext", () => {
 			},
 		};
 
-		const result = gw.handlePull(
+		const result = gw.pullFromBuffer(
 			{ clientId: "client-x", sinceHlc: HLC.encode(0, 0), maxDeltas: 100 },
 			context,
 		);
@@ -206,7 +206,7 @@ describe("handlePull with SyncRulesContext", () => {
 			},
 		};
 
-		const result = gw.handlePull(
+		const result = gw.pullFromBuffer(
 			{ clientId: "client-x", sinceHlc: HLC.encode(0, 0), maxDeltas: 100 },
 			context,
 		);
@@ -246,7 +246,7 @@ describe("handlePull with SyncRulesContext", () => {
 			},
 		};
 
-		const result = gw.handlePull(
+		const result = gw.pullFromBuffer(
 			{ clientId: "client-x", sinceHlc: HLC.encode(0, 0), maxDeltas: 100 },
 			context,
 		);

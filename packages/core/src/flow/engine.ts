@@ -1,6 +1,13 @@
 import { Err, Ok, type Result } from "../result/result";
 import { validateFlowConfig } from "./dsl";
-import type { FlowConfig, FlowEngine, FlowEngineDeps, FlowState, FlowStatus } from "./types";
+import type {
+	FlowConfig,
+	FlowEngine,
+	FlowEngineDeps,
+	FlowHandle,
+	FlowState,
+	FlowStatus,
+} from "./types";
 import { FlowError } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -13,6 +20,8 @@ interface FlowEntry {
 	deltasProcessed: number;
 	lastError?: string;
 	lastActivityAt?: Date;
+	/** Handle to the running flow, if started via a FlowRuntime. */
+	handle?: FlowHandle;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +74,10 @@ export function createFlowEngine(deps: FlowEngineDeps = {}): FlowEngine {
 			}
 
 			try {
+				// If a runtime is provided, wire the flow's adapters/gateway/materialisation
+				if (deps.runtime) {
+					entry.handle = await deps.runtime.start(entry.config);
+				}
 				transitionState(entry, "running");
 				entry.lastActivityAt = new Date();
 				return Ok(undefined);
@@ -86,6 +99,12 @@ export function createFlowEngine(deps: FlowEngineDeps = {}): FlowEngine {
 
 			if (entry.state === "stopped" || entry.state === "idle") {
 				return Ok(undefined);
+			}
+
+			// Stop the runtime handle if present
+			if (entry.handle) {
+				await entry.handle.stop();
+				entry.handle = undefined;
 			}
 
 			transitionState(entry, "stopped");

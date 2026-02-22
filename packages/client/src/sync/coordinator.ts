@@ -4,7 +4,6 @@ import {
 	type ActionResult,
 	type ConnectorDescriptor,
 	HLC,
-	type HLCTimestamp,
 	type LakeSyncError,
 	type Result,
 } from "@lakesync/core";
@@ -23,20 +22,10 @@ import type { TransportWithCapabilities } from "./transport";
 /** Controls which operations syncOnce() / startAutoSync() performs */
 export type SyncMode = "full" | "pushOnly" | "pullOnly";
 
-/** Readable snapshot of the coordinator's current sync state. */
-export interface SyncState {
-	/** Whether a sync cycle is currently in progress. */
-	syncing: boolean;
-	/** Last successful sync time, or null if never synced. */
-	lastSyncTime: Date | null;
-	/** HLC timestamp of the last successfully synced delta. */
-	lastSyncedHlc: HLCTimestamp;
-}
-
 /** Events emitted by SyncCoordinator */
 export interface SyncEvents {
-	/** Fired after remote deltas are applied locally. Count is the number of deltas applied. */
-	onChange: (count: number) => void;
+	/** Fired after remote deltas are applied locally. Count is the number of deltas applied. Tables is the optional list of affected tables. */
+	onChange: (count: number, tables?: string[]) => void;
 	/** Fired when a sync cycle (push + pull) begins. */
 	onSyncStart: () => void;
 	/** Fired after a successful sync cycle (push + pull) completes. */
@@ -121,17 +110,6 @@ export class SyncCoordinator {
 			strategy: config?.strategy ?? new PullFirstStrategy(),
 		});
 
-		// Wire engine callbacks to coordinator events
-		this.engine.onRemoteDeltasApplied = (count) => {
-			this.emit("onChange", count);
-		};
-		this.engine.onDeadLetter = (count) => {
-			this.emit(
-				"onError",
-				new Error(`Dead-lettered ${count} entries after ${config?.maxRetries ?? 10} retries`),
-			);
-		};
-
 		this.tracker = new SyncTracker(db, queue, hlc, clientId);
 
 		// Compute auto-sync interval
@@ -164,11 +142,42 @@ export class SyncCoordinator {
 		// Register broadcast handler for realtime transports
 		if (this.transport.onBroadcast) {
 			this.transport.onBroadcast((deltas, serverHlc) => {
-				void this.engine.handleBroadcast(deltas, serverHlc).catch((err) => {
-					this.emit("onError", err instanceof Error ? err : new Error(String(err)));
-				});
+				void this.engine
+					.handleBroadcast(deltas, serverHlc)
+					.then((result) => {
+						if (result.remoteDeltasApplied > 0) {
+							this.emit("onChange", result.remoteDeltasApplied);
+						}
+					})
+					.catch((err) => {
+						this.emit("onError", err instanceof Error ? err : new Error(String(err)));
+					});
 			});
 		}
+	}
+
+	/**
+	 * Subscribe to multiple events at once.
+	 *
+	 * @param handlers - Partial map of event names to listener functions.
+	 * @returns An unsubscribe function that removes all registered listeners.
+	 */
+	subscribe(handlers: Partial<SyncEvents>): () => void {
+		const keys = Object.keys(handlers) as Array<keyof SyncEvents>;
+		for (const key of keys) {
+			const listener = handlers[key];
+			if (listener) {
+				this.on(key, listener as SyncEvents[typeof key]);
+			}
+		}
+		return () => {
+			for (const key of keys) {
+				const listener = handlers[key];
+				if (listener) {
+					this.off(key, listener as SyncEvents[typeof key]);
+				}
+			}
+		};
 	}
 
 	/** Register an event listener */
@@ -195,15 +204,6 @@ export class SyncCoordinator {
 		}
 	}
 
-	/** Readable snapshot of the current sync state. */
-	get state(): SyncState {
-		return {
-			syncing: this.engine.syncing,
-			lastSyncTime: this.engine.lastSyncTime,
-			lastSyncedHlc: this.engine.lastSyncedHlc,
-		};
-	}
-
 	/** Whether the client believes it is online. */
 	get isOnline(): boolean {
 		return this.onlineManager.isOnline;
@@ -211,7 +211,13 @@ export class SyncCoordinator {
 
 	/** Push pending deltas to the gateway via the transport */
 	async pushToGateway(): Promise<void> {
-		return this.engine.push();
+		const result = await this.engine.push();
+		if (result.deadLettered > 0) {
+			this.emit(
+				"onError",
+				new Error(`Dead-lettered ${result.deadLettered} entries after max retries`),
+			);
+		}
 	}
 
 	/**
@@ -222,27 +228,25 @@ export class SyncCoordinator {
 	 * pull instead of a buffer pull.
 	 */
 	async pullFrom(source: string): Promise<number> {
-		return this.engine.pullFrom(source);
+		const result = await this.engine.pullFrom(source);
+		if (result.remoteDeltasApplied > 0) {
+			this.emit("onChange", result.remoteDeltasApplied);
+		}
+		return result.remoteDeltasApplied;
 	}
 
 	/** Pull remote deltas from the gateway and apply them */
 	async pullFromGateway(source?: string): Promise<number> {
-		return this.engine.pull(source);
+		const result = await this.engine.pull(source);
+		if (result.remoteDeltasApplied > 0) {
+			this.emit("onChange", result.remoteDeltasApplied);
+		}
+		return result.remoteDeltasApplied;
 	}
 
 	/** Get the queue depth */
 	async queueDepth(): Promise<number> {
 		return this.engine.queueDepth();
-	}
-
-	/** Get the client identifier */
-	get clientId(): string {
-		return this.engine.clientId;
-	}
-
-	/** Get the last successful sync time, or null if never synced */
-	get lastSyncTime(): Date | null {
-		return this.engine.lastSyncTime;
 	}
 
 	/**
@@ -262,7 +266,22 @@ export class SyncCoordinator {
 		if (!this.onlineManager.isOnline) return;
 		this.emit("onSyncStart");
 		try {
-			const ran = await this.engine.syncOnce(() => this.processActionQueue());
+			const ran = await this.engine.syncOnce(
+				() => this.processActionQueue(),
+				(pullResult) => {
+					if (pullResult.remoteDeltasApplied > 0) {
+						this.emit("onChange", pullResult.remoteDeltasApplied);
+					}
+				},
+				(pushResult) => {
+					if (pushResult.deadLettered > 0) {
+						this.emit(
+							"onError",
+							new Error(`Dead-lettered ${pushResult.deadLettered} entries after max retries`),
+						);
+					}
+				},
+			);
 			if (ran) {
 				this.emit("onSyncComplete");
 			}

@@ -26,7 +26,6 @@ import {
 	type SyncPush,
 	type SyncResponse,
 	type SyncRulesContext,
-	type UsageRecorder,
 } from "@lakesync/core";
 import { ActionDispatcher } from "./action-dispatcher";
 import { DeltaBuffer } from "./buffer";
@@ -35,7 +34,7 @@ import { buildFlushQueue, type FlushQueue } from "./flush-queue";
 import { SourceRegistry } from "./source-registry";
 import type { GatewayConfig, HandlePushResult } from "./types";
 import { validateDeltaTableName } from "./validation";
-import { ValidationPipeline } from "./validation-pipeline";
+import { composePipeline, type DeltaValidator } from "./validation-pipeline";
 
 export type { SyncPush, SyncPull, SyncResponse };
 
@@ -54,8 +53,7 @@ export class SyncGateway implements IngestTarget {
 	private readonly sources: SourceRegistry;
 	private readonly flushCoordinator: FlushCoordinator;
 	private readonly flushQueue: FlushQueue | undefined;
-	private readonly validationPipeline: ValidationPipeline;
-	private readonly usageRecorder: UsageRecorder | undefined;
+	private readonly validate: DeltaValidator;
 
 	constructor(config: GatewayConfig, adapter?: LakeAdapter | DatabaseAdapter) {
 		this.config = { sourceAdapters: {}, ...config };
@@ -66,17 +64,15 @@ export class SyncGateway implements IngestTarget {
 		this.sources = new SourceRegistry(this.config.sourceAdapters);
 		this.flushCoordinator = new FlushCoordinator();
 
-		// Build validation pipeline from config
-		this.validationPipeline = new ValidationPipeline();
-		// Defence in depth: validate table names in push deltas are safe SQL identifiers
-		this.validationPipeline.add(validateDeltaTableName);
+		// Build composed validator from config
+		const validators: DeltaValidator[] = [validateDeltaTableName];
 		if (this.config.schemaManager) {
 			const sm = this.config.schemaManager;
-			this.validationPipeline.add((delta) => sm.validateDelta(delta));
+			validators.push((delta) => sm.validateDelta(delta));
 		}
+		this.validate = composePipeline(...validators);
 
 		this.flushQueue = buildFlushQueue(config, this.adapter);
-		this.usageRecorder = config.usageRecorder;
 	}
 
 	// -----------------------------------------------------------------------
@@ -103,7 +99,7 @@ export class SyncGateway implements IngestTarget {
 		for (const delta of msg.deltas) {
 			if (this.buffer.hasDelta(delta.deltaId)) continue;
 
-			const validationResult = this.validationPipeline.validate(delta);
+			const validationResult = this.validate(delta);
 			if (!validationResult.ok) return Err(validationResult.error);
 		}
 
@@ -139,15 +135,6 @@ export class SyncGateway implements IngestTarget {
 
 		const serverHlc = this.hlc.now();
 
-		if (this.usageRecorder && accepted > 0) {
-			this.usageRecorder.record({
-				gatewayId: this.config.gatewayId,
-				eventType: "push_deltas",
-				count: accepted,
-				timestamp: new Date(),
-			});
-		}
-
 		return Ok({ serverHlc, accepted, deltas: ingested });
 	}
 
@@ -165,60 +152,21 @@ export class SyncGateway implements IngestTarget {
 	}
 
 	// -----------------------------------------------------------------------
-	// Pull — delegates to buffer or source registry
+	// Pull — two distinct methods: buffer vs adapter
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Handle a pull request from a client.
+	 * Pull deltas from the in-memory buffer.
 	 *
-	 * When `msg.source` is set, pulls deltas from the named source adapter
-	 * instead of the in-memory buffer. Otherwise, returns change events
-	 * from the log since the given HLC. When a {@link SyncRulesContext} is
-	 * provided, deltas are post-filtered by the client's bucket definitions
-	 * and JWT claims. The buffer path over-fetches (3x the requested limit)
-	 * and retries up to 5 times to fill the page.
+	 * When a {@link SyncRulesContext} is provided, deltas are post-filtered
+	 * by the client's bucket definitions and JWT claims. Over-fetches (3x
+	 * the requested limit) and retries up to 5 times to fill the page.
 	 *
 	 * @param msg - The pull message specifying the cursor and limit.
 	 * @param context - Optional sync rules context for row-level filtering.
 	 * @returns A `Result` containing the matching deltas, server HLC, and pagination flag.
 	 */
-	handlePull(
-		msg: SyncPull & { source: string },
-		context?: SyncRulesContext,
-	): Promise<Result<SyncResponse, AdapterNotFoundError | AdapterError>>;
-	handlePull(msg: SyncPull, context?: SyncRulesContext): Result<SyncResponse, never>;
-	handlePull(
-		msg: SyncPull,
-		context?: SyncRulesContext,
-	):
-		| Promise<Result<SyncResponse, AdapterNotFoundError | AdapterError>>
-		| Result<SyncResponse, never> {
-		if (msg.source) {
-			return this.handleAdapterPull(msg, context).then((result) => {
-				this.recordPullUsage(result);
-				return result;
-			});
-		}
-
-		const result = this.handleBufferPull(msg, context);
-		this.recordPullUsage(result);
-		return result;
-	}
-
-	/** Record pull_deltas usage for a successful pull result. */
-	private recordPullUsage(result: Result<SyncResponse, AdapterNotFoundError | AdapterError>): void {
-		if (this.usageRecorder && result.ok && result.value.deltas.length > 0) {
-			this.usageRecorder.record({
-				gatewayId: this.config.gatewayId,
-				eventType: "pull_deltas",
-				count: result.value.deltas.length,
-				timestamp: new Date(),
-			});
-		}
-	}
-
-	/** Pull from the in-memory buffer (original path). */
-	private handleBufferPull(msg: SyncPull, context?: SyncRulesContext): Result<SyncResponse, never> {
+	pullFromBuffer(msg: SyncPull, context?: SyncRulesContext): Result<SyncResponse, never> {
 		if (!context) {
 			const { deltas, hasMore } = this.buffer.getEventsSince(msg.sinceHlc, msg.maxDeltas);
 			const serverHlc = this.hlc.now();
@@ -264,14 +212,22 @@ export class SyncGateway implements IngestTarget {
 		return Ok({ deltas: trimmed, serverHlc, hasMore });
 	}
 
-	/** Pull from a named source adapter. */
-	private async handleAdapterPull(
+	/**
+	 * Pull deltas from a named source adapter.
+	 *
+	 * @param source - The registered source adapter name.
+	 * @param msg - The pull message specifying the cursor and limit.
+	 * @param context - Optional sync rules context for row-level filtering.
+	 * @returns A `Result` containing the matching deltas, server HLC, and pagination flag.
+	 */
+	async pullFromAdapter(
+		source: string,
 		msg: SyncPull,
 		context?: SyncRulesContext,
 	): Promise<Result<SyncResponse, AdapterNotFoundError | AdapterError>> {
-		const adapter = this.sources.get(msg.source!);
+		const adapter = this.sources.get(source);
 		if (!adapter) {
-			return Err(new AdapterNotFoundError(`Source adapter "${msg.source}" not found`));
+			return Err(new AdapterNotFoundError(`Source adapter "${source}" not found`));
 		}
 
 		const queryResult = await adapter.queryDeltasSince(msg.sinceHlc);
@@ -307,8 +263,6 @@ export class SyncGateway implements IngestTarget {
 	 * @returns A `Result` indicating success or a `FlushError`.
 	 */
 	async flush(): Promise<Result<void, FlushError>> {
-		const deltaCount = this.buffer.logSize;
-		const byteSize = this.buffer.byteSize;
 		const result = await this.flushCoordinator.flush(this.buffer, this.adapter, {
 			config: {
 				gatewayId: this.config.gatewayId,
@@ -316,24 +270,11 @@ export class SyncGateway implements IngestTarget {
 				tableSchema: this.config.tableSchema,
 				catalogue: this.config.catalogue,
 			},
-			schemas: this.config.schemas,
-			flushQueue: this.flushQueue,
 		});
-		if (this.usageRecorder && result.ok && deltaCount > 0) {
-			this.usageRecorder.record({
-				gatewayId: this.config.gatewayId,
-				eventType: "flush_deltas",
-				count: deltaCount,
-				timestamp: new Date(),
-			});
-			this.usageRecorder.record({
-				gatewayId: this.config.gatewayId,
-				eventType: "flush_bytes",
-				count: byteSize,
-				timestamp: new Date(),
-			});
+		if (result.ok && result.value.entries.length > 0) {
+			void this.publishToQueue(result.value.entries);
 		}
-		return result;
+		return result.ok ? Ok(undefined) : result;
 	}
 
 	/**
@@ -343,16 +284,44 @@ export class SyncGateway implements IngestTarget {
 	 * leaving other tables in the buffer.
 	 */
 	async flushTable(table: string): Promise<Result<void, FlushError>> {
-		return this.flushCoordinator.flushTable(table, this.buffer, this.adapter, {
+		const result = await this.flushCoordinator.flushTable(table, this.buffer, this.adapter, {
 			config: {
 				gatewayId: this.config.gatewayId,
 				flushFormat: this.config.flushFormat,
 				tableSchema: this.config.tableSchema,
 				catalogue: this.config.catalogue,
 			},
-			schemas: this.config.schemas,
-			flushQueue: this.flushQueue,
 		});
+		if (result.ok && result.value.entries.length > 0) {
+			void this.publishToQueue(result.value.entries);
+		}
+		return result.ok ? Ok(undefined) : result;
+	}
+
+	/**
+	 * Publish flushed entries to the queue for materialisation (non-fatal).
+	 *
+	 * Failures are warned but never fail the flush.
+	 */
+	private async publishToQueue(entries: RowDelta[]): Promise<void> {
+		if (!this.flushQueue || !this.config.schemas || this.config.schemas.length === 0) return;
+
+		try {
+			const result = await this.flushQueue.publish(entries, {
+				gatewayId: this.config.gatewayId,
+				schemas: this.config.schemas,
+			});
+			if (!result.ok) {
+				console.warn(
+					`[lakesync] FlushQueue publish failed (${entries.length} deltas): ${result.error.message}`,
+				);
+			}
+		} catch (error: unknown) {
+			const err = error instanceof Error ? error : new Error(String(error));
+			console.warn(
+				`[lakesync] FlushQueue publish error (${entries.length} deltas): ${err.message}`,
+			);
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -364,16 +333,7 @@ export class SyncGateway implements IngestTarget {
 		msg: ActionPush,
 		context?: AuthContext,
 	): Promise<Result<ActionResponse, ActionValidationError>> {
-		const result = await this.actions.dispatch(msg, () => this.hlc.now(), context);
-		if (this.usageRecorder && result.ok) {
-			this.usageRecorder.record({
-				gatewayId: this.config.gatewayId,
-				eventType: "action_executed",
-				count: msg.actions.length,
-				timestamp: new Date(),
-			});
-		}
-		return result;
+		return this.actions.dispatch(msg, () => this.hlc.now(), context);
 	}
 
 	/** Register a named action handler. */

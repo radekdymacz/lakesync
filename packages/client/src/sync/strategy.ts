@@ -1,3 +1,5 @@
+import type { PullResult, PushResult } from "./engine";
+
 /**
  * Context provided to sync strategies with access to sync operations.
  *
@@ -12,9 +14,9 @@ export interface SyncContext {
 	/** Perform initial sync via checkpoint download. */
 	initialSync(): Promise<void>;
 	/** Pull remote deltas from the gateway. */
-	pull(): Promise<number>;
+	pull(): Promise<PullResult>;
 	/** Push local deltas to the gateway. */
-	push(): Promise<void>;
+	push(): Promise<PushResult>;
 	/** Process pending actions from the action queue. */
 	processActions(): Promise<void>;
 }

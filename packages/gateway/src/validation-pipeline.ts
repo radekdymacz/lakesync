@@ -9,26 +9,18 @@ import { Ok, type Result, type RowDelta, type SchemaError } from "@lakesync/core
 export type DeltaValidator = (delta: RowDelta) => Result<void, SchemaError>;
 
 /**
- * Composable pipeline of delta validators.
+ * Compose multiple delta validators into a single validator.
  *
- * Runs each registered validator in order against a delta. Stops at the
- * first failure and returns its error. The pipeline is side-effect-free —
- * safe to run as a pre-check before any buffer mutation.
+ * Runs each validator in order against a delta. Stops at the
+ * first failure and returns its error. The composed validator is
+ * side-effect-free — safe to run as a pre-check before any buffer mutation.
  */
-export class ValidationPipeline {
-	private readonly validators: DeltaValidator[] = [];
-
-	/** Append a validator to the pipeline. */
-	add(validator: DeltaValidator): void {
-		this.validators.push(validator);
-	}
-
-	/** Run all validators against a single delta. */
-	validate(delta: RowDelta): Result<void, SchemaError> {
-		for (const validator of this.validators) {
+export function composePipeline(...validators: DeltaValidator[]): DeltaValidator {
+	return (delta: RowDelta): Result<void, SchemaError> => {
+		for (const validator of validators) {
 			const result = validator(delta);
 			if (!result.ok) return result;
 		}
 		return Ok(undefined);
-	}
+	};
 }
