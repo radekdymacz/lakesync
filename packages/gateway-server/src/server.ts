@@ -2,7 +2,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AdapterFactoryRegistry } from "@lakesync/adapter";
 import { jiraPollerFactory } from "@lakesync/connector-jira";
 import { salesforcePollerFactory } from "@lakesync/connector-salesforce";
-import type { DatabaseAdapter, LakeAdapter, PollerRegistry, UsageRecorder } from "@lakesync/core";
+import type {
+	ConnectorFactoryRegistry,
+	DatabaseAdapter,
+	LakeAdapter,
+	PollerRegistry,
+	UsageRecorder,
+} from "@lakesync/core";
 import { createPollerRegistry } from "@lakesync/core";
 import type { ConfigStore, FlushQueue } from "@lakesync/gateway";
 import {
@@ -66,9 +72,11 @@ export interface GatewayServerConfig {
 		/** Shared buffer configuration (consistency mode, etc.). */
 		sharedBufferConfig?: SharedBufferConfig;
 	};
-	/** Custom poller registry for connector pollers. Defaults to Jira + Salesforce. */
+	/** Unified connector factory registry. Takes precedence over `pollerRegistry` + `adapterRegistry`. */
+	connectorRegistry?: ConnectorFactoryRegistry;
+	/** @deprecated Use `connectorRegistry` instead. Custom poller registry for connector pollers. Defaults to Jira + Salesforce. */
 	pollerRegistry?: PollerRegistry;
-	/** Custom adapter factory registry. Defaults to Postgres, MySQL, BigQuery. */
+	/** @deprecated Use `connectorRegistry` instead. Custom adapter factory registry. Defaults to Postgres, MySQL, BigQuery. */
 	adapterRegistry?: AdapterFactoryRegistry;
 	/** Drain timeout in milliseconds for graceful shutdown (default 10s). */
 	drainTimeoutMs?: number;
@@ -151,7 +159,7 @@ export function buildServerComponents(config: GatewayServerConfig): ServerCompon
 		? new SharedBuffer(config.cluster.sharedAdapter, config.cluster.sharedBufferConfig)
 		: null;
 
-	// Build poller registry — default includes Jira + Salesforce
+	// Build connector manager — unified registry takes precedence over legacy separate registries
 	const pollerRegistry =
 		config.pollerRegistry ??
 		createPollerRegistry()
@@ -159,6 +167,7 @@ export function buildServerComponents(config: GatewayServerConfig): ServerCompon
 			.with("salesforce", salesforcePollerFactory);
 
 	const connectors = new ConnectorManager(configStore, gateway, {
+		connectorRegistry: config.connectorRegistry,
 		pollerRegistry,
 		adapterRegistry: config.adapterRegistry,
 		persistence,

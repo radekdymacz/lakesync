@@ -162,7 +162,7 @@ async function applyOneDelta(
 
 	if (conflictingEntry) {
 		const localDelta = conflictingEntry.delta;
-		const resolveResult = resolver.resolve(localDelta, remoteDelta);
+		const resolveResult = resolver(localDelta, remoteDelta);
 		if (!resolveResult.ok) {
 			return Err(
 				new LakeSyncError(

@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { TableSchema } from "../delta/types";
-import type { ConnectorType } from "./types";
+import type { ConnectorFactory, ConnectorType } from "./types";
 
 /** Connector category — determines the ingest model. */
 export type ConnectorCategory = "database" | "api";
@@ -77,6 +77,46 @@ function buildRegistry(map: Map<string, ConnectorDescriptor>): ConnectorRegistry
 			const next = new Map(map);
 			next.set(type, { ...existing, outputTables: schemas });
 			return buildRegistry(next);
+		},
+	};
+}
+
+// ---------------------------------------------------------------------------
+// ConnectorFactoryRegistry — unified factory registry for all connector types
+// ---------------------------------------------------------------------------
+
+/**
+ * Immutable registry mapping connector type strings to {@link ConnectorFactory}
+ * functions. Replaces the dual `PollerRegistry` + `AdapterFactoryRegistry`
+ * lookup with a single dispatch path.
+ *
+ * Uses the same `.with()` pattern as `AdapterFactoryRegistry`.
+ */
+export interface ConnectorFactoryRegistry {
+	/** Look up a factory by connector type. */
+	get(type: string): ConnectorFactory | undefined;
+	/** Create a new registry with an additional or replaced factory. */
+	with(type: string, factory: ConnectorFactory): ConnectorFactoryRegistry;
+}
+
+/**
+ * Create an immutable {@link ConnectorFactoryRegistry} from an optional Map.
+ */
+export function createConnectorFactoryRegistry(
+	factories: Map<string, ConnectorFactory> = new Map(),
+): ConnectorFactoryRegistry {
+	return buildFactoryRegistry(new Map(factories));
+}
+
+function buildFactoryRegistry(map: Map<string, ConnectorFactory>): ConnectorFactoryRegistry {
+	return {
+		get(type: string): ConnectorFactory | undefined {
+			return map.get(type);
+		},
+		with(type: string, factory: ConnectorFactory): ConnectorFactoryRegistry {
+			const next = new Map(map);
+			next.set(type, factory);
+			return buildFactoryRegistry(next);
 		},
 	};
 }

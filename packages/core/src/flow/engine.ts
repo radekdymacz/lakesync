@@ -4,24 +4,20 @@ import type {
 	FlowConfig,
 	FlowEngine,
 	FlowEngineDeps,
-	FlowHandle,
+	FlowSnapshot,
 	FlowState,
 	FlowStatus,
 } from "./types";
 import { FlowError } from "./types";
 
 // ---------------------------------------------------------------------------
-// Internal flow entry — tracks per-flow runtime state
+// Internal flow entry — tracks per-flow runtime state via atomic snapshot
 // ---------------------------------------------------------------------------
 
 interface FlowEntry {
-	config: FlowConfig;
-	state: FlowState;
-	deltasProcessed: number;
-	lastError?: string;
-	lastActivityAt?: Date;
-	/** Handle to the running flow, if started via a FlowRuntime. */
-	handle?: FlowHandle;
+	readonly config: FlowConfig;
+	/** Atomic swap target — all runtime mutations replace this object. */
+	snapshot: FlowSnapshot;
 }
 
 // ---------------------------------------------------------------------------
@@ -39,8 +35,8 @@ export function createFlowEngine(deps: FlowEngineDeps = {}): FlowEngine {
 	const flows = new Map<string, FlowEntry>();
 
 	function transitionState(entry: FlowEntry, to: FlowState): void {
-		const from = entry.state;
-		entry.state = to;
+		const from = entry.snapshot.state;
+		entry.snapshot = { ...entry.snapshot, state: to };
 		deps.onFlowStateChange?.(entry.config.name, from, to);
 	}
 
@@ -56,8 +52,7 @@ export function createFlowEngine(deps: FlowEngineDeps = {}): FlowEngine {
 
 			flows.set(config.name, {
 				config,
-				state: "idle",
-				deltasProcessed: 0,
+				snapshot: { state: "idle", deltasProcessed: 0 },
 			});
 
 			return Ok(undefined);
@@ -69,21 +64,25 @@ export function createFlowEngine(deps: FlowEngineDeps = {}): FlowEngine {
 				return Err(new FlowError(`Flow "${name}" not found`, "FLOW_NOT_FOUND"));
 			}
 
-			if (entry.state === "running") {
+			if (entry.snapshot.state === "running") {
 				return Ok(undefined);
 			}
 
 			try {
 				// If a runtime is provided, wire the flow's adapters/gateway/materialisation
-				if (deps.runtime) {
-					entry.handle = await deps.runtime.start(entry.config);
-				}
-				transitionState(entry, "running");
-				entry.lastActivityAt = new Date();
+				const handle = deps.runtime ? await deps.runtime.start(entry.config) : undefined;
+				const from = entry.snapshot.state;
+				entry.snapshot = {
+					...entry.snapshot,
+					state: "running",
+					handle,
+					lastActivityAt: new Date(),
+				};
+				deps.onFlowStateChange?.(entry.config.name, from, "running");
 				return Ok(undefined);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				entry.lastError = message;
+				entry.snapshot = { ...entry.snapshot, lastError: message };
 				transitionState(entry, "error");
 				return Err(
 					new FlowError(`Failed to start flow "${name}": ${message}`, "FLOW_START_FAILED"),
@@ -97,17 +96,18 @@ export function createFlowEngine(deps: FlowEngineDeps = {}): FlowEngine {
 				return Err(new FlowError(`Flow "${name}" not found`, "FLOW_NOT_FOUND"));
 			}
 
-			if (entry.state === "stopped" || entry.state === "idle") {
+			if (entry.snapshot.state === "stopped" || entry.snapshot.state === "idle") {
 				return Ok(undefined);
 			}
 
 			// Stop the runtime handle if present
-			if (entry.handle) {
-				await entry.handle.stop();
-				entry.handle = undefined;
+			if (entry.snapshot.handle) {
+				await entry.snapshot.handle.stop();
 			}
 
-			transitionState(entry, "stopped");
+			const from = entry.snapshot.state;
+			entry.snapshot = { ...entry.snapshot, state: "stopped", handle: undefined };
+			deps.onFlowStateChange?.(entry.config.name, from, "stopped");
 			return Ok(undefined);
 		},
 
@@ -115,7 +115,7 @@ export function createFlowEngine(deps: FlowEngineDeps = {}): FlowEngine {
 			const errors: string[] = [];
 
 			for (const [name, entry] of flows) {
-				if (entry.state === "running") continue;
+				if (entry.snapshot.state === "running") continue;
 				const result = await engine.startFlow(name);
 				if (!result.ok) {
 					errors.push(result.error.message);
@@ -140,16 +140,17 @@ export function createFlowEngine(deps: FlowEngineDeps = {}): FlowEngine {
 		getStatus(): FlowStatus[] {
 			const statuses: FlowStatus[] = [];
 			for (const entry of flows.values()) {
+				const { state, deltasProcessed, lastError, lastActivityAt } = entry.snapshot;
 				const status: FlowStatus = {
 					name: entry.config.name,
-					state: entry.state,
-					deltasProcessed: entry.deltasProcessed,
+					state,
+					deltasProcessed,
 				};
-				if (entry.lastError !== undefined) {
-					status.lastError = entry.lastError;
+				if (lastError !== undefined) {
+					status.lastError = lastError;
 				}
-				if (entry.lastActivityAt !== undefined) {
-					status.lastActivityAt = entry.lastActivityAt;
+				if (lastActivityAt !== undefined) {
+					status.lastActivityAt = lastActivityAt;
 				}
 				statuses.push(status);
 			}

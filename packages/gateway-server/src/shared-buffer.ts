@@ -1,5 +1,5 @@
-import type { DatabaseAdapter, HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
-import { Err, Ok, type Result } from "@lakesync/core";
+import type { DatabaseAdapter, HLCTimestamp, Logger, RowDelta, SyncResponse } from "@lakesync/core";
+import { defaultLogger, Err, Ok, type Result } from "@lakesync/core";
 
 /** Consistency mode for shared buffer writes. */
 export type ConsistencyMode = "eventual" | "strong";
@@ -15,6 +15,8 @@ export interface SharedBufferConfig {
 	 *   allowing the caller to decide whether to fail the push.
 	 */
 	consistencyMode?: ConsistencyMode;
+	/** Optional logger callback. Defaults to `defaultLogger`. */
+	logger?: Logger;
 }
 
 /** Error returned by SharedBuffer in strong consistency mode. */
@@ -32,12 +34,14 @@ export interface SharedBufferError {
  */
 export class SharedBuffer {
 	private readonly consistencyMode: ConsistencyMode;
+	private readonly log: Logger;
 
 	constructor(
 		private readonly sharedAdapter: DatabaseAdapter,
 		config?: SharedBufferConfig,
 	) {
 		this.consistencyMode = config?.consistencyMode ?? "eventual";
+		this.log = config?.logger ?? defaultLogger;
 	}
 
 	/**
@@ -53,9 +57,7 @@ export class SharedBuffer {
 				if (this.consistencyMode === "strong") {
 					return Err({ code: "SHARED_WRITE_FAILED" as const, message: result.error.message });
 				}
-				console.warn(
-					`[lakesync] Shared buffer write failed (eventual mode): ${result.error.message}`,
-				);
+				this.log("warn", `Shared buffer write failed (eventual mode): ${result.error.message}`);
 			}
 			return Ok(undefined);
 		} catch (error: unknown) {
@@ -65,8 +67,9 @@ export class SharedBuffer {
 					message: error instanceof Error ? error.message : String(error),
 				});
 			}
-			console.warn(
-				`[lakesync] Shared buffer write error (eventual mode): ${error instanceof Error ? error.message : String(error)}`,
+			this.log(
+				"warn",
+				`Shared buffer write error (eventual mode): ${error instanceof Error ? error.message : String(error)}`,
 			);
 			return Ok(undefined);
 		}

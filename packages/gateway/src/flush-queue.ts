@@ -9,6 +9,7 @@ import {
 	type TableSchema,
 } from "@lakesync/core";
 import { collectMaterialisers, processMaterialisation } from "./materialisation-processor";
+import type { MaterialiseConfig } from "./types";
 
 /** Context passed alongside deltas when publishing to the flush queue. */
 export interface FlushContext {
@@ -83,11 +84,7 @@ export class MemoryFlushQueue implements FlushQueue {
  * when no materialisation targets exist.
  */
 export function buildFlushQueue(
-	config: {
-		flushQueue?: FlushQueue;
-		materialisers?: ReadonlyArray<Materialisable>;
-		onMaterialisationFailure?: (table: string, deltaCount: number, error: Error) => void;
-	},
+	config: MaterialiseConfig,
 	adapter: LakeAdapter | DatabaseAdapter | null,
 ): FlushQueue | undefined {
 	if (config.flushQueue) return config.flushQueue;

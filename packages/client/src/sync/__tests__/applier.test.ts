@@ -1,5 +1,5 @@
 import type { RowDelta, TableSchema } from "@lakesync/core";
-import { HLC, LWWResolver, unwrapOrThrow } from "@lakesync/core";
+import { HLC, resolveLWW, unwrapOrThrow } from "@lakesync/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LocalDB } from "../../db/local-db";
 import { registerSchema } from "../../db/schema-registry";
@@ -18,13 +18,10 @@ const todoSchema: TableSchema = {
 describe("applyRemoteDeltas", () => {
 	let db: LocalDB;
 	let queue: MemoryQueue;
-	let resolver: LWWResolver;
-
 	beforeEach(async () => {
 		db = unwrapOrThrow(await LocalDB.open({ name: "test-applier", backend: "memory" }));
 		unwrapOrThrow(await registerSchema(db, todoSchema));
 		queue = new MemoryQueue();
-		resolver = new LWWResolver();
 	});
 
 	afterEach(async () => {
@@ -45,7 +42,7 @@ describe("applyRemoteDeltas", () => {
 			deltaId: "remote-delta-1",
 		};
 
-		const result = await applyRemoteDeltas(db, [remoteDelta], resolver, queue);
+		const result = await applyRemoteDeltas(db, [remoteDelta], resolveLWW, queue);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.value).toBe(1);
@@ -82,7 +79,7 @@ describe("applyRemoteDeltas", () => {
 			deltaId: "remote-delta-2",
 		};
 
-		const result = await applyRemoteDeltas(db, [remoteDelta], resolver, queue);
+		const result = await applyRemoteDeltas(db, [remoteDelta], resolveLWW, queue);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.value).toBe(1);
@@ -119,7 +116,7 @@ describe("applyRemoteDeltas", () => {
 			deltaId: "remote-delta-3",
 		};
 
-		const result = await applyRemoteDeltas(db, [remoteDelta], resolver, queue);
+		const result = await applyRemoteDeltas(db, [remoteDelta], resolveLWW, queue);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.value).toBe(1);
@@ -160,7 +157,7 @@ describe("applyRemoteDeltas", () => {
 			deltaId: "remote-delta-conflict",
 		};
 
-		const result = await applyRemoteDeltas(db, [remoteDelta], resolver, queue);
+		const result = await applyRemoteDeltas(db, [remoteDelta], resolveLWW, queue);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.value).toBe(1);
@@ -207,7 +204,7 @@ describe("applyRemoteDeltas", () => {
 			deltaId: "remote-delta-lose",
 		};
 
-		const result = await applyRemoteDeltas(db, [remoteDelta], resolver, queue);
+		const result = await applyRemoteDeltas(db, [remoteDelta], resolveLWW, queue);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		// Remote was skipped, so 0 applied
@@ -256,7 +253,7 @@ describe("applyRemoteDeltas", () => {
 			deltaId: "delta-2",
 		};
 
-		const result = await applyRemoteDeltas(db, [delta1, delta2], resolver, queue);
+		const result = await applyRemoteDeltas(db, [delta1, delta2], resolveLWW, queue);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.value).toBe(2);
@@ -275,7 +272,7 @@ describe("applyRemoteDeltas", () => {
 	});
 
 	it("empty batch returns 0", async () => {
-		const result = await applyRemoteDeltas(db, [], resolver, queue);
+		const result = await applyRemoteDeltas(db, [], resolveLWW, queue);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.value).toBe(0);
@@ -326,7 +323,7 @@ describe("applyRemoteDeltas", () => {
 				deltaId: "remote-delta-batch-2",
 			};
 
-			const result = await applyRemoteDeltas(db, [remoteDelta1, remoteDelta2], resolver, queue);
+			const result = await applyRemoteDeltas(db, [remoteDelta1, remoteDelta2], resolveLWW, queue);
 			expect(result.ok).toBe(true);
 			if (!result.ok) return;
 			expect(result.value).toBe(2);
@@ -399,7 +396,7 @@ describe("applyRemoteDeltas", () => {
 				deltaId: "remote-delta-vs-delete",
 			};
 
-			const result = await applyRemoteDeltas(db, [remoteDelta], resolver, queue);
+			const result = await applyRemoteDeltas(db, [remoteDelta], resolveLWW, queue);
 			expect(result.ok).toBe(true);
 			if (!result.ok) return;
 			// Remote wins — the resolved delta was applied
@@ -433,7 +430,7 @@ describe("applyRemoteDeltas", () => {
 				deltaId: "remote-delta-low",
 			};
 
-			const result = await applyRemoteDeltas(db, [remoteDelta], resolver, queue);
+			const result = await applyRemoteDeltas(db, [remoteDelta], resolveLWW, queue);
 			expect(result.ok).toBe(true);
 			if (!result.ok) return;
 			// Local wins — nothing applied
@@ -493,7 +490,7 @@ describe("applyRemoteDeltas", () => {
 			deltaId: "delta-note",
 		};
 
-		const result = await applyRemoteDeltas(db, [todoDelta, noteDelta], resolver, queue);
+		const result = await applyRemoteDeltas(db, [todoDelta, noteDelta], resolveLWW, queue);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.value).toBe(2);

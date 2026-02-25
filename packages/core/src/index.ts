@@ -28,6 +28,7 @@ export * from "./delta";
 export * from "./flow";
 export * from "./hlc";
 export * from "./json";
+export { defaultLogger, type Logger, type LogLevel } from "./logger";
 export { ChunkedPusher, type FlushableTarget, PollingScheduler, PressureManager } from "./polling";
 export * from "./result";
 export type { OnDeltas, Source, SourceCursor } from "./source-types";

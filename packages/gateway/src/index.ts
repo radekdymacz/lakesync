@@ -78,10 +78,14 @@ export { SourceRegistry } from "./source-registry";
 export type {
 	BufferConfig,
 	FlushEnvelope,
+	FlushTargetConfig,
 	GatewayConfig,
 	GatewayState,
 	HandlePushResult,
+	MaterialiseConfig,
+	ResolvedGatewayConfig,
 } from "./types";
+export { normaliseGatewayConfig } from "./types";
 export {
 	buildSyncRulesContext,
 	parseJson,

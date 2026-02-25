@@ -1,5 +1,7 @@
 import {
+	defaultLogger,
 	isMaterialisable,
+	type Logger,
 	type Materialisable,
 	type RowDelta,
 	type TableSchema,
@@ -11,6 +13,8 @@ export interface MaterialisationProcessorConfig {
 	materialisers: ReadonlyArray<Materialisable>;
 	/** Optional callback invoked per-table when materialisation fails. */
 	onFailure?: (table: string, deltaCount: number, error: Error) => void;
+	/** Optional logger callback. Defaults to `defaultLogger`. */
+	logger?: Logger;
 }
 
 /**
@@ -29,19 +33,22 @@ export async function processMaterialisation(
 	if (schemas.length === 0) return;
 	if (config.materialisers.length === 0) return;
 
+	const log = config.logger ?? defaultLogger;
+
 	for (const target of config.materialisers) {
 		try {
 			const matResult = await target.materialise([...entries], schemas);
 			if (!matResult.ok) {
 				const error = new Error(matResult.error.message);
-				console.warn(
-					`[lakesync] Materialisation failed (${entries.length} deltas): ${matResult.error.message}`,
+				log(
+					"warn",
+					`Materialisation failed (${entries.length} deltas): ${matResult.error.message}`,
 				);
 				notifyFailure(entries, error, config.onFailure);
 			}
 		} catch (error: unknown) {
 			const err = error instanceof Error ? error : new Error(String(error));
-			console.warn(`[lakesync] Materialisation error (${entries.length} deltas): ${err.message}`);
+			log("warn", `Materialisation error (${entries.length} deltas): ${err.message}`);
 			notifyFailure(entries, err, config.onFailure);
 		}
 	}

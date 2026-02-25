@@ -32,7 +32,12 @@ import { DeltaBuffer } from "./buffer";
 import { FlushCoordinator } from "./flush-coordinator";
 import { buildFlushQueue, type FlushQueue } from "./flush-queue";
 import { SourceRegistry } from "./source-registry";
-import type { GatewayConfig, HandlePushResult } from "./types";
+import {
+	type GatewayConfig,
+	type HandlePushResult,
+	normaliseGatewayConfig,
+	type ResolvedGatewayConfig,
+} from "./types";
 import { validateDeltaTableName } from "./validation";
 import { composePipeline, type DeltaValidator } from "./validation-pipeline";
 
@@ -48,31 +53,29 @@ export class SyncGateway implements IngestTarget {
 	private hlc: HLC;
 	readonly buffer: DeltaBuffer;
 	readonly actions: ActionDispatcher;
-	private config: GatewayConfig;
-	private adapter: LakeAdapter | DatabaseAdapter | null;
+	private resolved: ResolvedGatewayConfig;
 	private readonly sources: SourceRegistry;
 	private readonly flushCoordinator: FlushCoordinator;
 	private readonly flushQueue: FlushQueue | undefined;
 	private readonly validate: DeltaValidator;
 
 	constructor(config: GatewayConfig, adapter?: LakeAdapter | DatabaseAdapter) {
-		this.config = { sourceAdapters: {}, ...config };
+		this.resolved = normaliseGatewayConfig(config, adapter);
 		this.hlc = new HLC();
 		this.buffer = new DeltaBuffer();
-		this.adapter = this.config.adapter ?? adapter ?? null;
-		this.actions = new ActionDispatcher(config.actionHandlers);
-		this.sources = new SourceRegistry(this.config.sourceAdapters);
+		this.actions = new ActionDispatcher(this.resolved.actionHandlers);
+		this.sources = new SourceRegistry(this.resolved.sourceAdapters);
 		this.flushCoordinator = new FlushCoordinator();
 
 		// Build composed validator from config
 		const validators: DeltaValidator[] = [validateDeltaTableName];
-		if (this.config.schemaManager) {
-			const sm = this.config.schemaManager;
+		if (this.resolved.schemaManager) {
+			const sm = this.resolved.schemaManager;
 			validators.push((delta) => sm.validateDelta(delta));
 		}
 		this.validate = composePipeline(...validators);
 
-		this.flushQueue = buildFlushQueue(config, this.adapter);
+		this.flushQueue = buildFlushQueue(this.resolved.materialise, this.resolved.adapter);
 	}
 
 	// -----------------------------------------------------------------------
@@ -140,7 +143,8 @@ export class SyncGateway implements IngestTarget {
 
 	/** Check buffer backpressure. */
 	private checkBackpressure(): Result<void, BackpressureError> {
-		const backpressureLimit = this.config.maxBackpressureBytes ?? this.config.maxBufferBytes * 2;
+		const backpressureLimit =
+			this.resolved.maxBackpressureBytes ?? this.resolved.maxBufferBytes * 2;
 		if (this.buffer.byteSize >= backpressureLimit) {
 			return Err(
 				new BackpressureError(
@@ -263,12 +267,12 @@ export class SyncGateway implements IngestTarget {
 	 * @returns A `Result` indicating success or a `FlushError`.
 	 */
 	async flush(): Promise<Result<void, FlushError>> {
-		const result = await this.flushCoordinator.flush(this.buffer, this.adapter, {
+		const result = await this.flushCoordinator.flush(this.buffer, this.resolved.adapter, {
 			config: {
-				gatewayId: this.config.gatewayId,
-				flushFormat: this.config.flushFormat,
-				tableSchema: this.config.tableSchema,
-				catalogue: this.config.catalogue,
+				gatewayId: this.resolved.gatewayId,
+				flushFormat: this.resolved.flush.flushFormat,
+				tableSchema: this.resolved.flush.tableSchema,
+				catalogue: this.resolved.flush.catalogue,
 			},
 		});
 		if (result.ok && result.value.entries.length > 0) {
@@ -284,14 +288,19 @@ export class SyncGateway implements IngestTarget {
 	 * leaving other tables in the buffer.
 	 */
 	async flushTable(table: string): Promise<Result<void, FlushError>> {
-		const result = await this.flushCoordinator.flushTable(table, this.buffer, this.adapter, {
-			config: {
-				gatewayId: this.config.gatewayId,
-				flushFormat: this.config.flushFormat,
-				tableSchema: this.config.tableSchema,
-				catalogue: this.config.catalogue,
+		const result = await this.flushCoordinator.flushTable(
+			table,
+			this.buffer,
+			this.resolved.adapter,
+			{
+				config: {
+					gatewayId: this.resolved.gatewayId,
+					flushFormat: this.resolved.flush.flushFormat,
+					tableSchema: this.resolved.flush.tableSchema,
+					catalogue: this.resolved.flush.catalogue,
+				},
 			},
-		});
+		);
 		if (result.ok && result.value.entries.length > 0) {
 			void this.publishToQueue(result.value.entries);
 		}
@@ -304,23 +313,24 @@ export class SyncGateway implements IngestTarget {
 	 * Failures are warned but never fail the flush.
 	 */
 	private async publishToQueue(entries: RowDelta[]): Promise<void> {
-		if (!this.flushQueue || !this.config.schemas || this.config.schemas.length === 0) return;
+		const schemas = this.resolved.materialise.schemas;
+		if (!this.flushQueue || !schemas || schemas.length === 0) return;
 
+		const log = this.resolved.logger;
 		try {
 			const result = await this.flushQueue.publish(entries, {
-				gatewayId: this.config.gatewayId,
-				schemas: this.config.schemas,
+				gatewayId: this.resolved.gatewayId,
+				schemas,
 			});
 			if (!result.ok) {
-				console.warn(
-					`[lakesync] FlushQueue publish failed (${entries.length} deltas): ${result.error.message}`,
+				log(
+					"warn",
+					`FlushQueue publish failed (${entries.length} deltas): ${result.error.message}`,
 				);
 			}
 		} catch (error: unknown) {
 			const err = error instanceof Error ? error : new Error(String(error));
-			console.warn(
-				`[lakesync] FlushQueue publish error (${entries.length} deltas): ${err.message}`,
-			);
+			log("warn", `FlushQueue publish error (${entries.length} deltas): ${err.message}`);
 		}
 	}
 
@@ -427,7 +437,7 @@ export class SyncGateway implements IngestTarget {
 	 * Get tables that exceed the per-table budget.
 	 */
 	getTablesExceedingBudget(): string[] {
-		const budget = this.config.perTableBudgetBytes;
+		const budget = this.resolved.perTableBudgetBytes;
 		if (!budget) return [];
 		return this.buffer
 			.tableStats()
@@ -437,17 +447,17 @@ export class SyncGateway implements IngestTarget {
 
 	/** Check if the buffer should be flushed based on config thresholds. */
 	shouldFlush(): boolean {
-		let effectiveMaxBytes = this.config.maxBufferBytes;
+		let effectiveMaxBytes = this.resolved.maxBufferBytes;
 
 		// Reduce threshold for wide-column deltas
-		const adaptive = this.config.adaptiveBufferConfig;
+		const adaptive = this.resolved.adaptiveBufferConfig;
 		if (adaptive && this.buffer.averageDeltaBytes > adaptive.wideColumnThreshold) {
 			effectiveMaxBytes = Math.floor(effectiveMaxBytes * adaptive.reductionFactor);
 		}
 
 		return this.buffer.shouldFlush({
 			maxBytes: effectiveMaxBytes,
-			maxAgeMs: this.config.maxBufferAgeMs,
+			maxAgeMs: this.resolved.maxBufferAgeMs,
 		});
 	}
 

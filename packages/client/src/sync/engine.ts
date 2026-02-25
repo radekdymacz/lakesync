@@ -1,5 +1,5 @@
 import type { HLCTimestamp, RowDelta } from "@lakesync/core";
-import { HLC, LWWResolver } from "@lakesync/core";
+import { HLC, resolveLWW } from "@lakesync/core";
 import type { LocalDB } from "../db/local-db";
 import type { SyncQueue } from "../queue/types";
 import { applyRemoteDeltas } from "./applier";
@@ -67,7 +67,7 @@ export class SyncEngine {
 	private readonly transport: TransportWithCapabilities;
 	private readonly queue: SyncQueue;
 	private readonly hlc: HLC;
-	private readonly resolver = new LWWResolver();
+	private readonly resolver = resolveLWW;
 	private readonly _clientId: string;
 	private readonly maxRetries: number;
 	private readonly syncMode: SyncMode;

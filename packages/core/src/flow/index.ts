@@ -17,6 +17,7 @@ export {
 	type FlowMaterialiseSql,
 	type FlowMaterialiseType,
 	type FlowRuntime,
+	type FlowSnapshot,
 	type FlowSourceCdc,
 	type FlowSourceConfig,
 	type FlowSourcePoll,

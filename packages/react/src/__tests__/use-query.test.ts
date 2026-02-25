@@ -268,6 +268,70 @@ describe("useQuery", () => {
 		});
 	});
 
+	it("uses explicit tables option instead of extracting from SQL", async () => {
+		const coord = mockCoordinator({ ok: true, value: [{ _rowId: "1", text: "A", done: 0 }] });
+
+		const { result } = renderHook(
+			() => useQuery<Todo>("SELECT * FROM some_cte_alias", undefined, { tables: ["todos"] }),
+			{ wrapper: wrapper(coord) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.isLoading).toBe(false);
+		});
+
+		expect(coord.tracker.query).toHaveBeenCalledTimes(1);
+
+		// Delta to "todos" should trigger re-run (explicit table)
+		coord.tracker.query.mockResolvedValue({
+			ok: true,
+			value: [
+				{ _rowId: "1", text: "A", done: 0 },
+				{ _rowId: "2", text: "B", done: 0 },
+			],
+		});
+
+		act(() => {
+			for (const cb of coord._listeners.onChange) {
+				cb(1, ["todos"]);
+			}
+		});
+
+		await waitFor(() => {
+			expect(result.current.data).toHaveLength(2);
+		});
+
+		expect(coord.tracker.query).toHaveBeenCalledTimes(2);
+	});
+
+	it("does NOT re-run when onChange fires for a table not in explicit tables list", async () => {
+		const coord = mockCoordinator({ ok: true, value: [{ _rowId: "1", text: "A", done: 0 }] });
+
+		const { result } = renderHook(
+			() => useQuery<Todo>("SELECT * FROM some_cte_alias", undefined, { tables: ["todos"] }),
+			{ wrapper: wrapper(coord) },
+		);
+
+		await waitFor(() => {
+			expect(result.current.isLoading).toBe(false);
+		});
+
+		expect(coord.tracker.query).toHaveBeenCalledTimes(1);
+
+		// Delta to "users" should NOT trigger re-run — not in explicit tables
+		act(() => {
+			for (const cb of coord._listeners.onChange) {
+				cb(1, ["users"]);
+			}
+		});
+
+		await waitFor(() => {
+			expect(result.current.isLoading).toBe(false);
+		});
+
+		expect(coord.tracker.query).toHaveBeenCalledTimes(1);
+	});
+
 	it("re-runs for JOIN queries when either table changes", async () => {
 		const coord = mockCoordinator({ ok: true, value: [] });
 

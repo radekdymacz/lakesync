@@ -1,8 +1,25 @@
 import type { DatabaseAdapter, HLCTimestamp, RowDelta, SyncResponse } from "@lakesync/core";
 import { Err, Ok } from "@lakesync/core";
 import { describe, expect, it, vi } from "vitest";
-import { AdapterBasedLock, PostgresAdvisoryLock, type PostgresConnection } from "../cluster";
+import {
+	AdapterBasedLock,
+	type LockStore,
+	PostgresAdvisoryLock,
+	type PostgresConnection,
+} from "../cluster";
 import { SharedBuffer } from "../shared-buffer";
+
+// ---------------------------------------------------------------------------
+// Mock LockStore
+// ---------------------------------------------------------------------------
+
+function createMockLockStore(overrides: Partial<LockStore> = {}): LockStore {
+	return {
+		tryAcquire: vi.fn().mockResolvedValue(true),
+		release: vi.fn().mockResolvedValue(undefined),
+		...overrides,
+	};
+}
 
 // ---------------------------------------------------------------------------
 // Mock DatabaseAdapter
@@ -36,56 +53,54 @@ function makeDelta(overrides: Partial<RowDelta> = {}): RowDelta {
 // ---------------------------------------------------------------------------
 
 describe("AdapterBasedLock", () => {
-	it("acquire returns true when insertDeltas succeeds", async () => {
-		const adapter = createMockAdapter();
-		const lock = new AdapterBasedLock(adapter, "instance-1");
+	it("acquire returns true when store.tryAcquire succeeds", async () => {
+		const store = createMockLockStore();
+		const lock = new AdapterBasedLock(store, "instance-1");
 
 		const acquired = await lock.acquire("flush:gw-1", 30_000);
 
 		expect(acquired).toBe(true);
-		expect(adapter.insertDeltas).toHaveBeenCalledOnce();
+		expect(store.tryAcquire).toHaveBeenCalledOnce();
+		expect(store.tryAcquire).toHaveBeenCalledWith("flush:gw-1", 30_000, "instance-1");
 	});
 
-	it("acquire returns false when insertDeltas fails", async () => {
-		const adapter = createMockAdapter({
-			insertDeltas: vi.fn().mockResolvedValue(Err({ code: "ADAPTER_ERROR", message: "conflict" })),
+	it("acquire returns false when store.tryAcquire returns false", async () => {
+		const store = createMockLockStore({
+			tryAcquire: vi.fn().mockResolvedValue(false),
 		});
-		const lock = new AdapterBasedLock(adapter, "instance-1");
+		const lock = new AdapterBasedLock(store, "instance-1");
 
 		const acquired = await lock.acquire("flush:gw-1", 30_000);
 
 		expect(acquired).toBe(false);
 	});
 
-	it("acquire returns false when insertDeltas throws", async () => {
-		const adapter = createMockAdapter({
-			insertDeltas: vi.fn().mockRejectedValue(new Error("connection lost")),
+	it("acquire returns false when store.tryAcquire throws", async () => {
+		const store = createMockLockStore({
+			tryAcquire: vi.fn().mockRejectedValue(new Error("connection lost")),
 		});
-		const lock = new AdapterBasedLock(adapter, "instance-1");
+		const lock = new AdapterBasedLock(store, "instance-1");
 
 		const acquired = await lock.acquire("flush:gw-1", 30_000);
 
 		expect(acquired).toBe(false);
 	});
 
-	it("release calls insertDeltas with DELETE op", async () => {
-		const adapter = createMockAdapter();
-		const lock = new AdapterBasedLock(adapter, "instance-1");
+	it("release delegates to store.release with holderId", async () => {
+		const store = createMockLockStore();
+		const lock = new AdapterBasedLock(store, "instance-1");
 
 		await lock.release("flush:gw-1");
 
-		expect(adapter.insertDeltas).toHaveBeenCalledOnce();
-		const deltas = (adapter.insertDeltas as ReturnType<typeof vi.fn>).mock
-			.calls[0]![0] as RowDelta[];
-		expect(deltas[0]!.op).toBe("DELETE");
-		expect(deltas[0]!.table).toBe("__lakesync_locks");
+		expect(store.release).toHaveBeenCalledOnce();
+		expect(store.release).toHaveBeenCalledWith("flush:gw-1", "instance-1");
 	});
 
-	it("release does not throw when insertDeltas fails", async () => {
-		const adapter = createMockAdapter({
-			insertDeltas: vi.fn().mockRejectedValue(new Error("connection lost")),
+	it("release does not throw when store.release fails", async () => {
+		const store = createMockLockStore({
+			release: vi.fn().mockRejectedValue(new Error("connection lost")),
 		});
-		const lock = new AdapterBasedLock(adapter, "instance-1");
+		const lock = new AdapterBasedLock(store, "instance-1");
 
 		// Should not throw
 		await lock.release("flush:gw-1");

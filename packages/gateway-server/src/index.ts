@@ -3,10 +3,11 @@ export { type AuthResult, authenticateRequest, extractBearerToken } from "./auth
 export {
 	AdapterBasedLock,
 	type DistributedLock,
+	type LockStore,
 	PostgresAdvisoryLock,
 	type PostgresConnection,
 } from "./cluster";
-export { ConnectorManager } from "./connector-manager";
+export { buildConnectorFactoryRegistry, ConnectorManager } from "./connector-manager";
 export { type CorsConfig, corsHeaders, handlePreflight } from "./cors-middleware";
 export {
 	type CursorStrategy,

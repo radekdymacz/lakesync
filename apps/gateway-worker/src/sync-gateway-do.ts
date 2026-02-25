@@ -5,11 +5,9 @@ import type {
 	ResolvedClaims,
 	RowDelta,
 	SyncRulesConfig,
-	SyncRulesContext,
 	TableSchema,
 } from "@lakesync/core";
 import { bigintReplacer, bigintReviver, filterDeltas } from "@lakesync/core";
-import type { SyncResponse } from "@lakesync/gateway";
 import {
 	buildSyncRulesContext,
 	type ConfigStore,
@@ -28,18 +26,16 @@ import {
 	MAX_PUSH_PAYLOAD_BYTES,
 	SyncGateway,
 } from "@lakesync/gateway";
-import {
-	type CodecError,
-	decodeSyncPull,
-	decodeSyncPush,
-	decodeSyncResponse,
-	encodeBroadcastFrame,
-	encodeSyncResponse,
-} from "@lakesync/proto";
+import { decodeSyncResponse, encodeSyncResponse } from "@lakesync/proto";
 import { CloudflareFlushQueue } from "./cf-flush-queue";
 import type { Env } from "./env";
 import { logger } from "./logger";
 import { R2Adapter } from "./r2-adapter";
+import {
+	broadcastDeltasToSockets,
+	deserializeWsAttachment,
+	handleWebSocketMessage,
+} from "./ws-handlers";
 
 // ---------------------------------------------------------------------------
 // Response factories
@@ -603,108 +599,21 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	/**
 	 * Handle an incoming WebSocket message (binary protobuf).
 	 *
-	 * Messages are expected as `ArrayBuffer` containing either a
-	 * `SyncPush` or `SyncPull` protobuf. The first byte acts as a
-	 * discriminator:
-	 * - `0x01` = SyncPush
-	 * - `0x02` = SyncPull
-	 *
-	 * Responses are sent back as binary protobuf `SyncResponse`.
+	 * Delegates to the standalone {@link handleWebSocketMessage} function
+	 * which uses a data-driven dispatch map for tag-based routing.
 	 */
 	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-		if (typeof message === "string") {
-			// Text frames are not supported — close gracefully
-			ws.close(1003, "Binary frames only");
-			return;
-		}
-
-		const bytes = new Uint8Array(message);
-		if (bytes.length < 2) {
-			ws.close(1002, "Message too short");
-			return;
-		}
-
-		const tag = bytes[0];
-		const payload = bytes.subarray(1);
-
 		const gateway = await this.getGateway();
+		const attachment = deserializeWsAttachment(ws);
 
-		// Retrieve per-connection state stored during upgrade
-		const attachment = (
-			ws as unknown as {
-				deserializeAttachment: () => { claims?: ResolvedClaims; clientId?: string } | null;
-			}
-		).deserializeAttachment();
-		const storedClaims = attachment?.claims ?? {};
-		const storedClientId = attachment?.clientId ?? null;
-
-		logger.info("ws_message", { tag, clientId: storedClientId ?? "unknown" });
-
-		if (tag === 0x01) {
-			// SyncPush — validate payload size before decoding
-			if (payload.byteLength > MAX_PUSH_PAYLOAD_BYTES) {
-				ws.close(1009, "Payload too large (max 1 MiB)");
-				return;
-			}
-
-			const decoded = decodeSyncPush(payload);
-			if (!decoded.ok) {
-				this.sendProtoError(ws, decoded.error);
-				return;
-			}
-
-			// Verify client ID matches the authenticated identity
-			if (storedClientId && decoded.value.clientId !== storedClientId) {
-				ws.close(1008, "Client ID mismatch: push clientId does not match authenticated identity");
-				return;
-			}
-
-			const pushResult = gateway.handlePush(decoded.value);
-			if (!pushResult.ok) {
-				this.sendProtoError(ws, pushResult.error);
-				return;
-			}
-
-			// Schedule flush alarm after successful push
-			await this.scheduleFlushAlarm(gateway);
-
-			// Build a SyncResponse echoing the server HLC and no deltas
-			const response: SyncResponse = {
-				deltas: [],
-				serverHlc: pushResult.value.serverHlc,
-				hasMore: false,
-			};
-			this.sendSyncResponse(ws, response);
-
-			// Broadcast ingested deltas to other connected WebSocket clients
-			await this.broadcastDeltas(
-				pushResult.value.deltas,
-				pushResult.value.serverHlc,
-				decoded.value.clientId,
-			);
-		} else if (tag === 0x02) {
-			// SyncPull — apply sync rules using stored claims
-			const decoded = decodeSyncPull(payload);
-			if (!decoded.ok) {
-				this.sendProtoError(ws, decoded.error);
-				return;
-			}
-
-			// Build sync rules context from stored claims
-			const rules = await this.configStore.getSyncRules(this.ctx.id.toString());
-			const context = buildSyncRulesContext(rules, storedClaims);
-
-			// WebSocket pull: source adapters not supported via proto (HTTP only)
-			const pullResult = gateway.pullFromBuffer(decoded.value, context);
-			if (!pullResult.ok) {
-				this.sendProtoError(ws, pullResult.error);
-				return;
-			}
-
-			this.sendSyncResponse(ws, pullResult.value);
-		} else {
-			ws.close(1002, `Unknown message tag: 0x${tag!.toString(16).padStart(2, "0")}`);
-		}
+		await handleWebSocketMessage(ws, message, {
+			gateway,
+			attachment,
+			getSyncRules: () => this.configStore.getSyncRules(this.ctx.id.toString()),
+			scheduleFlushAlarm: () => this.scheduleFlushAlarm(gateway),
+			broadcastDeltas: (deltas, serverHlc, excludeClientId) =>
+				this.broadcastDeltas(deltas, serverHlc, excludeClientId),
+		});
 	}
 
 	/**
@@ -736,59 +645,16 @@ export class SyncGatewayDO extends DurableObject<Env> {
 	/**
 	 * Broadcast ingested deltas to all connected WebSocket clients except the sender.
 	 *
-	 * For each connected socket, applies sync rules filtering based on the
-	 * stored claims, encodes a broadcast frame, and sends it. Errors on
-	 * individual sockets are silently caught (the socket may have closed).
+	 * Delegates to the standalone {@link broadcastDeltasToSockets} function.
 	 */
 	private async broadcastDeltas(
 		deltas: RowDelta[],
 		serverHlc: HLCTimestamp,
 		excludeClientId: string,
 	): Promise<void> {
-		if (deltas.length === 0) return;
-
 		const sockets = this.ctx.getWebSockets();
-		if (sockets.length === 0) return;
-
-		// Load sync rules once for all sockets
 		const rules = await this.configStore.getSyncRules(this.ctx.id.toString());
-
-		for (const ws of sockets) {
-			try {
-				const attachment = (
-					ws as unknown as {
-						deserializeAttachment: () => { claims?: ResolvedClaims; clientId?: string } | null;
-					}
-				).deserializeAttachment();
-
-				// Skip the sender
-				if (attachment?.clientId === excludeClientId) continue;
-
-				// Apply sync rules filtering per-client
-				let filtered = deltas;
-				if (rules && rules.buckets.length > 0) {
-					const context: SyncRulesContext = {
-						claims: attachment?.claims ?? {},
-						rules,
-					};
-					filtered = filterDeltas(deltas, context);
-				}
-
-				if (filtered.length === 0) continue;
-
-				const frame = encodeBroadcastFrame({
-					deltas: filtered,
-					serverHlc,
-					hasMore: false,
-				});
-
-				if (!frame.ok) continue;
-
-				ws.send(frame.value);
-			} catch {
-				// Socket may have closed — silently skip
-			}
-		}
+		await broadcastDeltasToSockets(sockets, deltas, serverHlc, excludeClientId, rules);
 	}
 
 	// -----------------------------------------------------------------------
@@ -870,22 +736,5 @@ export class SyncGatewayDO extends DurableObject<Env> {
 			// Schedule a periodic flush for time-based draining
 			await this.ctx.storage.setAlarm(Date.now() + DEFAULT_MAX_BUFFER_AGE_MS);
 		}
-	}
-
-	/** Encode and send a `SyncResponse` over the WebSocket as binary. */
-	private sendSyncResponse(ws: WebSocket, response: SyncResponse): void {
-		const encoded = encodeSyncResponse(response);
-
-		if (!encoded.ok) {
-			ws.close(1011, "Failed to encode response");
-			return;
-		}
-
-		ws.send(encoded.value);
-	}
-
-	/** Send an error frame over the WebSocket and close the connection. */
-	private sendProtoError(ws: WebSocket, error: CodecError | { message: string }): void {
-		ws.close(1008, error.message);
 	}
 }

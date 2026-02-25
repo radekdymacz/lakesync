@@ -171,6 +171,20 @@ export interface FlowConfig {
 /** Runtime state of a flow. */
 export type FlowState = "idle" | "running" | "error" | "stopped";
 
+/**
+ * Immutable snapshot of a flow's runtime state.
+ *
+ * Mutations swap the entire snapshot atomically — the same pattern used by
+ * {@link DeltaBuffer} and {@link SchemaManager} elsewhere in the codebase.
+ */
+export interface FlowSnapshot {
+	readonly state: FlowState;
+	readonly deltasProcessed: number;
+	readonly lastError?: string;
+	readonly lastActivityAt?: Date;
+	readonly handle?: FlowHandle;
+}
+
 /** Runtime status of a single flow. */
 export interface FlowStatus {
 	/** Flow name. */

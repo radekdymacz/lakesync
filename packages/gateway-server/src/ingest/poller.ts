@@ -2,8 +2,8 @@
 // SourcePoller — polls external databases and pushes deltas to SyncGateway
 // ---------------------------------------------------------------------------
 
-import type { HLCTimestamp, RowDelta, SyncPush } from "@lakesync/core";
-import { extractDelta, HLC } from "@lakesync/core";
+import type { HLCTimestamp, Logger, RowDelta, SyncPush } from "@lakesync/core";
+import { defaultLogger, extractDelta, HLC } from "@lakesync/core";
 import type { SyncGateway } from "@lakesync/gateway";
 import type { IngestSourceConfig, IngestTableConfig } from "./types";
 
@@ -34,6 +34,7 @@ export class SourcePoller {
 	private readonly gateway: SyncGateway;
 	private readonly hlc: HLC;
 	private readonly clientId: string;
+	private readonly log: Logger;
 
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private running = false;
@@ -46,11 +47,12 @@ export class SourcePoller {
 	/** Optional callback invoked after each poll with the current cursor state. */
 	public onCursorUpdate?: (state: Record<string, unknown>) => void;
 
-	constructor(config: IngestSourceConfig, gateway: SyncGateway) {
+	constructor(config: IngestSourceConfig, gateway: SyncGateway, logger?: Logger) {
 		this.config = config;
 		this.gateway = gateway;
 		this.hlc = new HLC();
 		this.clientId = `ingest:${config.name}`;
+		this.log = logger ?? defaultLogger;
 	}
 
 	/** Start the polling loop. */
@@ -226,8 +228,9 @@ export class SourcePoller {
 		}
 
 		if (currentMap.size > LARGE_SNAPSHOT_WARN) {
-			console.warn(
-				`[lakesync:ingest] Diff snapshot for "${tableConfig.table}" has ${currentMap.size} rows (>1k). Consider using cursor strategy.`,
+			this.log(
+				"warn",
+				`Diff snapshot for "${tableConfig.table}" has ${currentMap.size} rows (>1k). Consider using cursor strategy.`,
 			);
 		}
 

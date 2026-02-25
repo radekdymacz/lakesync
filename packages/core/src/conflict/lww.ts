@@ -10,71 +10,69 @@ import type { ConflictResolver } from "./resolver";
  * For each column present in both deltas, the one with the higher HLC wins.
  * Equal HLC tiebreak: lexicographically higher clientId wins (deterministic).
  * Columns only present in one delta are always included in the result.
+ *
+ * Rules:
+ * - Both DELETE: the delta with the higher HLC (or clientId tiebreak) wins.
+ * - One DELETE, one non-DELETE: the delta with the higher HLC wins.
+ *   If the DELETE wins, the row is tombstoned (empty columns).
+ *   If the non-DELETE wins, the row is resurrected.
+ * - Both non-DELETE: columns are merged per-column using LWW semantics.
+ *
+ * @param local  - The locally held delta for this row.
+ * @param remote - The incoming remote delta for this row.
+ * @returns A `Result` containing the resolved `RowDelta`, or a
+ *          `ConflictError` if the deltas refer to different tables/rows.
  */
-export class LWWResolver implements ConflictResolver {
-	/**
-	 * Resolve two conflicting deltas for the same row, returning the merged result.
-	 *
-	 * Rules:
-	 * - Both DELETE: the delta with the higher HLC (or clientId tiebreak) wins.
-	 * - One DELETE, one non-DELETE: the delta with the higher HLC wins.
-	 *   If the DELETE wins, the row is tombstoned (empty columns).
-	 *   If the non-DELETE wins, the row is resurrected.
-	 * - Both non-DELETE: columns are merged per-column using LWW semantics.
-	 *
-	 * @param local  - The locally held delta for this row.
-	 * @param remote - The incoming remote delta for this row.
-	 * @returns A `Result` containing the resolved `RowDelta`, or a
-	 *          `ConflictError` if the deltas refer to different tables/rows.
-	 */
-	resolve(local: RowDelta, remote: RowDelta): Result<RowDelta, ConflictError> {
-		// Validate same table + rowId
-		if (local.table !== remote.table || local.rowId !== remote.rowId) {
-			return Err(
-				new ConflictError(
-					`Cannot resolve conflict: mismatched table/rowId (${local.table}:${local.rowId} vs ${remote.table}:${remote.rowId})`,
-				),
-			);
-		}
-
-		// Determine which delta has higher HLC (for op-level decisions)
-		const winner = pickWinner(local, remote);
-
-		// Both DELETE — winner takes all (no columns to merge)
-		if (local.op === "DELETE" && remote.op === "DELETE") {
-			return Ok({ ...winner, columns: [] });
-		}
-
-		// One is DELETE
-		if (local.op === "DELETE" || remote.op === "DELETE") {
-			const deleteDelta = local.op === "DELETE" ? local : remote;
-			const otherDelta = local.op === "DELETE" ? remote : local;
-
-			// If the DELETE has higher/equal priority, tombstone wins
-			if (deleteDelta === winner) {
-				return Ok({ ...deleteDelta, columns: [] });
-			}
-			// Otherwise the UPDATE/INSERT wins (resurrection)
-			return Ok({ ...otherDelta });
-		}
-
-		// Both are INSERT or UPDATE — merge columns
-		const mergedColumns = mergeColumns(local, remote);
-
-		// Determine the resulting op: INSERT only if both are INSERT, otherwise UPDATE
-		const op: DeltaOp = local.op === "INSERT" && remote.op === "INSERT" ? "INSERT" : "UPDATE";
-
-		return Ok({
-			op,
-			table: local.table,
-			rowId: local.rowId,
-			clientId: winner.clientId,
-			columns: mergedColumns,
-			hlc: winner.hlc,
-			deltaId: winner.deltaId,
-		});
+export const resolveLWW: ConflictResolver = (
+	local: RowDelta,
+	remote: RowDelta,
+): Result<RowDelta, ConflictError> => {
+	// Validate same table + rowId
+	if (local.table !== remote.table || local.rowId !== remote.rowId) {
+		return Err(
+			new ConflictError(
+				`Cannot resolve conflict: mismatched table/rowId (${local.table}:${local.rowId} vs ${remote.table}:${remote.rowId})`,
+			),
+		);
 	}
-}
+
+	// Determine which delta has higher HLC (for op-level decisions)
+	const winner = pickWinner(local, remote);
+
+	// Both DELETE — winner takes all (no columns to merge)
+	if (local.op === "DELETE" && remote.op === "DELETE") {
+		return Ok({ ...winner, columns: [] });
+	}
+
+	// One is DELETE
+	if (local.op === "DELETE" || remote.op === "DELETE") {
+		const deleteDelta = local.op === "DELETE" ? local : remote;
+		const otherDelta = local.op === "DELETE" ? remote : local;
+
+		// If the DELETE has higher/equal priority, tombstone wins
+		if (deleteDelta === winner) {
+			return Ok({ ...deleteDelta, columns: [] });
+		}
+		// Otherwise the UPDATE/INSERT wins (resurrection)
+		return Ok({ ...otherDelta });
+	}
+
+	// Both are INSERT or UPDATE — merge columns
+	const mergedColumns = mergeColumns(local, remote);
+
+	// Determine the resulting op: INSERT only if both are INSERT, otherwise UPDATE
+	const op: DeltaOp = local.op === "INSERT" && remote.op === "INSERT" ? "INSERT" : "UPDATE";
+
+	return Ok({
+		op,
+		table: local.table,
+		rowId: local.rowId,
+		clientId: winner.clientId,
+		columns: mergedColumns,
+		hlc: winner.hlc,
+		deltaId: winner.deltaId,
+	});
+};
 
 /**
  * Pick the winning delta based on HLC comparison with clientId tiebreak.
@@ -125,19 +123,4 @@ function mergeColumns(local: RowDelta, remote: RowDelta): ColumnDelta[] {
 	}
 
 	return merged;
-}
-
-const _singleton = new LWWResolver();
-
-/**
- * Convenience function — resolves two conflicting deltas using the
- * column-level Last-Write-Wins strategy.
- *
- * @param local  - The locally held delta for this row.
- * @param remote - The incoming remote delta for this row.
- * @returns A `Result` containing the resolved `RowDelta`, or a
- *          `ConflictError` if the deltas refer to different tables/rows.
- */
-export function resolveLWW(local: RowDelta, remote: RowDelta): Result<RowDelta, ConflictError> {
-	return _singleton.resolve(local, remote);
 }

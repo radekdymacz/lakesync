@@ -1,5 +1,3 @@
-import type { DatabaseAdapter } from "@lakesync/core";
-
 /**
  * Interface for distributed locking across gateway-server instances.
  *
@@ -11,6 +9,45 @@ export interface DistributedLock {
 	acquire(key: string, ttlMs: number): Promise<boolean>;
 	/** Release a previously acquired lock. */
 	release(key: string): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// LockStore — low-level key-value lock storage
+// ---------------------------------------------------------------------------
+
+/**
+ * Low-level key-value lock storage interface.
+ *
+ * Provides direct lock operations decoupled from the sync delta path.
+ * Implementations may use a dedicated database table, Redis, or any
+ * other atomic compare-and-swap backend.
+ *
+ * The `holderId` parameter enables holder-scoped release — only the
+ * holder that acquired a lock can release it.
+ */
+export interface LockStore {
+	/**
+	 * Attempt to acquire a lock for the given key.
+	 *
+	 * Must be atomic: if two callers race on the same key, exactly one
+	 * must win. Returns `true` if the lock was acquired by this holder.
+	 *
+	 * @param key - Unique lock identifier (e.g. `"flush:gw-1"`)
+	 * @param ttlMs - Time-to-live in milliseconds (advisory — implementations
+	 *   are not required to enforce automatic expiry)
+	 * @param holderId - Unique identifier for the lock holder instance
+	 */
+	tryAcquire(key: string, ttlMs: number, holderId: string): Promise<boolean>;
+
+	/**
+	 * Release a previously acquired lock.
+	 *
+	 * Must be idempotent — releasing a lock that is not held should be a no-op.
+	 *
+	 * @param key - Lock identifier to release
+	 * @param holderId - Must match the holder that acquired the lock
+	 */
+	release(key: string, holderId: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,52 +140,45 @@ function hashKey(key: string): [number, number] {
 }
 
 /**
- * Database-backed distributed lock using the DatabaseAdapter interface.
+ * Distributed lock backed by a {@link LockStore}.
  *
- * This is an approximation for non-Postgres backends that lack native
- * advisory lock support. It simulates locking via upsert semantics on
- * a reserved `__lakesync_locks` table. For Postgres, prefer the
- * {@link PostgresAdvisoryLock} implementation which uses proper
- * `pg_try_advisory_lock` / `pg_advisory_unlock` calls.
+ * Delegates lock acquisition and release to an explicit `LockStore`
+ * implementation, keeping the lock mechanism completely decoupled from
+ * the sync delta path (`insertDeltas`, `queryDeltasSince`, etc.).
  *
- * Uses the adapter's `ensureSchema` + `insertDeltas` to maintain a
- * dedicated `__lakesync_locks` table. Lock entries are isolated from
- * regular sync data — they use a reserved table prefix that sync
- * queries should never match.
+ * **Important caveats:**
  *
- * Acquire is atomic: the adapter's upsert semantics (INSERT ON CONFLICT
- * or equivalent) ensure only one instance can hold a lock. Release
- * is best-effort — the TTL provides a safety net against holder crashes.
+ * - This is an **approximation** for backends that lack native advisory
+ *   lock support. For Postgres, strongly prefer {@link PostgresAdvisoryLock}
+ *   which uses proper `pg_try_advisory_lock` / `pg_advisory_unlock` calls.
+ *
+ * - **Race conditions are possible** under concurrent access. The atomicity
+ *   guarantee depends entirely on the `LockStore` implementation. A naive
+ *   read-then-write store will exhibit TOCTOU races; only stores backed by
+ *   atomic compare-and-swap or database-level serialisation are safe.
+ *
+ * - **No automatic TTL enforcement.** The `ttlMs` parameter is passed to
+ *   the `LockStore` as advisory metadata. Unless the store implementation
+ *   actively expires stale entries (e.g. via a background reaper or
+ *   database TTL index), a crashed holder's lock will persist until
+ *   manually released.
+ *
+ * - Release is **best-effort** — failures are silently caught. If the
+ *   store is unreachable, the lock remains held until TTL expiry (if
+ *   the store enforces it) or manual cleanup.
  */
 export class AdapterBasedLock implements DistributedLock {
-	private readonly adapter: DatabaseAdapter;
+	private readonly store: LockStore;
 	private readonly instanceId: string;
 
-	constructor(adapter: DatabaseAdapter, instanceId?: string) {
-		this.adapter = adapter;
+	constructor(store: LockStore, instanceId?: string) {
+		this.store = store;
 		this.instanceId = instanceId ?? crypto.randomUUID();
 	}
 
 	async acquire(key: string, ttlMs: number): Promise<boolean> {
 		try {
-			// Use insertDeltas to attempt an atomic lock acquisition.
-			// The adapter's upsert semantics handle conflict resolution.
-			const now = Date.now();
-			const result = await this.adapter.insertDeltas([
-				{
-					op: "INSERT",
-					table: "__lakesync_locks",
-					rowId: key,
-					clientId: this.instanceId,
-					columns: [
-						{ column: "holder", value: this.instanceId },
-						{ column: "expires_at", value: now + ttlMs },
-					],
-					hlc: this.makeHlc(now),
-					deltaId: `lock-${key}-${now}`,
-				},
-			]);
-			return result.ok;
+			return await this.store.tryAcquire(key, ttlMs, this.instanceId);
 		} catch {
 			return false;
 		}
@@ -156,29 +186,9 @@ export class AdapterBasedLock implements DistributedLock {
 
 	async release(key: string): Promise<void> {
 		try {
-			const now = Date.now();
-			await this.adapter.insertDeltas([
-				{
-					op: "DELETE",
-					table: "__lakesync_locks",
-					rowId: key,
-					clientId: this.instanceId,
-					columns: [],
-					hlc: this.makeHlc(now),
-					deltaId: `unlock-${key}-${now}`,
-				},
-			]);
+			await this.store.release(key, this.instanceId);
 		} catch {
-			// Best-effort release — TTL will expire the lock anyway
+			// Best-effort release — see class-level caveats on TTL enforcement
 		}
-	}
-
-	/**
-	 * Create an HLC-format timestamp from wall clock time.
-	 *
-	 * Uses the standard 48-bit wall + 16-bit counter encoding.
-	 */
-	private makeHlc(wallMs: number): import("@lakesync/core").HLCTimestamp {
-		return (BigInt(wallMs) << 16n) as import("@lakesync/core").HLCTimestamp;
 	}
 }

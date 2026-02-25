@@ -17,6 +17,7 @@ type SerialisedRowDelta = Omit<RowDelta, "hlc"> & { hlc: string };
 /** Serialised queue entry stored in IndexedDB */
 type SerialisedQueueEntry = Omit<QueueEntry, "delta"> & {
 	delta: SerialisedRowDelta;
+	retryAfter?: number;
 };
 
 /** Convert a RowDelta to its serialised form for IDB storage */
@@ -129,8 +130,8 @@ export class IDBQueue implements SyncQueue {
 			for (const id of ids) {
 				const serialised = (await store.get(id)) as SerialisedQueueEntry | undefined;
 				if (serialised?.status === "pending") {
-					serialised.status = "sending";
-					await store.put(serialised);
+					const updated = { ...serialised, status: "sending" as const };
+					await store.put(updated);
 				}
 			}
 
@@ -160,11 +161,15 @@ export class IDBQueue implements SyncQueue {
 			for (const id of ids) {
 				const serialised = (await store.get(id)) as SerialisedQueueEntry | undefined;
 				if (serialised) {
-					serialised.status = "pending";
-					serialised.retryCount++;
-					const backoffMs = Math.min(1000 * 2 ** serialised.retryCount, 30_000);
-					(serialised as Record<string, unknown>).retryAfter = Date.now() + backoffMs;
-					await store.put(serialised);
+					const retryCount = serialised.retryCount + 1;
+					const backoffMs = Math.min(1000 * 2 ** retryCount, 30_000);
+					const updated = {
+						...serialised,
+						status: "pending" as const,
+						retryCount,
+						retryAfter: Date.now() + backoffMs,
+					};
+					await store.put(updated);
 				}
 			}
 

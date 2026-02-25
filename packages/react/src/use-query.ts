@@ -3,6 +3,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLakeSyncData, useLakeSyncStable } from "./context";
 import { extractTables } from "./extract-tables";
 
+/** Options for `useQuery`. */
+export interface UseQueryOptions {
+	/**
+	 * Explicit list of table names this query depends on.
+	 * When provided, skips automatic table extraction from the SQL string.
+	 * Useful for queries with CTEs, subqueries, or dynamically-built SQL
+	 * where regex-based extraction may not be accurate.
+	 */
+	tables?: string[];
+}
+
 /** Return type of `useQuery`. */
 export interface UseQueryResult<T> {
 	data: T[];
@@ -25,8 +36,13 @@ export interface UseQueryResult<T> {
  *
  * @param sql - SQL query string
  * @param params - Optional bind parameters
+ * @param options - Optional configuration (e.g. explicit table list)
  */
-export function useQuery<T>(sql: string, params?: unknown[]): UseQueryResult<T> {
+export function useQuery<T>(
+	sql: string,
+	params?: unknown[],
+	options?: UseQueryOptions,
+): UseQueryResult<T> {
 	const { tracker } = useLakeSyncStable();
 	const { globalVersion, tableVersions } = useLakeSyncData();
 	const [data, setData] = useState<T[]>([]);
@@ -43,8 +59,8 @@ export function useQuery<T>(sql: string, params?: unknown[]): UseQueryResult<T> 
 		setManualTrigger((v) => v + 1);
 	}, []);
 
-	// Extract tables from the SQL — recomputed only when sql changes
-	const tables = useMemo(() => extractTables(sql), [sql]);
+	// Use explicit tables if provided, otherwise extract from SQL
+	const tables = useMemo(() => options?.tables ?? extractTables(sql), [sql, options?.tables]);
 
 	// Compute a composite version key from only the tables this query reads from.
 	// When a table has no entry in tableVersions yet, it defaults to 0.

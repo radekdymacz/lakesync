@@ -1,3 +1,27 @@
+import type { PushTarget } from "../polling/chunked-pusher";
+
+/** Lifecycle handle for a running connector instance. */
+export interface ConnectorLifecycle {
+	/** Start the connector (polling, streaming, etc.). */
+	start(): Promise<void>;
+	/** Stop the connector and release resources. */
+	stop(): Promise<void>;
+	/** Whether the connector is currently running. */
+	readonly isRunning: boolean;
+}
+
+/**
+ * Factory function that creates a running connector from configuration.
+ *
+ * Returns a {@link ConnectorLifecycle} handle for start/stop control.
+ * The factory receives a {@link PushTarget} so any connector can push
+ * deltas into the gateway without coupling to `SyncGateway` directly.
+ */
+export type ConnectorFactory = (
+	config: ConnectorConfig,
+	target: PushTarget,
+) => Promise<ConnectorLifecycle>;
+
 /** Supported connector types. */
 export const CONNECTOR_TYPES = ["postgres", "mysql", "bigquery", "jira", "salesforce"] as const;
 

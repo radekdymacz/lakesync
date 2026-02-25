@@ -2,7 +2,7 @@
 // Quota Enforcement Middleware — checks usage against plan limits
 // ---------------------------------------------------------------------------
 
-import { API_ERROR_CODES } from "@lakesync/core";
+import { API_ERROR_CODES, defaultLogger, type Logger } from "@lakesync/core";
 import type { Middleware } from "./middleware";
 import { sendError } from "./pipeline";
 
@@ -38,7 +38,12 @@ export type OrgIdResolver = (
  * When `orgIdResolver` returns null (org not found), the request is
  * allowed through (fail-open) — the control plane may not be configured.
  */
-export function quotaMiddleware(enforcer: QuotaEnforcer, resolveOrgId: OrgIdResolver): Middleware {
+export function quotaMiddleware(
+	enforcer: QuotaEnforcer,
+	resolveOrgId: OrgIdResolver,
+	logger?: Logger,
+): Middleware {
+	const log = logger ?? defaultLogger;
 	return async (ctx, next) => {
 		const route = ctx.route;
 		if (!route) {
@@ -59,8 +64,9 @@ export function quotaMiddleware(enforcer: QuotaEnforcer, resolveOrgId: OrgIdReso
 			orgId = await resolveOrgId(gatewayId, ctx.auth as Record<string, unknown> | undefined);
 		} catch {
 			// Fail-open if org resolution fails
-			console.warn(
-				`[lakesync] Org ID resolution failed for gateway ${gatewayId}, allowing request (fail-open)`,
+			log(
+				"warn",
+				`Org ID resolution failed for gateway ${gatewayId}, allowing request (fail-open)`,
 			);
 			await next();
 			return;
@@ -83,7 +89,7 @@ export function quotaMiddleware(enforcer: QuotaEnforcer, resolveOrgId: OrgIdReso
 			}
 		} catch {
 			// Fail-open if quota check fails
-			console.warn(`[lakesync] Quota check failed for org ${orgId}, allowing request (fail-open)`);
+			log("warn", `Quota check failed for org ${orgId}, allowing request (fail-open)`);
 			await next();
 			return;
 		}

@@ -1,8 +1,14 @@
 export type { ActionDescriptor, ActionHandler, AuthContext } from "./action-handler";
 export { isActionHandler } from "./action-handler";
 export { ConnectorValidationError } from "./errors";
-export type { ConnectorCategory, ConnectorDescriptor, ConnectorRegistry } from "./registry";
+export type {
+	ConnectorCategory,
+	ConnectorDescriptor,
+	ConnectorFactoryRegistry,
+	ConnectorRegistry,
+} from "./registry";
 export {
+	createConnectorFactoryRegistry,
 	createConnectorRegistry,
 	getConnectorDescriptor,
 	listConnectorDescriptors,
@@ -14,8 +20,10 @@ export type {
 	BigQueryConnectorConfigFull,
 	ConnectorConfig,
 	ConnectorConfigBase,
+	ConnectorFactory,
 	ConnectorIngestConfig,
 	ConnectorIngestTable,
+	ConnectorLifecycle,
 	ConnectorType,
 	JiraConnectorConfig,
 	JiraConnectorConfigFull,
