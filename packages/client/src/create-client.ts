@@ -26,6 +26,8 @@ export interface CreateClientConfig {
 		url: string;
 		gatewayId: string;
 		token?: string;
+		/** Callback to retrieve a fresh token before each request. Takes priority over static token. */
+		getToken?: () => string | Promise<string>;
 	};
 	/** Auto-sync interval in ms (default 10000). Set to 0 to disable. */
 	autoSyncMs?: number;
@@ -94,6 +96,7 @@ export async function createClient(config: CreateClientConfig): Promise<LakeSync
 		baseUrl: config.gateway.url,
 		gatewayId: config.gateway.gatewayId,
 		token: config.gateway.token ?? "",
+		getToken: config.gateway.getToken,
 	});
 
 	// 4. Create SyncCoordinator
