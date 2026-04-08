@@ -78,7 +78,9 @@ export class LocalDB {
 		try {
 			const backend: ResolvedBackend = resolveBackend(config.backend);
 
-			const SQL = await initSqlJs();
+			const SQL = config.wasmUrl
+				? await initSqlJs({ locateFile: () => config.wasmUrl as string })
+				: await initSqlJs();
 
 			let data: Uint8Array | null = null;
 			if (backend === "idb") {

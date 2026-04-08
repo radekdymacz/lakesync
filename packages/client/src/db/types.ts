@@ -7,6 +7,8 @@ export interface DbConfig {
 	name: string;
 	/** Storage backend — auto-detected if not set */
 	backend?: "idb" | "memory";
+	/** Optional URL to the sql-wasm.wasm binary (for custom hosting) */
+	wasmUrl?: string;
 }
 
 /** Error type for database operations */

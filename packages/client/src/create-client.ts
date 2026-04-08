@@ -38,6 +38,8 @@ export interface CreateClientConfig {
 	queue?: SyncQueue;
 	/** Additional SyncCoordinator options (merged with factory defaults). */
 	coordinatorConfig?: Omit<SyncCoordinatorConfig, "queue" | "clientId" | "autoSyncIntervalMs">;
+	/** Optional URL to the sql-wasm.wasm binary (for custom hosting) */
+	wasmUrl?: string;
 }
 
 /** A fully-initialised LakeSync client returned by {@link createClient}. */
@@ -78,6 +80,7 @@ export async function createClient(config: CreateClientConfig): Promise<LakeSync
 	const dbResult = await LocalDB.open({
 		name: config.name,
 		backend: config.backend,
+		wasmUrl: config.wasmUrl,
 	});
 	const db = unwrapOrThrow(dbResult);
 
