@@ -2,19 +2,19 @@
 
 **Declare what data goes where. The engine handles the rest.**
 
-LakeSync is an **open-source, offline-first sync engine** for TypeScript apps. Your data lives in SQLite on the device, syncs through a lightweight gateway, and flushes to the backend you choose. Same client code either way.
+LakeSync is NativeKloud's **shared, open-source sync library** — not a marketed end-user product. NativeKloud apps (duebox, ogar, Atlas, and others) reuse the same engine: local SQLite on the device, a thin gateway, and pluggable backends. Same client code in every product.
 
-This document is the public product vision. It matches the README; it does not describe a different product.
+This document is the product vision for that library. It matches the README; it does not describe a different product.
 
 ## The problem
 
 Most sync engines lock you into a single backend. Most data lakes are not offline-first. Browser apps still have to invent their own outbox, conflict rules, and catch-up protocol — then throw that away when the storage target changes.
 
-Teams end up with one stack for the local app, another for operational SQL, and a third for analytics. Data does not flow; it is copied.
+NativeKloud products would otherwise each grow a private sync stack. Data would not flow between apps, agents, and backends; it would be copied.
 
 ## What LakeSync is
 
-A declarative sync engine with three layers:
+A declarative TypeScript sync engine with three layers:
 
 1. **Client** — mutations write to local SQLite (sql.js WASM) at zero latency. Deltas queue in a persistent IndexedDB outbox that survives refresh and crash. When the network returns, the outbox drains.
 2. **Gateway** — a thin merge point (Cloudflare Durable Objects or self-hosted Node/Bun). Hybrid Logical Clocks plus column-level last-write-wins preserve concurrent edits to different fields. Sync rules filter what each client may pull. WebSocket broadcast is optional; HTTP polling is the fallback.
@@ -24,9 +24,19 @@ Local SQLite is one destination among many, not the whole product. Deltas can al
 
 ## What it is not
 
-- Not a closed BaaS. The library is Apache 2.0; you can self-host the gateway.
+- Not a consumer SaaS or a closed BaaS. The library is Apache 2.0; NativeKloud products embed it, and anyone can self-host the gateway.
 - Not a warehouse-only product. Offline browser apps are a first-class consumer.
 - Not a promise that every SaaS API is already wired up. Shipped connectors today are Jira and Salesforce; the adapter/poller interfaces are the extension point for the rest.
+
+## Who uses it
+
+LakeSync is infrastructure for NativeKloud products that need a local, queryable database and later sync:
+
+- **duebox**, **ogar**, **Atlas** — and any future NK app that should share the same sync, conflict, and adapter model
+- Agents and dashboards that need a filtered slice of a larger system, not a full replica
+- Operators who want one pipeline from SaaS sources (Jira, Salesforce, …) into the same destinations
+
+The library is the public-facing artefact. The products are consumers.
 
 ## Backends, sized to the data
 
@@ -46,15 +56,9 @@ Route by table with `CompositeAdapter`. Replicate with `FanOutAdapter`. Age data
 - **Column-level truth.** Conflicts resolve per column, not per row.
 - **Batch to the lake.** Never flush per-sync to Iceberg.
 - **Open APIs, no thrown exceptions.** Public surfaces return `Result<T, E>`.
+- **One engine, many products.** NativeKloud apps share this library instead of each inventing sync.
 - **Open source.** Apache 2.0. Self-host or run at the edge.
-
-## Who it is for
-
-- Browser and TypeScript apps that need a local, queryable database and later sync
-- Teams that want Postgres today and Iceberg tomorrow without rewriting the client
-- Agents and dashboards that need a filtered slice of a larger system, not a full replica
-- Operators who want one pipeline from SaaS sources (Jira, Salesforce, …) into the same destinations
 
 ## North star
 
-Apps, agents, and backends share one sync engine. You declare the data and the rules. The engine handles the rest.
+NativeKloud apps, agents, and backends share one sync engine. You declare the data and the rules. The engine handles the rest.
