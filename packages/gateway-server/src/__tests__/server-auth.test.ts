@@ -333,6 +333,7 @@ describe("GatewayServer JWT auth enforcement", () => {
 			body: pushBody([makeDelta()]),
 		});
 		expect(res.status).toBe(401);
+		expect(JSON.parse(res.body).error).toContain("exp");
 	});
 
 	// -----------------------------------------------------------------------
@@ -389,7 +390,9 @@ describe("GatewayServer JWT auth enforcement", () => {
 			headers: { Authorization: `Bearer ${token}` },
 		});
 		expect(res.status).toBe(403);
-		expect(JSON.parse(res.body).error).toContain("Admin role required");
+		const body = JSON.parse(res.body) as { error: string; code: string };
+		expect(body.error).toContain("Admin role required");
+		expect(body.code).toBe("FORBIDDEN");
 	});
 
 	it("admin flush with admin role returns 200", async () => {
@@ -399,6 +402,25 @@ describe("GatewayServer JWT auth enforcement", () => {
 			headers: { Authorization: `Bearer ${token}` },
 		});
 		expect(res.status).toBe(200);
+	});
+
+	it("admin schema with client role returns 403", async () => {
+		const token = await validClientToken(jwtSecret, gatewayId);
+		const res = await req(`${baseUrl}/v1/admin/schema/${gatewayId}`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${token}`,
+			},
+			body: JSON.stringify({
+				table: "tasks",
+				columns: [{ name: "title", type: "string" }],
+			}),
+		});
+		expect(res.status).toBe(403);
+		const body = JSON.parse(res.body) as { error: string; code: string };
+		expect(body.error).toContain("Admin role required");
+		expect(body.code).toBe("FORBIDDEN");
 	});
 
 	it("admin schema with admin role returns 200", async () => {
@@ -413,6 +435,35 @@ describe("GatewayServer JWT auth enforcement", () => {
 				table: "tasks",
 				columns: [{ name: "title", type: "string" }],
 			}),
+		});
+		expect(res.status).toBe(200);
+	});
+
+	it("admin sync-rules with client role returns 403", async () => {
+		const token = await validClientToken(jwtSecret, gatewayId);
+		const res = await req(`${baseUrl}/v1/admin/sync-rules/${gatewayId}`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${token}`,
+			},
+			body: JSON.stringify({ version: 1, buckets: [] }),
+		});
+		expect(res.status).toBe(403);
+		const body = JSON.parse(res.body) as { error: string; code: string };
+		expect(body.error).toContain("Admin role required");
+		expect(body.code).toBe("FORBIDDEN");
+	});
+
+	it("admin sync-rules with admin role returns 200", async () => {
+		const token = await validAdminToken(jwtSecret, gatewayId);
+		const res = await req(`${baseUrl}/v1/admin/sync-rules/${gatewayId}`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${token}`,
+			},
+			body: JSON.stringify({ version: 1, buckets: [] }),
 		});
 		expect(res.status).toBe(200);
 	});

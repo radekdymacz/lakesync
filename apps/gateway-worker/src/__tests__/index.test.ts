@@ -237,8 +237,53 @@ describe("Worker fetch handler", () => {
 		const response = await handler.fetch(request, env);
 
 		expect(response.status).toBe(403);
+		const body = (await response.json()) as { error: string; code: string };
+		expect(body.error).toBe("Admin role required");
+		expect(body.code).toBe("FORBIDDEN");
+	});
+
+	it("returns 403 for admin sync-rules route without admin role", async () => {
+		const env = createMockEnv();
+		mockAuthSuccess("client-1", "gw1", "client");
+
+		const request = new Request("https://api.example.com/v1/admin/sync-rules/gw1", {
+			method: "POST",
+			headers: { Authorization: "Bearer valid-token" },
+		});
+
+		const response = await handler.fetch(request, env);
+
+		expect(response.status).toBe(403);
 		const body = (await response.json()) as { error: string };
 		expect(body.error).toBe("Admin role required");
+	});
+
+	it("POST /v1/admin/schema/:id forwards for admin role", async () => {
+		const env = createMockEnv();
+		mockAuthSuccess("admin-1", "gw1", "admin");
+
+		const request = new Request("https://api.example.com/v1/admin/schema/gw1", {
+			method: "POST",
+			headers: { Authorization: "Bearer valid-token" },
+		});
+
+		const response = await handler.fetch(request, env);
+
+		expect(response.status).toBe(200);
+	});
+
+	it("POST /v1/admin/sync-rules/:id forwards for admin role", async () => {
+		const env = createMockEnv();
+		mockAuthSuccess("admin-1", "gw1", "admin");
+
+		const request = new Request("https://api.example.com/v1/admin/sync-rules/gw1", {
+			method: "POST",
+			headers: { Authorization: "Bearer valid-token" },
+		});
+
+		const response = await handler.fetch(request, env);
+
+		expect(response.status).toBe(200);
 	});
 
 	// ── 404 ───────────────────────────────────────────────────────────

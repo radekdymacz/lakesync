@@ -216,8 +216,10 @@ async function verifyTokenWithSecret(
 		return Err(new AuthError("Malformed JWT: payload is not valid JSON"));
 	}
 
-	// Check expiry — exp claim is mandatory
-	if (payload.exp === undefined || typeof payload.exp !== "number") {
+	// Check expiry — exp claim is mandatory and must be a finite NumericDate.
+	// JSON numbers such as 1e309 decode as Infinity in JS and would otherwise
+	// never expire (`Infinity <= now` is false).
+	if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) {
 		return Err(new AuthError('Missing or invalid "exp" claim (expiry)'));
 	}
 	const nowSeconds = Math.floor(Date.now() / 1000);
@@ -250,7 +252,8 @@ async function verifyTokenWithSecret(
 	// Always include `sub` in custom claims so sync rules can reference jwt:sub
 	customClaims.sub = payload.sub;
 
-	// Extract role claim (default to "client" if absent)
+	// Extract role claim (default to "client" if absent). Only the exact
+	// string "admin" authorises /admin/* routes; any other value is client.
 	const role =
 		typeof payload.role === "string" && payload.role.length > 0 ? payload.role : "client";
 

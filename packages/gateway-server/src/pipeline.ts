@@ -262,7 +262,7 @@ function authMiddleware(config: PipelineConfig): Middleware {
 		);
 		if (!authResult.authenticated) {
 			sendError(ctx.res, authResult.message, authResult.status, ctx.corsHeaders, {
-				code: API_ERROR_CODES.AUTH_ERROR,
+				code: authResult.status === 403 ? API_ERROR_CODES.FORBIDDEN : API_ERROR_CODES.AUTH_ERROR,
 				requestId: ctx.requestId,
 			});
 			return;
