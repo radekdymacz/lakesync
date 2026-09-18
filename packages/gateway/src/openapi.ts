@@ -230,7 +230,7 @@ const securitySchemes = {
 		scheme: "bearer",
 		bearerFormat: "JWT",
 		description:
-			"JWT token signed with HMAC-SHA256. Claims must include `sub` (client ID), `gatewayId`, and `role` (client | admin).",
+			"JWT token signed with HMAC-SHA256. Required claims: `sub` (client ID), `gw` (gateway ID), `exp` (Unix seconds). `role` is `admin` or `client` (default `client`). Tokens without `exp` are rejected. Admin routes require `role: admin`.",
 	},
 } as const;
 

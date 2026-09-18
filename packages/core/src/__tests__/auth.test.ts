@@ -19,16 +19,15 @@ const subtle = crypto.subtle as unknown as {
 	sign(algorithm: string, key: unknown, data: Uint8Array): Promise<ArrayBuffer>;
 };
 
-async function createTestJWT(
-	payload: Record<string, unknown>,
-	secret: string = TEST_SECRET,
-): Promise<string> {
-	const header = { alg: "HS256", typ: "JWT" };
-	const enc = (obj: Record<string, unknown>) =>
-		btoa(JSON.stringify(obj)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-	const headerB64 = enc(header);
-	const payloadB64 = enc(payload);
-	const data = `${headerB64}.${payloadB64}`;
+function base64urlJson(obj: Record<string, unknown>): string {
+	return btoa(JSON.stringify(obj)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+function base64urlUtf8(text: string): string {
+	return btoa(text).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+async function signHs256(data: string, secret: string = TEST_SECRET): Promise<string> {
 	const key = await subtle.importKey(
 		"raw",
 		new TextEncoder().encode(secret),
@@ -37,10 +36,32 @@ async function createTestJWT(
 		["sign"],
 	);
 	const sig = await subtle.sign("HMAC", key, new TextEncoder().encode(data));
-	const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)))
+	return btoa(String.fromCharCode(...new Uint8Array(sig)))
 		.replace(/=/g, "")
 		.replace(/\+/g, "-")
 		.replace(/\//g, "_");
+}
+
+async function createTestJWT(
+	payload: Record<string, unknown>,
+	secret: string = TEST_SECRET,
+): Promise<string> {
+	const headerB64 = base64urlJson({ alg: "HS256", typ: "JWT" });
+	const payloadB64 = base64urlJson(payload);
+	const data = `${headerB64}.${payloadB64}`;
+	const sigB64 = await signHs256(data, secret);
+	return `${data}.${sigB64}`;
+}
+
+/** Sign a JWT from a raw JSON payload string (for non-JSON.stringify values such as 1e309). */
+async function createJwtWithRawPayload(
+	payloadJson: string,
+	secret: string = TEST_SECRET,
+): Promise<string> {
+	const headerB64 = base64urlJson({ alg: "HS256", typ: "JWT" });
+	const payloadB64 = base64urlUtf8(payloadJson);
+	const data = `${headerB64}.${payloadB64}`;
+	const sigB64 = await signHs256(data, secret);
 	return `${data}.${sigB64}`;
 }
 
@@ -143,6 +164,29 @@ describe("verifyToken", () => {
 				sub: "client-1",
 				gw: "gateway-1",
 			});
+			const result = await verifyToken(token, TEST_SECRET);
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.error.message).toContain("exp");
+		});
+
+		it("rejects a token with a string exp claim", async () => {
+			const token = await createTestJWT({
+				sub: "client-1",
+				gw: "gateway-1",
+				exp: String(futureExp()),
+			});
+			const result = await verifyToken(token, TEST_SECRET);
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.error.message).toContain("exp");
+		});
+
+		it("rejects a token whose exp decodes as Infinity (JSON 1e309)", async () => {
+			// JSON.stringify(Infinity) becomes null; craft the payload so parse yields Infinity.
+			const token = await createJwtWithRawPayload(
+				`{"sub":"client-1","gw":"gateway-1","exp":1e309}`,
+			);
 			const result = await verifyToken(token, TEST_SECRET);
 			expect(result.ok).toBe(false);
 			if (result.ok) return;
