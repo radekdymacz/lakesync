@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 		default: "LakeSync — Declare what data goes where",
 	},
 	description:
-		"Declare what data goes where. The engine handles the rest. Sync, backup, migrate, and analyse data across SQL, SaaS, files, and AI — all from one platform.",
+		"Open-source, offline-first sync for TypeScript apps. Local SQLite on the device, a lightweight gateway, and pluggable backends — Postgres, BigQuery, or Iceberg on S3/R2.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
