@@ -73,7 +73,6 @@ export function LandingPage() {
 							className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-[--landing-bg-secondary] transition-colors"
 							style={{ color: "var(--landing-fg-secondary)" }}
 						>
-							{/* Sun icon (dark mode) */}
 							<svg
 								className="w-4 h-4 hidden dark:block"
 								fill="none"
@@ -86,7 +85,6 @@ export function LandingPage() {
 								<circle cx="12" cy="12" r="5" />
 								<path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
 							</svg>
-							{/* Moon icon (light mode) */}
 							<svg
 								className="w-4 h-4 block dark:hidden"
 								fill="none"
@@ -134,15 +132,16 @@ export function LandingPage() {
 						className="mt-6 text-lg sm:text-xl max-w-2xl mx-auto leading-relaxed animate-fade-up-delay"
 						style={{ color: "var(--landing-fg-secondary)" }}
 					>
-						Sync, backup, migrate, and analyse data across SQL databases, SaaS tools, file stores,
-						and AI systems — all from one managed platform.
+						Open-source, offline-first sync for TypeScript apps. Your data lives in SQLite on the
+						device, syncs through a lightweight gateway, and flushes to the backend you choose —
+						Postgres, BigQuery, or Iceberg on S3/R2.
 					</p>
 					<div className="mt-10 flex items-center justify-center gap-4 animate-fade-up-delay-2">
 						<Link
-							href="/sign-up"
+							href="/docs/getting-started"
 							className="h-11 px-6 inline-flex items-center rounded-md bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 font-medium hover:bg-neutral-800 dark:hover:bg-neutral-100 transition-colors"
 						>
-							Get Started Free
+							Get started
 							<svg
 								className="ml-2 w-4 h-4"
 								fill="none"
@@ -175,7 +174,7 @@ export function LandingPage() {
 						</Link>
 					</div>
 					<p className="mt-4 text-sm" style={{ color: "var(--landing-fg-tertiary)" }}>
-						No credit card required. Free tier included.
+						Apache 2.0. Self-host or run at the edge.
 					</p>
 				</div>
 			</section>
@@ -199,12 +198,18 @@ export function LandingPage() {
 								{" { "}
 								<span className="fn">createClient</span>
 								{" } "}
-								<span className="kw">from</span> <span className="str">&quot;lakesync&quot;</span>
+								<span className="kw">from</span>{" "}
+								<span className="str">&quot;lakesync/client&quot;</span>
 								{";"}
 								{"\n\n"}
 								<span className="kw">const</span> client = <span className="kw">await</span>{" "}
 								<span className="fn">createClient</span>({"{"}
 								{"\n  "}
+								<span className="op">name:</span> <span className="str">&quot;my-app&quot;</span>
+								{",\n  "}
+								<span className="op">clientId:</span>{" "}
+								<span className="str">&quot;client-1&quot;</span>
+								{",\n  "}
 								<span className="op">schemas:</span> [{"{"} <span className="op">table:</span>{" "}
 								<span className="str">&quot;orders&quot;</span>
 								{", "}
@@ -212,20 +217,18 @@ export function LandingPage() {
 								<span className="op">gateway:</span> {"{"}
 								{"\n    "}
 								<span className="op">url:</span>{" "}
-								<span className="str">&quot;https://api.lakesync.cloud&quot;</span>
-								{"  "}
-								<span className="cm">{"// we run the infra"}</span>
+								<span className="str">&quot;https://your-gateway.example.com&quot;</span>
 								{",\n    "}
-								<span className="op">gatewayId:</span>{" "}
-								<span className="str">&quot;your-project-id&quot;</span>
+								<span className="op">gatewayId:</span> <span className="str">&quot;gw-1&quot;</span>
 								{",\n    "}
-								<span className="op">token:</span> apiToken
+								<span className="op">token:</span> jwtToken
 								{",\n  "}
 								{"},\n"});
 								{"\n\n"}
-								<span className="cm">{"// That's it. Data syncs automatically."}</span>
+								<span className="cm">{"// Writes hit local SQLite. Sync is automatic."}</span>
 								{"\n"}
-								<span className="kw">const</span> orders = client.
+								<span className="kw">const</span> orders = <span className="kw">await</span>{" "}
+								client.db.
 								<span className="fn">query</span>(
 								<span className="str">&quot;SELECT * FROM orders&quot;</span>);
 							</code>
@@ -238,13 +241,14 @@ export function LandingPage() {
 			<section id="features" className="py-20">
 				<div className="max-w-5xl mx-auto px-6">
 					<h2 className="text-3xl sm:text-4xl font-bold text-center tracking-tight">
-						One engine for all your data
+						Offline-first. Any backend.
 					</h2>
 					<p
 						className="mt-4 text-center text-lg max-w-xl mx-auto"
 						style={{ color: "var(--landing-fg-secondary)" }}
 					>
-						SQL databases, SaaS tools, file stores, AI systems. LakeSync bridges them all.
+						Local SQLite in the browser, a pluggable gateway, and adapters for SQL, object storage,
+						and SaaS sources.
 					</p>
 					<div className="mt-16 grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
 						{[
@@ -252,7 +256,7 @@ export function LandingPage() {
 								color: "#2383e2",
 								bg: "rgba(35, 131, 226, 0.1)",
 								title: "SQL Data",
-								desc: "Postgres, MySQL, BigQuery. Sync between databases, materialise into destination tables, migrate without downtime.",
+								desc: "Postgres, MySQL, BigQuery. Flush deltas, materialise queryable destination tables, or migrate between adapters without changing client code.",
 								icon: (
 									<svg
 										className="w-5 h-5"
@@ -274,7 +278,7 @@ export function LandingPage() {
 								color: "#9b51e0",
 								bg: "rgba(155, 81, 224, 0.1)",
 								title: "SaaS Data",
-								desc: "Jira, Salesforce, GitHub, Stripe. Continuous backup to Iceberg. Restore complex API objects from flat snapshots.",
+								desc: "Jira and Salesforce connectors poll issues, accounts, and more into the same gateway. The adapter interface is the extension point for any readable API.",
 								icon: (
 									<svg
 										className="w-5 h-5"
@@ -294,7 +298,7 @@ export function LandingPage() {
 								color: "#27ae60",
 								bg: "rgba(39, 174, 96, 0.1)",
 								title: "File Data",
-								desc: "S3, R2, Iceberg, Parquet. Immutable lakehouse storage with zero egress fees. Query backups directly with DuckDB.",
+								desc: "S3, R2, Iceberg, Parquet. Batch flush to object storage. Query snapshots with DuckDB, Spark, Athena, or Trino — zero ETL.",
 								icon: (
 									<svg
 										className="w-5 h-5"
@@ -314,8 +318,8 @@ export function LandingPage() {
 							{
 								color: "#f2994a",
 								bg: "rgba(242, 153, 74, 0.1)",
-								title: "AI Data",
-								desc: "Keep vector databases in sync with production. Feed agents filtered subsets of live data. Embeddings always current.",
+								title: "Local SQLite",
+								desc: "The full working set lives on the device. Edits queue in IndexedDB, survive refresh, and drain when connectivity returns.",
 								icon: (
 									<svg
 										className="w-5 h-5"
@@ -325,11 +329,11 @@ export function LandingPage() {
 										strokeWidth="2"
 										viewBox="0 0 24 24"
 										role="img"
-										aria-label="AI data"
+										aria-label="Local SQLite"
 									>
-										<path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.57-3.25 3.92L12 22" />
-										<path d="M12 2a4 4 0 0 0-4 4c0 1.95 1.4 3.57 3.25 3.92" />
-										<path d="M5 10c0 2.76 3.13 5 7 5s7-2.24 7-5" />
+										<rect x="2" y="3" width="20" height="14" rx="2" />
+										<line x1="8" y1="21" x2="16" y2="21" />
+										<line x1="12" y1="17" x2="12" y2="21" />
 									</svg>
 								),
 							},
@@ -373,81 +377,63 @@ export function LandingPage() {
 						className="mt-4 text-center text-lg max-w-xl mx-auto"
 						style={{ color: "var(--landing-fg-secondary)" }}
 					>
-						Features usually locked behind expensive enterprise tools. Yours out of the box.
+						One client SDK. A gateway you can self-host. Backends you already run.
 					</p>
 					<div className="mt-14 space-y-4">
 						{[
 							{
-								tag: "Resilience",
+								tag: "Offline-first",
 								tagColor: "#2383e2",
 								tagBg: "rgba(35, 131, 226, 0.1)",
 								items: [
 									{
-										title: "Continuous Backup",
-										desc: "RDS, Cloud SQL, SaaS tools \u2192 immutable Iceberg snapshots on R2. Time-machine recovery at a fraction of cloud backup cost.",
+										title: "Apps that work on a plane",
+										desc: "The full dataset lives in local SQLite. The IndexedDB outbox survives refresh and crash. When the network returns, catch-up is automatic.",
 									},
 									{
-										title: "SaaS Restore",
-										desc: "Translate flat Parquet rows back into complex SaaS API objects. Restore Jira issues, GitHub repos, or Salesforce records from your lake.",
+										title: "Column-level merge",
+										desc: "Two users edit different fields of the same row — both changes are kept. Hybrid Logical Clocks plus last-write-wins only collide on the same column.",
 									},
 								],
 							},
 							{
-								tag: "Analytics",
+								tag: "Backends",
 								tagColor: "#27ae60",
 								tagBg: "rgba(39, 174, 96, 0.1)",
 								items: [
 									{
-										title: "Cold Analytics",
-										desc: "Query your backups directly with SQL via DuckDB or BigQuery. No warehouse needed — your lake is already queryable.",
+										title: "Right-size storage",
+										desc: "Postgres or MySQL for operational data. BigQuery for analytics. Iceberg on S3/R2 for large data. CompositeAdapter routes by table.",
 									},
-								],
-							},
-							{
-								tag: "AI / ML",
-								tagColor: "#f2994a",
-								tagBg: "rgba(242, 153, 74, 0.1)",
-								items: [
 									{
-										title: "Real-time Vector Sync",
-										desc: "Keep Pinecone, Qdrant, or any vector DB perfectly in sync with production data. Embeddings update as your data changes — no batch jobs.",
+										title: "Materialise & fan-out",
+										desc: "Database adapters create queryable destination tables after flush. FanOutAdapter replicates to a secondary without blocking the write path.",
 									},
 								],
 							},
 							{
-								tag: "Migration",
+								tag: "Sources",
 								tagColor: "#9b51e0",
 								tagBg: "rgba(155, 81, 224, 0.1)",
 								items: [
 									{
-										title: "Zero-Downtime Migration",
-										desc: "Stream data in parallel from legacy or on-prem to modern cloud databases. Cutover in seconds, not hours.",
+										title: "Jira & Salesforce ingest",
+										desc: "Shipped connectors poll Jira Cloud and Salesforce into the same gateway. Cursor or diff strategies, chunked push, memory-aware flush.",
 									},
 									{
-										title: "NoSQL to SQL",
-										desc: "Automatically flatten DynamoDB or MongoDB documents into clean relational tables in Postgres or MySQL.",
-									},
-								],
-							},
-							{
-								tag: "Compliance",
-								tagColor: "#eb5757",
-								tagBg: "rgba(235, 87, 87, 0.1)",
-								items: [
-									{
-										title: "Audit Offloading",
-										desc: "Meet 7-10 year retention laws by streaming application logs and audit trails to cheap, queryable R2 archive storage.",
+										title: "Bring your own adapter",
+										desc: "Implement LakeAdapter or DatabaseAdapter for any readable or writable system. Same client code regardless of backend.",
 									},
 								],
 							},
 							{
-								tag: "Development",
-								tagColor: "var(--landing-fg-secondary)",
-								tagBg: "var(--landing-hover, rgba(55, 53, 47, 0.08))",
+								tag: "Deploy",
+								tagColor: "#f2994a",
+								tagBg: "rgba(242, 153, 74, 0.1)",
 								items: [
 									{
-										title: "Sandbox Seeding",
-										desc: "Populate staging and test environments with real (but sanitised) production data in seconds.",
+										title: "Edge or self-hosted",
+										desc: "Run the gateway on Cloudflare Workers and Durable Objects, or as a Node/Bun HTTP + WebSocket server with SQLite WAL persistence.",
 									},
 								],
 							},
@@ -504,8 +490,8 @@ export function LandingPage() {
 							{
 								color: "#2383e2",
 								bg: "rgba(35, 131, 226, 0.1)",
-								title: "Read-Only Utility",
-								desc: "Your backup isn't just a backup. It's a live, queryable dataset for AI, analytics, and development.",
+								title: "Offline-first",
+								desc: "Zero-latency local writes. Persistent outbox. Automatic drain on reconnect. The app keeps working when the network does not.",
 								icon: (
 									<svg
 										className="w-5 h-5"
@@ -515,18 +501,19 @@ export function LandingPage() {
 										strokeWidth="2"
 										viewBox="0 0 24 24"
 										role="img"
-										aria-label="SQL data"
+										aria-label="Offline-first"
 									>
-										<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-										<path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+										<rect x="2" y="3" width="20" height="14" rx="2" />
+										<line x1="8" y1="21" x2="16" y2="21" />
+										<line x1="12" y1="17" x2="12" y2="21" />
 									</svg>
 								),
 							},
 							{
 								color: "#27ae60",
 								bg: "rgba(39, 174, 96, 0.1)",
-								title: "Private by Default",
-								desc: "Data never leaves your network unnecessarily. LakeSync manages the encrypted flow — you control where it lands.",
+								title: "Pluggable backends",
+								desc: "Sync is decoupled from storage. Swap Postgres for Iceberg — or run both — without rewriting the client.",
 								icon: (
 									<svg
 										className="w-5 h-5"
@@ -536,18 +523,20 @@ export function LandingPage() {
 										strokeWidth="2"
 										viewBox="0 0 24 24"
 										role="img"
-										aria-label="File data"
+										aria-label="Pluggable backends"
 									>
-										<rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-										<path d="M7 11V7a5 5 0 0 1 10 0v4" />
+										<rect x="3" y="3" width="7" height="7" />
+										<rect x="14" y="3" width="7" height="7" />
+										<rect x="14" y="14" width="7" height="7" />
+										<rect x="3" y="14" width="7" height="7" />
 									</svg>
 								),
 							},
 							{
 								color: "#f2994a",
 								bg: "rgba(242, 153, 74, 0.1)",
-								title: "Zero Egress Fees",
-								desc: "Built on Cloudflare R2. No egress costs for reads or migrations. Enterprise-grade data movement without the enterprise bill.",
+								title: "Open source",
+								desc: "Apache 2.0. Self-host the gateway on Node, Bun, or Cloudflare Workers. The library is the product.",
 								icon: (
 									<svg
 										className="w-5 h-5"
@@ -557,10 +546,10 @@ export function LandingPage() {
 										strokeWidth="2"
 										viewBox="0 0 24 24"
 										role="img"
-										aria-label="AI data"
+										aria-label="Open source"
 									>
-										<line x1="12" y1="1" x2="12" y2="23" />
-										<path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+										<circle cx="12" cy="12" r="10" />
+										<polyline points="12 6 12 12 16 14" />
 									</svg>
 								),
 							},
@@ -603,12 +592,7 @@ export function LandingPage() {
 							"Iceberg",
 							"Jira",
 							"Salesforce",
-							"DynamoDB",
-							"MongoDB",
 							"SQLite",
-							"Pinecone",
-							"CloudWatch",
-							"Stripe",
 						].map((a) => (
 							<span
 								key={a}
@@ -647,6 +631,12 @@ export function LandingPage() {
 						className="flex items-center gap-6 text-sm"
 						style={{ color: "var(--landing-fg-secondary)" }}
 					>
+						<Link
+							href="/docs/getting-started"
+							className="hover:text-[--landing-fg] transition-colors"
+						>
+							Getting started
+						</Link>
 						<Link href="/docs" className="hover:text-[--landing-fg] transition-colors">
 							Docs
 						</Link>
@@ -675,25 +665,25 @@ function CtaSection() {
 			<div className="max-w-xl mx-auto px-6 text-center">
 				<h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Start syncing today</h2>
 				<p className="mt-4 text-lg" style={{ color: "var(--landing-fg-secondary)" }}>
-					Create a free account and have your first gateway running in minutes.
+					Install the SDK, point it at a gateway, and keep a local SQLite that stays in sync.
 				</p>
 				<div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
 					<Link
-						href="/sign-up"
+						href="/docs/getting-started"
 						className="h-11 px-8 rounded-md bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 font-medium text-sm hover:bg-neutral-800 dark:hover:bg-neutral-100 transition-colors inline-flex items-center justify-center"
 					>
-						Get started free
+						Get started
 					</Link>
 					<Link
-						href="/sign-in"
+						href="/docs"
 						className="h-11 px-8 rounded-md border font-medium text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors inline-flex items-center justify-center"
 						style={{ borderColor: "var(--landing-border)", color: "var(--landing-fg)" }}
 					>
-						Sign in
+						View docs
 					</Link>
 				</div>
 				<p className="mt-4 text-sm" style={{ color: "var(--landing-fg-tertiary)" }}>
-					Or self-host with{" "}
+					Self-host with{" "}
 					<code
 						className="font-mono text-xs px-1.5 py-0.5 rounded"
 						style={{ background: "var(--landing-border-light)" }}

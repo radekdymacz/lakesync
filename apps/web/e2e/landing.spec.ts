@@ -21,6 +21,18 @@ test.describe("Landing page", () => {
 		await expect(page.getByRole("link", { name: /view docs/i }).first()).toBeVisible();
 	});
 
+	test("primary CTA links to getting started docs", async ({ page }) => {
+		await page.goto("/");
+		const cta = page.getByRole("link", { name: /get started/i }).first();
+		await expect(cta).toHaveAttribute("href", "/docs/getting-started");
+	});
+
+	test("states the offline-first value prop", async ({ page }) => {
+		await page.goto("/");
+		await expect(page.getByText(/offline-first sync/i).first()).toBeVisible();
+		await expect(page.getByText(/SQLite on the device/i).first()).toBeVisible();
+	});
+
 	test("shows features section", async ({ page }) => {
 		await page.goto("/");
 		await expect(page.getByRole("heading", { name: /SQL Data/i })).toBeVisible();

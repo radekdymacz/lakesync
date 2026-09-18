@@ -20,6 +20,29 @@ function makeDelta(overrides: Partial<RowDelta> = {}): RowDelta {
 	};
 }
 
+const BULK_HLC = 1n as HLCTimestamp;
+const BULK_COLUMNS: RowDelta["columns"] = [{ column: "a", value: 1 }];
+
+/**
+ * Compact deltas for the 10k count-limit tests.
+ * Avoids per-row UUID / Date.now() cost that times out on slow CI runners.
+ */
+function makeBulkDeltas(count: number): RowDelta[] {
+	const deltas: RowDelta[] = new Array(count);
+	for (let i = 0; i < count; i++) {
+		deltas[i] = {
+			deltaId: `d-${i}`,
+			table: "t",
+			rowId: `r-${i}`,
+			clientId: "c",
+			hlc: BULK_HLC,
+			op: "INSERT",
+			columns: BULK_COLUMNS,
+		};
+	}
+	return deltas;
+}
+
 /** Make an HTTP request and return { status, headers, body }. */
 function req(
 	url: string,
@@ -81,6 +104,8 @@ describe("GatewayServer push validation", () => {
 			gatewayId,
 			port: 0,
 			flushIntervalMs: 60_000,
+			// Bulk count-limit tests serialise 10k deltas; keep the socket alive on slow CI.
+			requestTimeoutMs: 120_000,
 		});
 		await server.start();
 		baseUrl = `http://localhost:${server.port}`;
@@ -105,13 +130,8 @@ describe("GatewayServer push validation", () => {
 		expect(JSON.parse(res.body).error).toContain("Payload too large");
 	});
 
-	it("rejects push with more than 10,000 deltas", async () => {
-		// Build an array with 10,001 minimal deltas
-		const deltas: RowDelta[] = [];
-		for (let i = 0; i < 10_001; i++) {
-			deltas.push(makeDelta({ deltaId: `d-${i}` }));
-		}
-		const body = pushBody(deltas);
+	it("rejects push with more than 10,000 deltas", { timeout: 120_000 }, async () => {
+		const body = pushBody(makeBulkDeltas(10_001));
 
 		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
@@ -124,12 +144,8 @@ describe("GatewayServer push validation", () => {
 		expect(JSON.parse(res.body).error).toContain("Too many deltas");
 	});
 
-	it("accepts push with exactly 10,000 deltas", { timeout: 30_000 }, async () => {
-		const deltas: RowDelta[] = [];
-		for (let i = 0; i < 10_000; i++) {
-			deltas.push(makeDelta({ deltaId: `d-${i}` }));
-		}
-		const body = pushBody(deltas);
+	it("accepts push with exactly 10,000 deltas", { timeout: 120_000 }, async () => {
+		const body = pushBody(makeBulkDeltas(10_000));
 
 		const res = await req(`${baseUrl}/v1/sync/${gatewayId}/push`, {
 			method: "POST",
