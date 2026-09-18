@@ -9,3 +9,5 @@ dist
 coverage
 .source
 .next
+test-results
+playwright-report

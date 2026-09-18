@@ -79,6 +79,10 @@ jobs:
             sleep 1
           done
       - name: Wait for MinIO and create bucket
+        env:
+          AWS_ACCESS_KEY_ID: lakesync
+          AWS_SECRET_ACCESS_KEY: lakesync123
+          AWS_DEFAULT_REGION: us-east-1
         run: |
           for i in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/live; then
@@ -86,9 +90,12 @@ jobs:
             fi
             sleep 1
           done
-          curl -sL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
-          chmod +x /usr/local/bin/mc
-          mc alias set local http://localhost:9000 lakesync lakesync123
-          mc mb --ignore-existing local/lakesync-test
-          mc mb --ignore-existing local/lakesync-dev
+          # dl.min.io/client/mc now returns 410 (MinIO client project archived).
+          # Create buckets with the runner AWS CLI against local MinIO instead.
+          create_bucket() {
+            aws --endpoint-url http://localhost:9000 s3 mb "s3://$1" \
+              || aws --endpoint-url http://localhost:9000 s3 ls "s3://$1"
+          }
+          create_bucket lakesync-test
+          create_bucket lakesync-dev
       - run: bun run test:integration

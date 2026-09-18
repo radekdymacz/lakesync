@@ -29,7 +29,10 @@
 			"!**/*.proto",
 			"!**/gen",
 			"!**/.source",
-			"!**/.next"
+			"!**/.next",
+			"!**/test-results",
+			"!**/playwright-report",
+			"!**/coverage"
 		]
 	}
 }
